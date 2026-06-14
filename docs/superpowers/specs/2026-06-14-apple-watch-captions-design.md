@@ -100,7 +100,7 @@ a commitment. Live mode fully delivers the "phone not nearby" goal independently
 |---|---|---|
 | watchOS app | Swift + SwiftUI, `AVAudioEngine`, `URLSessionWebSocketTask` | Native, well-supported |
 | iOS companion | Swift + SwiftUI, `CallKit`, `WatchConnectivity` | Call handling + caption relay |
-| Backend | Node.js (or Python), persistent **WebSocket** service | Long-lived socket for Watch audio and Twilio streams; pure serverless is awkward |
+| Backend | **Node.js** (TypeScript), persistent **WebSocket** service | Long-lived socket for Watch audio and Twilio streams; strongest Twilio + Deepgram SDK support; pure serverless is awkward |
 | Hosting | Small always-on instance (Fly.io / Render / Railway / VPS) | 24/7 reachable to answer calls |
 | Cloud STT | **Deepgram** | Cheapest real-time streaming, low latency, simple API, free credit covers volume |
 | Telephony | Twilio (or SignalWire) Media Streams | Streams call audio to backend over WebSocket |

@@ -45,6 +45,15 @@ describe("caption server", () => {
     expect(code).toBe(4001);
   });
 
+  it("rejects a connection with no token param", async () => {
+    const { port } = startWithFakes("good");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream`);
+    const code = await new Promise<number>((resolve) => {
+      ws.on("close", (c) => resolve(c));
+    });
+    expect(code).toBe(4001);
+  });
+
   it("relays transcripts from provider to client as caption messages", async () => {
     const { providers, port } = startWithFakes("good");
     const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good`);

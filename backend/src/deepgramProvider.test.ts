@@ -6,12 +6,12 @@ import { DeepgramProvider, DeepgramLike, LiveConnectionLike } from "./deepgramPr
 /** Minimal stand-in for a Deepgram live connection. */
 class FakeLiveConnection extends EventEmitter implements LiveConnectionLike {
   sent: Buffer[] = [];
-  finished = false;
+  closeRequested = false;
   send(data: Buffer) {
     this.sent.push(data);
   }
-  finish() {
-    this.finished = true;
+  requestClose() {
+    this.closeRequested = true;
   }
   on(event: string, cb: (...args: any[]) => void) {
     super.on(event, cb);
@@ -64,10 +64,19 @@ describe("DeepgramProvider", () => {
     expect(msg).toBe("bad audio");
   });
 
-  it("finishes the connection on close", () => {
+  it("maps a Deepgram Close event to onError", () => {
+    const conn = new FakeLiveConnection();
+    const p = new DeepgramProvider(fakeDeepgram(conn));
+    let msg = "";
+    p.onError((m) => (msg = m));
+    conn.emit(LiveTranscriptionEvents.Close);
+    expect(msg).toBe("deepgram connection closed");
+  });
+
+  it("requests close on the connection when closed", () => {
     const conn = new FakeLiveConnection();
     const p = new DeepgramProvider(fakeDeepgram(conn));
     p.close();
-    expect(conn.finished).toBe(true);
+    expect(conn.closeRequested).toBe(true);
   });
 });

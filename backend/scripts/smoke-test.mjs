@@ -10,8 +10,8 @@ if (!urlBase || !token || !pcmPath) {
 const pcm = readFileSync(pcmPath);
 const ws = new WebSocket(`${urlBase}?token=${token}`);
 
-ws.on("open", () => {
-  // Send in ~32 KB chunks ~ realtime-ish; Deepgram tolerates faster-than-realtime.
+function startStreaming() {
+  // Send in ~100ms chunks; Deepgram tolerates faster-than-realtime.
   const CHUNK = 3200; // 100ms of 16kHz 16-bit mono
   let offset = 0;
   const timer = setInterval(() => {
@@ -23,9 +23,18 @@ ws.on("open", () => {
     ws.send(pcm.subarray(offset, offset + CHUNK));
     offset += CHUNK;
   }, 100);
-});
+}
 
-ws.on("message", (data) => console.log(data.toString()));
+let started = false;
+ws.on("message", (data) => {
+  const text = data.toString();
+  console.log(text);
+  // Wait for the server's ready signal before streaming audio.
+  if (!started && text.includes('"ready"')) {
+    started = true;
+    startStreaming();
+  }
+});
 ws.on("close", (code) => {
   console.log("closed", code);
   process.exit(0);

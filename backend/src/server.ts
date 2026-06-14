@@ -42,6 +42,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     address: () => http.address(),
     close: () =>
       new Promise<void>((resolve) => {
+        for (const client of wss.clients) client.terminate();
         wss.close(() => http.close(() => resolve()));
       }),
   };
@@ -54,9 +55,17 @@ function handleConnection(ws: WebSocket, opts: StartServerOptions): void {
   };
   const session = new CaptionSession(provider, send);
 
+  // `ws` fires `close` after `error`; guard so the provider is torn down once.
+  let closed = false;
+  const closeOnce = () => {
+    if (closed) return;
+    closed = true;
+    session.close();
+  };
+
   ws.on("message", (data: Buffer, isBinary: boolean) => {
     if (isBinary) session.handleAudio(data);
   });
-  ws.on("close", () => session.close());
-  ws.on("error", () => session.close());
+  ws.on("close", closeOnce);
+  ws.on("error", closeOnce);
 }

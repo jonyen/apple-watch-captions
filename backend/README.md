@@ -11,6 +11,7 @@ caption text back to the client.
   - `{"type":"ready"}`
   - `{"type":"caption","text":"...","isFinal":true|false}`
   - `{"type":"error","message":"..."}`
+- Clients MUST wait for `{"type":"ready"}` before sending audio; frames sent earlier are dropped.
 - Bad token → connection closed with code `4001`.
 
 ## Run

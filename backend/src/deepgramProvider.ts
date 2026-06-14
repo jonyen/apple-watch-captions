@@ -4,7 +4,7 @@ import { TranscriptionProvider, Transcript } from "./transcriptionProvider";
 /** Subset of the Deepgram live connection we depend on (keeps it testable). */
 export interface LiveConnectionLike {
   send(data: Buffer): void;
-  finish(): void;
+  requestClose(): void;
   on(event: string, cb: (...args: any[]) => void): unknown;
 }
 
@@ -41,6 +41,9 @@ export class DeepgramProvider implements TranscriptionProvider {
     this.conn.on(LiveTranscriptionEvents.Error, (err: any) => {
       this.errorHandler(err?.message ?? "deepgram error");
     });
+    this.conn.on(LiveTranscriptionEvents.Close, () => {
+      this.errorHandler("deepgram connection closed");
+    });
   }
 
   onTranscript(handler: (t: Transcript) => void): void {
@@ -56,6 +59,6 @@ export class DeepgramProvider implements TranscriptionProvider {
     this.conn.send(chunk);
   }
   close(): void {
-    this.conn.finish();
+    this.conn.requestClose();
   }
 }

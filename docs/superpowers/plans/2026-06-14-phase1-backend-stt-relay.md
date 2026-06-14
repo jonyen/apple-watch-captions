@@ -1037,8 +1037,10 @@ Expected: no TypeScript errors.
 
 - [ ] **Step 3: Confirm the server boots with env vars**
 
-Run: `cd backend && AUTH_TOKEN=dev DEEPGRAM_API_KEY=fake-key node dist/index.js`
+Run: `cd backend && AUTH_TOKEN=dev DEEPGRAM_API_KEY=fake-key npm start`
 Expected: prints `Caption relay listening on ws://0.0.0.0:8080/stream`. (It will not transcribe without a real key, but it must boot and listen.) Stop with Ctrl-C.
+
+> **Runtime note (post-review):** the service runs via `tsx src/index.ts` (the `start` script), not compiled JS. Under ESM + `moduleResolution: bundler`, `tsc` emits extensionless relative imports that Node's ESM loader rejects at runtime, so `node dist/index.js` does not boot. `tsx` resolves these correctly; `build` is therefore `tsc --noEmit` (type-check only) and `tsx` is a runtime dependency.
 
 - [ ] **Step 4: Commit any final cleanup**
 

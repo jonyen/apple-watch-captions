@@ -54,6 +54,13 @@ describe("caption server", () => {
     expect(code).toBe(4001);
   });
 
+  it("answers GET /healthz with 200 ok", async () => {
+    const { port } = startWithFakes("good");
+    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+  });
+
   it("relays transcripts from provider to client as caption messages", async () => {
     const { providers, port } = startWithFakes("good");
     const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good`);

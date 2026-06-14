@@ -1,0 +1,27 @@
+# Fly.io config for the Watch Captions STT relay.
+# NOTE: `app` must be globally unique on Fly — change it if `fly launch` reports a clash.
+app = "watch-captions-relay"
+primary_region = "sjc"  # pick a region near you: fly platform regions
+
+[build]
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true          # clients connect via wss://
+  auto_start_machines = true
+  auto_stop_machines = "off"  # must stay up to accept incoming WS connections
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

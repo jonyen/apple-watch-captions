@@ -18,7 +18,16 @@ export interface CaptionServer {
 }
 
 export function startServer(opts: StartServerOptions): CaptionServer {
-  const http: Server = createServer();
+  const http: Server = createServer((req, res) => {
+    // Plain HTTP requests are health checks; the real traffic is WS upgrades.
+    if (req.method === "GET" && (req.url === "/healthz" || req.url === "/")) {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
   const wss = new WebSocketServer({ noServer: true });
 
   http.on("upgrade", (req, socket, head) => {

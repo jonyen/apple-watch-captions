@@ -5,7 +5,7 @@ import {
   estimateDeepgramCost,
   reportSubject,
   renderTextReport,
-  renderHtmlReport,
+  renderMarkdownReport,
   usd,
   ReportData,
 } from "./usageReport";
@@ -95,14 +95,24 @@ describe("renderTextReport", () => {
   });
 });
 
-describe("renderHtmlReport", () => {
-  it("escapes machine fields and renders cost", () => {
-    const html = renderHtmlReport({
+describe("renderMarkdownReport", () => {
+  it("renders both sections with the cost estimate", () => {
+    const md = renderMarkdownReport(sample);
+    expect(md).toContain("### Deepgram — variable cost");
+    expect(md).toContain("**2.25 h**");
+    expect(md).toContain("~$1.04");
+    expect(md).toContain("### Fly.io — fixed cost");
+    expect(md).toContain("`abc123` [started · sjc]");
+  });
+
+  it("degrades gracefully when sources are unavailable", () => {
+    const md = renderMarkdownReport({
       ...sample,
-      fly: { ...sample.fly, machines: [{ id: "a<b>", state: "started", region: "sjc" }] },
+      deepgram: null,
+      fly: { ...sample.fly, machines: null },
     });
-    expect(html).toContain("a&lt;b&gt;");
-    expect(html).toContain("~$1.04");
+    expect(md).toContain("DEEPGRAM_API_KEY");
+    expect(md).toContain("status unavailable");
   });
 });
 

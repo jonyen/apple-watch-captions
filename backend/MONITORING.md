@@ -1,6 +1,6 @@
 # Cost & Usage Monitoring
 
-A weekly email report tracks the two things that cost money:
+A weekly GitHub issue tracks the two things that cost money:
 
 - **Deepgram** — the variable cost. Billed per minute of audio streamed to the
   `nova-2` live model (~$0.0077/min pay-as-you-go). This is what moves with usage.
@@ -18,38 +18,34 @@ A weekly email report tracks the two things that cost money:
    [Management Usage API](https://developers.deepgram.com/reference/management-api/usage/get)
    and estimates cost = hours × 60 × rate.
 2. Pulls Fly machine status via the Machines API.
-3. Renders an HTML + plain-text report and emails it to you via SMTP.
+3. Renders a Markdown report and opens a GitHub issue (labeled `usage-report`).
 
-Every data source is optional — if a key is missing or an API errors, the report
-still sends with the parts it could gather.
+Every data source is optional — if a key is missing or an API errors, the issue
+is still created with the parts it could gather.
+
+> Subscribe to the repo (or the `usage-report` label) to get the issue in your
+> inbox each Monday.
 
 ## One-time setup (GitHub repo settings)
 
-Add these under **Settings → Secrets and variables → Actions**.
+Add these under **Settings → Secrets and variables → Actions**. The issue is
+created with the built-in `GITHUB_TOKEN`, so no extra auth is needed for posting.
 
 ### Secrets
 
-| Secret                | Required | What it is                                                                 |
-| --------------------- | -------- | -------------------------------------------------------------------------- |
-| `DEEPGRAM_API_KEY`    | yes      | A Deepgram API key with **Usage: read** scope (the relay's key works).     |
-| `DEEPGRAM_PROJECT_ID` | optional | Pins the project. If omitted, the first project on the key is used.        |
-| `FLY_API_TOKEN`       | optional | `fly tokens create readonly` — enables live machine status.                |
-| `MAIL_SERVER`         | yes      | SMTP host, e.g. `smtp.gmail.com`.                                          |
-| `MAIL_PORT`           | yes      | SMTP port, e.g. `465` (SSL).                                                |
-| `MAIL_USERNAME`       | yes      | SMTP user — the sending Gmail address.                                      |
-| `MAIL_PASSWORD`       | yes      | Gmail **App Password** (not your account password). See note below.        |
-| `REPORT_TO`           | yes      | Where to send the report, e.g. `jonyen@gmail.com`.                          |
-
-> **Gmail App Password:** with 2FA enabled, create one at
-> <https://myaccount.google.com/apppasswords> and use it as `MAIL_PASSWORD`.
+| Secret                | Required | What it is                                                             |
+| --------------------- | -------- | --------------------------------------------------------------------- |
+| `DEEPGRAM_API_KEY`    | yes      | A Deepgram API key with **Usage: read** scope (the relay's key works). |
+| `DEEPGRAM_PROJECT_ID` | optional | Pins the project. If omitted, the first project on the key is used.    |
+| `FLY_API_TOKEN`       | optional | `fly tokens create readonly` — enables live machine status.            |
 
 ### Variables (optional overrides)
 
-| Variable                | Default                 | Purpose                                  |
-| ----------------------- | ----------------------- | ---------------------------------------- |
-| `FLY_APP_NAME`          | `watch-captions-relay`  | Fly app to inspect.                      |
-| `DEEPGRAM_RATE_PER_MIN` | `0.0077`                | Per-minute rate for the cost estimate.  |
-| `FLY_MONTHLY_COST`      | `1.94`                  | Fixed monthly Fly estimate shown.       |
+| Variable                | Default                | Purpose                                |
+| ----------------------- | ---------------------- | -------------------------------------- |
+| `FLY_APP_NAME`          | `watch-captions-relay` | Fly app to inspect.                    |
+| `DEEPGRAM_RATE_PER_MIN` | `0.0077`               | Per-minute rate for the cost estimate. |
+| `FLY_MONTHLY_COST`      | `1.94`                 | Fixed monthly Fly estimate shown.      |
 
 ## Test it
 
@@ -59,7 +55,7 @@ Add these under **Settings → Secrets and variables → Actions**.
   cd backend
   DEEPGRAM_API_KEY=<key> FLY_API_TOKEN=<token> npm run usage-report
   ```
-  Prints the report to stdout (no email is sent locally).
+  Prints the report to stdout and writes `report.md` (no issue is created locally).
 
 ## Adjusting the schedule
 

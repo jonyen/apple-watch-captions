@@ -118,45 +118,47 @@ export function renderTextReport(d: ReportData): string {
   return lines.join("\n");
 }
 
-/** HTML report for the email body. */
-export function renderHtmlReport(d: ReportData): string {
-  const dg = d.deepgram
-    ? `
-      <tr><td>Audio transcribed</td><td><b>${d.deepgram.hours.toFixed(2)} h</b> (${(d.deepgram.hours * 60).toFixed(1)} min)</td></tr>
-      <tr><td>Requests</td><td>${d.deepgram.requests}</td></tr>
-      <tr><td>Estimated cost</td><td><b>~${usd(estimateDeepgramCost(d.deepgram.hours, d.deepgramRatePerMin))}</b> <span style="color:#888">(@ $${d.deepgramRatePerMin}/min)</span></td></tr>`
-    : `<tr><td colspan="2" style="color:#b00">Unavailable — check DEEPGRAM_API_KEY / DEEPGRAM_PROJECT_ID.</td></tr>`;
+/** Markdown report for a GitHub issue body. */
+export function renderMarkdownReport(d: ReportData): string {
+  const lines: string[] = [];
+  lines.push(`**Week of ${d.rangeStart} → ${d.rangeEnd} (UTC)**`);
+  lines.push("");
 
-  const machineRows = d.fly.machines
-    ? d.fly.machines.length === 0
-      ? `<tr><td>Machines</td><td>none found</td></tr>`
-      : `<tr><td>Machines</td><td>${d.fly.machines
-          .map((m) => `${escapeHtml(m.id)} <span style="color:#888">[${escapeHtml(m.state)} · ${escapeHtml(m.region)}]</span>`)
-          .join("<br>")}</td></tr>`
-    : `<tr><td>Machines</td><td style="color:#888">status unavailable (FLY_API_TOKEN not set)</td></tr>`;
+  lines.push("### Deepgram — variable cost");
+  if (d.deepgram) {
+    const minutes = d.deepgram.hours * 60;
+    const cost = estimateDeepgramCost(d.deepgram.hours, d.deepgramRatePerMin);
+    lines.push("| Metric | Value |");
+    lines.push("| --- | --- |");
+    lines.push(`| Audio transcribed | **${d.deepgram.hours.toFixed(2)} h** (${minutes.toFixed(1)} min) |`);
+    lines.push(`| Requests | ${d.deepgram.requests} |`);
+    lines.push(`| Est. cost | **~${usd(cost)}** (@ $${d.deepgramRatePerMin}/min) |`);
+  } else {
+    lines.push("_Unavailable — check `DEEPGRAM_API_KEY` / `DEEPGRAM_PROJECT_ID`._");
+  }
+  lines.push("");
 
-  return `<!doctype html>
-<html><body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#1a1a1a">
-  <h2 style="margin-bottom:0">Watch Captions — Weekly Usage</h2>
-  <p style="margin-top:4px;color:#666">Week of ${d.rangeStart} → ${d.rangeEnd} (UTC)</p>
+  lines.push("### Fly.io — fixed cost");
+  lines.push("| Metric | Value |");
+  lines.push("| --- | --- |");
+  lines.push(`| App | \`${d.fly.appName}\` |`);
+  if (d.fly.machines) {
+    const desc =
+      d.fly.machines.length === 0
+        ? "none found"
+        : d.fly.machines.map((m) => `\`${m.id}\` [${m.state} · ${m.region}]`).join("<br>");
+    lines.push(`| Machines | ${desc} |`);
+  } else {
+    lines.push("| Machines | status unavailable (`FLY_API_TOKEN` not set) |");
+  }
+  lines.push(`| Est. cost | ~${usd(d.fly.monthlyCostUsd)}/month (always-on machine) |`);
+  lines.push("");
 
-  <h3>Deepgram <span style="color:#888;font-weight:normal">(variable cost)</span></h3>
-  <table cellpadding="6" style="border-collapse:collapse;border:1px solid #eee">${dg}</table>
-
-  <h3>Fly.io <span style="color:#888;font-weight:normal">(fixed cost)</span></h3>
-  <table cellpadding="6" style="border-collapse:collapse;border:1px solid #eee">
-    <tr><td>App</td><td>${escapeHtml(d.fly.appName)}</td></tr>
-    ${machineRows}
-    <tr><td>Estimated cost</td><td>~${usd(d.fly.monthlyCostUsd)}/month</td></tr>
-  </table>
-
-  <p style="color:#888;font-size:12px;margin-top:24px">
-    Deepgram cost is an estimate (streamed audio hours × configured rate).
-    Confirm exact billing at console.deepgram.com and fly.io/dashboard.
-  </p>
-</body></html>`;
+  lines.push(
+    "> Deepgram cost is an estimate (streamed audio hours × configured rate). " +
+      "Confirm exact billing at [console.deepgram.com](https://console.deepgram.com) " +
+      "and [fly.io/dashboard](https://fly.io/dashboard).",
+  );
+  return lines.join("\n");
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string);
-}

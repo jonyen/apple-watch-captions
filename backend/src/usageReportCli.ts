@@ -12,7 +12,7 @@ import {
   lastWeekRange,
   summarizeDeepgram,
   renderTextReport,
-  renderHtmlReport,
+  renderMarkdownReport,
   reportSubject,
   type DeepgramUsage,
   type FlyMachine,
@@ -97,14 +97,12 @@ async function main(): Promise<void> {
     fly: { appName, machines, monthlyCostUsd: flyMonthly },
   };
 
-  const text = renderTextReport(data);
-  console.log(text);
+  console.log(renderTextReport(data));
 
-  // Hand the report off to the GitHub Actions email step.
-  writeFileSync("report.html", renderHtmlReport(data));
-  writeFileSync("report.txt", text);
+  // Hand the report off to the GitHub Actions "create issue" step.
+  writeFileSync("report.md", renderMarkdownReport(data));
   if (env.GITHUB_OUTPUT) {
-    appendFileSync(env.GITHUB_OUTPUT, `subject=${reportSubject(data)}\n`);
+    appendFileSync(env.GITHUB_OUTPUT, `title=${reportSubject(data)}\n`);
   }
 }
 

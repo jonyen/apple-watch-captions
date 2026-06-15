@@ -43,6 +43,7 @@ public final class SessionController {
     }
 
     private func handle(_ message: ServerMessage) {
+        guard running else { return }
         store.apply(message)
         switch message {
         case .ready: startAudio()

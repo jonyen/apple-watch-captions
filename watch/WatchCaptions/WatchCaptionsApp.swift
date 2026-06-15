@@ -13,7 +13,8 @@ struct WatchCaptionsApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: Task { await model.start() }
-            case .inactive, .background: model.stop()
+            case .background: model.stop()
+            case .inactive: break
             @unknown default: break
             }
         }

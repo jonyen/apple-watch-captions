@@ -101,7 +101,17 @@ final class SessionControllerTests: XCTestCase {
         let (c, _, relay, audio) = make()
         await c.start()
         c.stop()
+        XCTAssertFalse(audio.started)
         XCTAssertTrue(audio.stopped)
         XCTAssertTrue(relay.closed)
+    }
+
+    func testIgnoresMessagesAfterStop() async {
+        let (c, store, relay, audio) = make()
+        await c.start()
+        c.stop()
+        relay.deliver(.ready)
+        XCTAssertFalse(audio.started)
+        XCTAssertEqual(store.state, .connecting)
     }
 }

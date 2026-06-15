@@ -8,6 +8,7 @@ on:
   workflow_dispatch: {} # allow manual runs to test the report
 
 permissions:
+  contents: read # checkout (declaring any permissions resets the rest to none)
   issues: write
 
 jobs:

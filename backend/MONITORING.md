@@ -1,6 +1,6 @@
 # Cost & Usage Monitoring
 
-A weekly GitHub issue tracks the two things that cost money:
+A weekly email tracks the two things that cost money:
 
 - **Deepgram** — the variable cost. Billed per minute of audio streamed to the
   `nova-2` live model (~$0.0077/min pay-as-you-go). This is what moves with usage.
@@ -18,24 +18,22 @@ A weekly GitHub issue tracks the two things that cost money:
    [Management Usage API](https://developers.deepgram.com/reference/management-api/usage/get)
    and estimates cost = hours × 60 × rate.
 2. Pulls Fly machine status via the Machines API.
-3. Renders a Markdown report and opens a GitHub issue (labeled `usage-report`).
+3. Renders a Markdown report and emails it (converted to HTML) via Gmail SMTP.
 
-Every data source is optional — if a key is missing or an API errors, the issue
-is still created with the parts it could gather.
-
-> Subscribe to the repo (or the `usage-report` label) to get the issue in your
-> inbox each Monday.
+Every data source is optional — if a key is missing or an API errors, the email
+is still sent with the parts it could gather.
 
 ## One-time setup (GitHub repo settings)
 
-Add these under **Settings → Secrets and variables → Actions**. The issue is
-created with the built-in `GITHUB_TOKEN`, so no extra auth is needed for posting.
+Add these under **Settings → Secrets and variables → Actions**.
 
 ### Secrets
 
 | Secret                | Required | What it is                                                             |
 | --------------------- | -------- | --------------------------------------------------------------------- |
 | `DEEPGRAM_API_KEY`    | yes      | A Deepgram API key with **Usage: read** scope (the relay's key works). |
+| `MAIL_USERNAME`       | yes      | Gmail address the report is sent from (and authenticated as).          |
+| `MAIL_PASSWORD`       | yes      | A Gmail [App Password](https://myaccount.google.com/apppasswords) (needs 2FA). Not your normal password. |
 | `DEEPGRAM_PROJECT_ID` | optional | Pins the project. If omitted, the first project on the key is used.    |
 | `FLY_API_TOKEN`       | optional | `fly tokens create readonly` — enables live machine status.            |
 
@@ -43,19 +41,20 @@ created with the built-in `GITHUB_TOKEN`, so no extra auth is needed for posting
 
 | Variable                | Default                | Purpose                                |
 | ----------------------- | ---------------------- | -------------------------------------- |
+| `REPORT_EMAIL_TO`       | _(required)_           | Recipient address for the report.      |
 | `FLY_APP_NAME`          | `watch-captions-relay` | Fly app to inspect.                    |
 | `DEEPGRAM_RATE_PER_MIN` | `0.0077`               | Per-minute rate for the cost estimate. |
 | `FLY_MONTHLY_COST`      | `1.94`                 | Fixed monthly Fly estimate shown.      |
 
 ## Test it
 
-- **In CI:** Actions tab → *Weekly Usage Report* → **Run workflow**.
+- **In CI:** Actions tab → *Weekly Usage Report* → **Run workflow** (sends a real email).
 - **Locally:**
   ```bash
   cd backend
   DEEPGRAM_API_KEY=<key> FLY_API_TOKEN=<token> npm run usage-report
   ```
-  Prints the report to stdout and writes `report.md` (no issue is created locally).
+  Prints the report to stdout and writes `report.md` (no email is sent locally).
 
 ## Adjusting the schedule
 

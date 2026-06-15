@@ -1,6 +1,6 @@
 name: Weekly Usage Report
 
-# Opens a GitHub issue with a Deepgram + Fly cost/usage summary every Monday morning.
+# Emails a Deepgram + Fly cost/usage summary every Monday morning.
 # 14:00 UTC ≈ 7am PDT / 10am EDT. Adjust the cron for your timezone.
 on:
   schedule:
@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read # checkout (declaring any permissions resets the rest to none)
-  issues: write
 
 jobs:
   report:
@@ -39,16 +38,16 @@ jobs:
           FLY_MONTHLY_COST: ${{ vars.FLY_MONTHLY_COST }}
         run: npm run usage-report
 
-      - name: Open usage issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TITLE: ${{ steps.report.outputs.title }}
-        run: |
-          # Ensure the label exists (no-op if it already does).
-          gh label create usage-report --color 1d76db \
-            --description "Weekly Deepgram + Fly cost report" 2>/dev/null || true
-          gh issue create \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$TITLE" \
-            --body-file backend/report.md \
-            --label usage-report
+      - name: Email usage report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.report.outputs.title }}
+          to: ${{ vars.REPORT_EMAIL_TO }}
+          from: Watch Captions Report <${{ secrets.MAIL_USERNAME }}>
+          html_body: file://backend/report.md
+          convert_markdown: true

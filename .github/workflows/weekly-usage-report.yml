@@ -1,0 +1,53 @@
+name: Weekly Usage Report
+
+# Opens a GitHub issue with a Deepgram + Fly cost/usage summary every Monday morning.
+# 14:00 UTC ≈ 7am PDT / 10am EDT. Adjust the cron for your timezone.
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch: {} # allow manual runs to test the report
+
+permissions:
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Generate usage report
+        id: report
+        working-directory: backend
+        env:
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          DEEPGRAM_PROJECT_ID: ${{ secrets.DEEPGRAM_PROJECT_ID }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
+          DEEPGRAM_RATE_PER_MIN: ${{ vars.DEEPGRAM_RATE_PER_MIN }}
+          FLY_MONTHLY_COST: ${{ vars.FLY_MONTHLY_COST }}
+        run: npm run usage-report
+
+      - name: Open usage issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.report.outputs.title }}
+        run: |
+          # Ensure the label exists (no-op if it already does).
+          gh label create usage-report --color 1d76db \
+            --description "Weekly Deepgram + Fly cost report" 2>/dev/null || true
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TITLE" \
+            --body-file backend/report.md \
+            --label usage-report

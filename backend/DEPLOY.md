@@ -57,5 +57,7 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "$AUTH_TOKEN" sample
 
 - `auto_stop_machines = "off"` + `min_machines_running = 1` keep the relay always up so it
   can accept incoming connections. This is the ~$2–5/month fixed cost from the design spec.
+- Weekly cost/usage monitoring (Deepgram + Fly, posted as a GitHub issue every
+  Monday) is set up in [MONITORING.md](./MONITORING.md).
 - To view logs: `fly logs`. To update after code changes: `fly deploy` again.
 - Rotate the auth token any time with `fly secrets set AUTH_TOKEN=<new>` (then update the app).

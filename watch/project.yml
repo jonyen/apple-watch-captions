@@ -1,0 +1,30 @@
+name: WatchCaptions
+options:
+  bundleIdPrefix: com.jonyen.watchcaptions
+  deploymentTarget:
+    watchOS: "10.0"
+packages:
+  CaptionCore:
+    path: CaptionCore
+targets:
+  WatchCaptions:
+    type: application
+    platform: watchOS
+    sources:
+      - path: WatchCaptions
+        excludes:
+          - Secrets.example.swift
+    dependencies:
+      - package: CaptionCore
+    info:
+      path: WatchCaptions/Info.plist
+      properties:
+        WKApplication: true
+        CFBundleDisplayName: Captions
+        NSMicrophoneUsageDescription: "Used to caption what people near you are saying."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.watchcaptions.watchkitapp
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"

@@ -1,1 +1,6 @@
 .superpowers/
+
+# watchOS app
+watch/*.xcodeproj
+watch/WatchCaptions/Secrets.swift
+watch/CaptionCore/.build/

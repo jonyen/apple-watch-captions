@@ -24,5 +24,7 @@
 	<string>Used to caption what people near you are saying.</string>
 	<key>WKApplication</key>
 	<true/>
+	<key>WKWatchOnly</key>
+	<true/>
 </dict>
 </plist>

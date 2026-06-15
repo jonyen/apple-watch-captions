@@ -7,22 +7,24 @@ final class AppModel: ObservableObject {
     private let controller: SessionController
 
     init() {
-        let url = Self.tokenizedURL(Secrets.relayURL, token: Secrets.authToken)
-        let controller = SessionController(
+        let base = Self.httpBase(from: Secrets.relayURL)
+        controller = SessionController(
             store: store,
-            relay: RelayClient(url: url),
+            relay: HTTPRelayClient(base: base, token: Secrets.authToken),
             audio: AudioCapture(),
             permission: MicPermission()
         )
-        self.controller = controller
     }
 
     func start() async { await controller.start() }
     func stop() { controller.stop() }
 
-    private static func tokenizedURL(_ base: URL, token: String) -> URL {
-        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "token", value: token)]
+    /// Derive the HTTPS origin (e.g. https://host) from the configured relay URL.
+    private static func httpBase(from relayURL: URL) -> URL {
+        var components = URLComponents(url: relayURL, resolvingAgainstBaseURL: false)!
+        components.scheme = "https"
+        components.path = ""
+        components.query = nil
         return components.url!
     }
 }

@@ -14,12 +14,14 @@ targets:
       - path: WatchCaptions
         excludes:
           - Secrets.example.swift
+          - Icon
     dependencies:
       - package: CaptionCore
     info:
       path: WatchCaptions/Info.plist
       properties:
         WKApplication: true
+        WKWatchOnly: true
         CFBundleDisplayName: Captions
         NSMicrophoneUsageDescription: "Used to caption what people near you are saying."
     settings:
@@ -28,5 +30,6 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
-        DEVELOPMENT_TEAM: "7B46FE73P3"
+        DEVELOPMENT_TEAM: "7PZN69YDL4"
         CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

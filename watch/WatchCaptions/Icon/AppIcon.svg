@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3D8BFF"/>
+      <stop offset="1" stop-color="#1452D6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background (watchOS masks to a circle) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Speech bubble -->
+  <path d="M259 287 h505
+           a68 68 0 0 1 68 68
+           v246
+           a68 68 0 0 1 -68 68
+           H492
+           l-123 109
+           v-109
+           H259
+           a68 68 0 0 1 -68 -68
+           V355
+           a68 68 0 0 1 68 -68
+           z" fill="#ffffff"/>
+
+  <!-- Caption lines, vertically centered in bubble body -->
+  <rect x="287" y="362" width="451" height="48" rx="24" fill="#1452D6"/>
+  <rect x="287" y="454" width="369" height="48" rx="24" fill="#3D8BFF"/>
+  <rect x="287" y="546" width="259" height="48" rx="24" fill="#9DBEFF"/>
+</svg>

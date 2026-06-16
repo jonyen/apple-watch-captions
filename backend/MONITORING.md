@@ -54,7 +54,7 @@ Add these under **Settings → Secrets and variables → Actions**.
   cd backend
   DEEPGRAM_API_KEY=<key> FLY_API_TOKEN=<token> npm run usage-report
   ```
-  Prints the report to stdout and writes `report.md` (no email is sent locally).
+  Prints the report to stdout and writes `report.html` (no email is sent locally).
 
 ## Adjusting the schedule
 

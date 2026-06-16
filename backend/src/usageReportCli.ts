@@ -12,7 +12,7 @@ import {
   lastWeekRange,
   summarizeDeepgram,
   renderTextReport,
-  renderMarkdownReport,
+  renderHtmlReport,
   reportSubject,
   type DeepgramUsage,
   type FlyMachine,
@@ -109,8 +109,8 @@ async function main(): Promise<void> {
 
   console.log(renderTextReport(data));
 
-  // Hand the report off to the GitHub Actions "create issue" step.
-  writeFileSync("report.md", renderMarkdownReport(data));
+  // Hand the HTML body off to the GitHub Actions "email" step.
+  writeFileSync("report.html", renderHtmlReport(data));
   if (env.GITHUB_OUTPUT) {
     appendFileSync(env.GITHUB_OUTPUT, `title=${reportSubject(data)}\n`);
   }

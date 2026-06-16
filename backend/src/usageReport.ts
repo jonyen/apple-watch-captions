@@ -122,7 +122,68 @@ export function renderTextReport(d: ReportData): string {
   return lines.join("\n");
 }
 
-/** Markdown report for a GitHub issue body. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * HTML report for the weekly email. Uses real `<table>` markup with inline
+ * styles (the only CSS most mail clients honor) so the layout survives Gmail,
+ * Apple Mail, etc. — unlike Markdown pipe-tables, which many clients render as
+ * raw `| ... |` text.
+ */
+export function renderHtmlReport(d: ReportData): string {
+  const tableStyle = "border-collapse:collapse;margin:6px 0;font-size:14px";
+  const td = "border:1px solid #ddd;padding:6px 10px;text-align:left";
+  const th = `${td};background:#f5f5f5`;
+  const row = (label: string, value: string) =>
+    `<tr><td style="${td}">${label}</td><td style="${td}">${value}</td></tr>`;
+  const header = `<tr><th style="${th}">Metric</th><th style="${th}">Value</th></tr>`;
+
+  let deepgramRows: string;
+  if (d.deepgram) {
+    const minutes = d.deepgram.hours * 60;
+    const cost = estimateDeepgramCost(d.deepgram.hours, d.deepgramRatePerMin);
+    deepgramRows =
+      row("Audio transcribed", `<strong>${d.deepgram.hours.toFixed(2)} h</strong> (${minutes.toFixed(1)} min)`) +
+      row("Requests", String(d.deepgram.requests)) +
+      row("Est. cost", `<strong>~${usd(cost)}</strong> (@ $${d.deepgramRatePerMin}/min)`);
+  } else {
+    const reason = escapeHtml(d.deepgramError ?? "check DEEPGRAM_API_KEY / DEEPGRAM_PROJECT_ID.");
+    deepgramRows = `<tr><td style="${td}" colspan="2"><em>Unavailable — ${reason}</em></td></tr>`;
+  }
+
+  let flyMachines: string;
+  if (d.fly.machines) {
+    flyMachines =
+      d.fly.machines.length === 0
+        ? "none found"
+        : d.fly.machines
+            .map((m) => `<code>${escapeHtml(m.id)}</code> [${escapeHtml(m.state)} · ${escapeHtml(m.region)}]`)
+            .join("<br>");
+  } else {
+    flyMachines = `status unavailable — ${escapeHtml(d.fly.machinesError ?? "FLY_API_TOKEN not set")}`;
+  }
+  const flyRows =
+    row("App", `<code>${escapeHtml(d.fly.appName)}</code>`) +
+    row("Machines", flyMachines) +
+    row("Est. cost", `~${usd(d.fly.monthlyCostUsd)}/month (always-on machine)`);
+
+  return [
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#222">`,
+    `<p style="margin:0 0 12px"><strong>Week of ${d.rangeStart} → ${d.rangeEnd} (UTC)</strong></p>`,
+    `<h3 style="margin:16px 0 4px">Deepgram — variable cost</h3>`,
+    `<table style="${tableStyle}">${header}${deepgramRows}</table>`,
+    `<h3 style="margin:16px 0 4px">Fly.io — fixed cost</h3>`,
+    `<table style="${tableStyle}">${header}${flyRows}</table>`,
+    `<p style="color:#666;font-size:12px;margin-top:16px">Deepgram cost is an estimate (streamed audio hours × configured rate). ` +
+      `Confirm exact billing at <a href="https://console.deepgram.com">console.deepgram.com</a> ` +
+      `and <a href="https://fly.io/dashboard">fly.io/dashboard</a>.</p>`,
+    `</div>`,
+  ].join("\n");
+}
+
+/** Markdown report (kept for local/plain-text use). */
 export function renderMarkdownReport(d: ReportData): string {
   const lines: string[] = [];
   lines.push(`**Week of ${d.rangeStart} → ${d.rangeEnd} (UTC)**`);

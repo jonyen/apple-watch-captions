@@ -51,5 +51,4 @@ jobs:
           subject: ${{ steps.report.outputs.title }}
           to: ${{ vars.REPORT_EMAIL_TO }}
           from: Watch Captions Report <${{ secrets.MAIL_USERNAME }}>
-          html_body: file://backend/report.md
-          convert_markdown: true
+          html_body: file://backend/report.html

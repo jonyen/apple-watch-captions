@@ -6,6 +6,7 @@ import {
   reportSubject,
   renderTextReport,
   renderMarkdownReport,
+  renderHtmlReport,
   usd,
   ReportData,
 } from "./usageReport";
@@ -137,6 +138,41 @@ describe("renderMarkdownReport", () => {
     });
     expect(md).toContain("usage 403");
     expect(md).toContain("fly machines 401");
+  });
+});
+
+describe("renderHtmlReport", () => {
+  it("renders both sections as HTML tables with the cost estimate", () => {
+    const html = renderHtmlReport(sample);
+    expect(html).toContain("<table");
+    expect(html).toContain("<th");
+    expect(html).toContain("<td");
+    expect(html).toContain("Deepgram");
+    expect(html).toContain("2.25 h");
+    expect(html).toContain("~$1.04");
+    expect(html).toContain("Fly.io");
+    expect(html).toContain("abc123");
+    expect(html).toContain("~$1.94/month");
+  });
+
+  it("escapes HTML in dynamic values", () => {
+    const html = renderHtmlReport({
+      ...sample,
+      fly: { ...sample.fly, appName: "a<b>&c" },
+    });
+    expect(html).toContain("a&lt;b&gt;&amp;c");
+    expect(html).not.toContain("a<b>&c");
+  });
+
+  it("degrades gracefully when sources are unavailable", () => {
+    const html = renderHtmlReport({
+      ...sample,
+      deepgram: null,
+      deepgramError: "Deepgram API error: usage 403",
+      fly: { ...sample.fly, machines: null, machinesError: "Fly API error: fly machines 401" },
+    });
+    expect(html).toContain("usage 403");
+    expect(html).toContain("fly machines 401");
   });
 });
 

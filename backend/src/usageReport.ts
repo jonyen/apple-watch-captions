@@ -22,11 +22,15 @@ export interface ReportData {
   rangeEnd: string;
   /** null when usage could not be fetched (missing key / API error). */
   deepgram: DeepgramUsage | null;
+  /** Why `deepgram` is null — distinguishes "not configured" from an API error. */
+  deepgramError?: string;
   deepgramRatePerMin: number;
   fly: {
     appName: string;
     /** null when the Fly token is absent or the API call failed. */
     machines: FlyMachine[] | null;
+    /** Why `machines` is null — distinguishes "not configured" from an API error. */
+    machinesError?: string;
     monthlyCostUsd: number;
   };
 }
@@ -92,7 +96,7 @@ export function renderTextReport(d: ReportData): string {
     lines.push(`  Requests          : ${d.deepgram.requests}`);
     lines.push(`  Est. cost         : ~${usd(cost)}  (@ $${d.deepgramRatePerMin}/min)`);
   } else {
-    lines.push("  Unavailable — check DEEPGRAM_API_KEY / DEEPGRAM_PROJECT_ID.");
+    lines.push(`  Unavailable — ${d.deepgramError ?? "check DEEPGRAM_API_KEY / DEEPGRAM_PROJECT_ID."}`);
   }
   lines.push("");
 
@@ -107,7 +111,7 @@ export function renderTextReport(d: ReportData): string {
       }
     }
   } else {
-    lines.push("  Machines  : status unavailable (FLY_API_TOKEN not set)");
+    lines.push(`  Machines  : status unavailable — ${d.fly.machinesError ?? "FLY_API_TOKEN not set"}`);
   }
   lines.push(`  Est. cost : ~${usd(d.fly.monthlyCostUsd)}/month (always-on machine)`);
   lines.push("");
@@ -134,7 +138,7 @@ export function renderMarkdownReport(d: ReportData): string {
     lines.push(`| Requests | ${d.deepgram.requests} |`);
     lines.push(`| Est. cost | **~${usd(cost)}** (@ $${d.deepgramRatePerMin}/min) |`);
   } else {
-    lines.push("_Unavailable — check `DEEPGRAM_API_KEY` / `DEEPGRAM_PROJECT_ID`._");
+    lines.push(`_Unavailable — ${d.deepgramError ?? "check `DEEPGRAM_API_KEY` / `DEEPGRAM_PROJECT_ID`."}_`);
   }
   lines.push("");
 
@@ -149,7 +153,7 @@ export function renderMarkdownReport(d: ReportData): string {
         : d.fly.machines.map((m) => `\`${m.id}\` [${m.state} · ${m.region}]`).join("<br>");
     lines.push(`| Machines | ${desc} |`);
   } else {
-    lines.push("| Machines | status unavailable (`FLY_API_TOKEN` not set) |");
+    lines.push(`| Machines | status unavailable — ${d.fly.machinesError ?? "`FLY_API_TOKEN` not set"} |`);
   }
   lines.push(`| Est. cost | ~${usd(d.fly.monthlyCostUsd)}/month (always-on machine) |`);
   lines.push("");

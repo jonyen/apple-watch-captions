@@ -93,6 +93,19 @@ describe("renderTextReport", () => {
     expect(text).toContain("check DEEPGRAM_API_KEY");
     expect(text).toContain("status unavailable");
   });
+
+  it("surfaces the specific failure reason when provided", () => {
+    const text = renderTextReport({
+      ...sample,
+      deepgram: null,
+      deepgramError: "Deepgram API error: usage 403",
+      fly: { ...sample.fly, machines: null, machinesError: "Fly API error: fly machines 401" },
+    });
+    expect(text).toContain("usage 403");
+    expect(text).toContain("fly machines 401");
+    // The misleading generic "not set" text must NOT appear when we know better.
+    expect(text).not.toContain("FLY_API_TOKEN not set");
+  });
 });
 
 describe("renderMarkdownReport", () => {
@@ -113,6 +126,17 @@ describe("renderMarkdownReport", () => {
     });
     expect(md).toContain("DEEPGRAM_API_KEY");
     expect(md).toContain("status unavailable");
+  });
+
+  it("surfaces the specific failure reason when provided", () => {
+    const md = renderMarkdownReport({
+      ...sample,
+      deepgram: null,
+      deepgramError: "Deepgram API error: usage 403",
+      fly: { ...sample.fly, machines: null, machinesError: "Fly API error: fly machines 401" },
+    });
+    expect(md).toContain("usage 403");
+    expect(md).toContain("fly machines 401");
   });
 });
 

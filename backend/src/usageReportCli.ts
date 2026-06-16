@@ -41,7 +41,10 @@ async function fetchDeepgramUsage(
 
   const url = `${DEEPGRAM_API}/projects/${pid}/usage?start=${start}&end=${end}`;
   const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`usage ${res.status}`);
+  if (!res.ok) {
+    const hint = res.status === 403 ? " (key likely lacks the Usage:Read scope)" : "";
+    throw new Error(`usage ${res.status}${hint}`);
+  }
   return summarizeDeepgram(await res.json());
 }
 
@@ -68,24 +71,30 @@ async function main(): Promise<void> {
   const flyMonthly = Number(env.FLY_MONTHLY_COST) || 1.94;
 
   let deepgram: DeepgramUsage | null = null;
+  let deepgramError: string | undefined;
   if (env.DEEPGRAM_API_KEY) {
     try {
       deepgram = await fetchDeepgramUsage(env.DEEPGRAM_API_KEY, env.DEEPGRAM_PROJECT_ID, start, end);
     } catch (err) {
+      deepgramError = `Deepgram API error: ${(err as Error).message}`;
       console.error(`Deepgram usage fetch failed: ${(err as Error).message}`);
     }
   } else {
+    deepgramError = "DEEPGRAM_API_KEY not set";
     console.error("DEEPGRAM_API_KEY not set — skipping Deepgram usage.");
   }
 
   let machines: FlyMachine[] | null = null;
+  let machinesError: string | undefined;
   if (env.FLY_API_TOKEN) {
     try {
       machines = await fetchFlyMachines(env.FLY_API_TOKEN, appName);
     } catch (err) {
+      machinesError = `Fly API error: ${(err as Error).message}`;
       console.error(`Fly machines fetch failed: ${(err as Error).message}`);
     }
   } else {
+    machinesError = "FLY_API_TOKEN not set";
     console.error("FLY_API_TOKEN not set — reporting fixed Fly estimate only.");
   }
 
@@ -93,8 +102,9 @@ async function main(): Promise<void> {
     rangeStart: start,
     rangeEnd: end,
     deepgram,
+    deepgramError,
     deepgramRatePerMin: ratePerMin,
-    fly: { appName, machines, monthlyCostUsd: flyMonthly },
+    fly: { appName, machines, machinesError, monthlyCostUsd: flyMonthly },
   };
 
   console.log(renderTextReport(data));

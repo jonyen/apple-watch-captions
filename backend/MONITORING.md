@@ -29,13 +29,13 @@ Add these under **Settings → Secrets and variables → Actions**.
 
 ### Secrets
 
-| Secret                | Required | What it is                                                             |
-| --------------------- | -------- | --------------------------------------------------------------------- |
-| `DEEPGRAM_API_KEY`    | yes      | A Deepgram API key with **Usage: read** scope (the relay's key works). |
-| `MAIL_USERNAME`       | yes      | Gmail address the report is sent from (and authenticated as).          |
-| `MAIL_PASSWORD`       | yes      | A Gmail [App Password](https://myaccount.google.com/apppasswords) (needs 2FA). Not your normal password. |
-| `DEEPGRAM_PROJECT_ID` | optional | Pins the project. If omitted, the first project on the key is used.    |
-| `FLY_API_TOKEN`       | optional | `fly tokens create readonly` — enables live machine status.            |
+| Secret                   | Required | What it is                                                             |
+| ------------------------ | -------- | --------------------------------------------------------------------- |
+| `DEEPGRAM_USAGE_API_KEY` | yes      | A Deepgram API key with **Usage: Read** scope. Kept separate from the relay's transcription key (which lives only in Fly secrets). |
+| `MAIL_USERNAME`          | yes      | Gmail address the report is sent from (and authenticated as).          |
+| `MAIL_PASSWORD`          | yes      | A Gmail [App Password](https://myaccount.google.com/apppasswords) (needs 2FA). Not your normal password. |
+| `DEEPGRAM_PROJECT_ID`    | optional | Pins the project. If omitted, the first project on the key is used.    |
+| `FLY_API_TOKEN`          | optional | `fly tokens create readonly -o <org>` — enables live machine status.   |
 
 ### Variables (optional overrides)
 

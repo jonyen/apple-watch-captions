@@ -113,7 +113,7 @@ export class SessionStore {
       session.seq += 1;
       session.events.push({ seq: session.seq, payload });
       if (payload.type === "caption" && payload.isFinal) {
-        this.transcripts?.append(id, payload.text);
+        this.transcripts?.append(id, payload.text, payload.channel);
       }
     });
     this.sessions.set(id, session);

@@ -49,4 +49,14 @@ describe("CaptionSession", () => {
     session.close();
     expect(provider.closed).toBe(true);
   });
+
+  it("forwards the transcript channel on caption messages", () => {
+    const provider = new FakeTranscriptionProvider();
+    const sent: OutboundMessage[] = [];
+    new CaptionSession(provider, (m) => sent.push(m));
+    provider.emitTranscript({ text: "hi", isFinal: true, channel: 1 });
+    provider.emitTranscript({ text: "yo", isFinal: true });
+    expect(sent[0]).toEqual({ type: "caption", text: "hi", isFinal: true, channel: 1 });
+    expect("channel" in sent[1]).toBe(false);
+  });
 });

@@ -89,4 +89,13 @@ describe("TranscriptStore", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).not.toContain("..");
   });
+
+  it("persists channel tags on segments", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "me talking", 0);
+    store.append("abc", "video audio", 1);
+    store.append("abc", "mono line");
+    const detail = readTranscript(dir, listTranscripts(dir)[0].name);
+    expect(detail?.segments.map((s) => s.channel)).toEqual([0, 1, undefined]);
+  });
 });

@@ -2,7 +2,7 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 
 export type OutboundMessage =
   | { type: "ready" }
-  | { type: "caption"; text: string; isFinal: boolean }
+  | { type: "caption"; text: string; isFinal: boolean; channel?: number }
   | { type: "error"; message: string };
 
 /**
@@ -17,7 +17,12 @@ export class CaptionSession {
     this.provider.onReady(() => this.send({ type: "ready" }));
     this.provider.onTranscript((t) => {
       if (t.text.length === 0) return;
-      this.send({ type: "caption", text: t.text, isFinal: t.isFinal });
+      this.send({
+        type: "caption",
+        text: t.text,
+        isFinal: t.isFinal,
+        ...(t.channel !== undefined ? { channel: t.channel } : {}),
+      });
     });
     this.provider.onError((message) => this.send({ type: "error", message }));
   }

@@ -12,6 +12,7 @@ export interface TranscriptSegment {
   /** ISO timestamp the final caption arrived. */
   at: string;
   text: string;
+  channel?: number;
 }
 
 export interface FinalizedTranscript {
@@ -55,7 +56,7 @@ export class TranscriptStore {
   }
 
   /** Record a final caption for a session, creating its file on first use. */
-  append(sessionId: string, text: string): void {
+  append(sessionId: string, text: string, channel?: number): void {
     try {
       const at = new Date(this.now()).toISOString();
       let entry = this.active.get(sessionId);
@@ -64,8 +65,9 @@ export class TranscriptStore {
         entry = { name: transcriptName(at, sessionId), startedAt: at, segments: [] };
         this.active.set(sessionId, entry);
       }
-      entry.segments.push({ at, text });
-      appendFileSync(join(this.dir, `${entry.name}.jsonl`), JSON.stringify({ at, text }) + "\n");
+      const segment = { at, text, ...(channel !== undefined ? { channel } : {}) };
+      entry.segments.push(segment);
+      appendFileSync(join(this.dir, `${entry.name}.jsonl`), JSON.stringify(segment) + "\n");
     } catch (err) {
       console.error("transcript append failed:", err);
     }

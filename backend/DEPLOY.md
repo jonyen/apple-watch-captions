@@ -33,12 +33,6 @@ fly volumes create transcripts --size 1
 # 5. (Optional) Enable transcript summaries — set an Anthropic API key.
 #    Without it, transcripts are still saved; only summaries are skipped.
 fly secrets set ANTHROPIC_API_KEY="<your-anthropic-key>"
-
-# 6. (Optional) Email a "transcript ready" notification when a session ends.
-#    Reuses the same Gmail app-password account as the weekly usage report
-#    (the MAIL_USERNAME / MAIL_PASSWORD GitHub secrets — set them here too).
-fly secrets set MAIL_USERNAME="<gmail-address>" MAIL_PASSWORD="<gmail-app-password>" \
-  NOTIFY_EMAIL_TO="<where-to-send>"
 ```
 
 ## Deploy
@@ -74,11 +68,7 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "$AUTH_TOKEN" sample
 - View them in a browser at `https://<app-name>.fly.dev/app` (paste the `AUTH_TOKEN`
   once; it is kept in the browser's localStorage).
 - JSON API: `GET /v1/transcripts?token=...` and `GET /v1/transcripts/<name>?token=...`.
-- With the mail secrets set, each finished session emails `NOTIFY_EMAIL_TO` its summary
-  and a link to the viewer. The viewer link uses `https://$FLY_APP_NAME.fly.dev`
-  automatically; override with a `PUBLIC_URL` env var if you front it with a custom
-  domain. Sessions with almost no speech are skipped. Email timestamps use the `TZ`
-  set in `fly.toml`.
+- Old installs: unset the retired mail secrets with `fly secrets unset MAIL_USERNAME MAIL_PASSWORD NOTIFY_EMAIL_TO`.
 
 ## Notes
 

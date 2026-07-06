@@ -1,8 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { FinalizedTranscript, writeSummary } from "./transcriptStore";
-
-/** Skip summarizing transcripts with almost no content. */
-const MIN_TRANSCRIPT_CHARS = 40;
+import { FinalizedTranscript } from "./transcriptStore";
 
 export type Summarize = (transcript: FinalizedTranscript) => Promise<string>;
 
@@ -31,26 +28,5 @@ export function createClaudeSummarizer(apiKey: string): Summarize {
     });
     const block = response.content.find((b) => b.type === "text");
     return block?.type === "text" ? block.text : "";
-  };
-}
-
-/**
- * When a transcript finalizes, generate its summary and store it next to the
- * JSONL file. Failures are logged, never fatal — the transcript itself is
- * already safely on disk.
- */
-export function summarizeOnFinalize(dir: string, summarize: Summarize) {
-  return (t: FinalizedTranscript): void => {
-    const chars = t.segments.reduce((n, s) => n + s.text.length, 0);
-    if (chars < MIN_TRANSCRIPT_CHARS) return;
-    summarize(t)
-      .then((summary) => {
-        if (summary.length === 0) return;
-        writeSummary(dir, t.name, summary);
-        console.log(`summary written for ${t.name}`);
-      })
-      .catch((err) => {
-        console.error(`summary failed for ${t.name}:`, err);
-      });
   };
 }

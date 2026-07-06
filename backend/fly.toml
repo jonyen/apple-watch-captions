@@ -8,6 +8,7 @@ primary_region = "sjc"  # pick a region near you: fly platform regions
 [env]
   PORT = "8080"
   TRANSCRIPTS_DIR = "/data/transcripts"
+  TZ = "America/Los_Angeles"  # timestamps in transcript emails
 
 # Persistent volume for session transcripts + summaries.
 # Create once with: fly volumes create transcripts --size 1

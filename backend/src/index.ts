@@ -3,21 +3,29 @@ import { loadConfig } from "./config";
 import { startServer } from "./server";
 import { DeepgramProvider, DeepgramLike } from "./deepgramProvider";
 import { TranscriptStore } from "./transcriptStore";
-import { createClaudeSummarizer, summarizeOnFinalize } from "./summarizer";
+import { createClaudeSummarizer } from "./summarizer";
+import { createFinalizer } from "./finalizer";
+import { createTranscriptMailer } from "./mailer";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
 
-const onFinalize = config.anthropicApiKey
-  ? summarizeOnFinalize(config.transcriptsDir, createClaudeSummarizer(config.anthropicApiKey))
+const summarize = config.anthropicApiKey
+  ? createClaudeSummarizer(config.anthropicApiKey)
   : undefined;
-if (!onFinalize) {
+if (!summarize) {
   console.log("ANTHROPIC_API_KEY not set — transcripts are saved without summaries");
+}
+const sendEmail = config.mail ? createTranscriptMailer(config.mail) : undefined;
+if (!sendEmail) {
+  console.log(
+    "MAIL_USERNAME / MAIL_PASSWORD / NOTIFY_EMAIL_TO not all set — no transcript emails",
+  );
 }
 
 const transcripts = new TranscriptStore({
   dir: config.transcriptsDir,
-  onFinalize,
+  onFinalize: createFinalizer({ dir: config.transcriptsDir, summarize, sendEmail }),
 });
 
 const server = startServer({

@@ -131,7 +131,10 @@ async function showDetail(name) {
       const row = el('div', 'seg');
       const time = document.createElement('time');
       time.textContent = new Date(s.at).toLocaleTimeString();
-      row.append(time, document.createTextNode(s.text));
+      row.append(time);
+      if (s.channel === 0) row.append(el('strong', '', 'Me: '));
+      else if (s.channel === 1) row.append(el('strong', '', 'Them: '));
+      row.append(document.createTextNode(s.text));
       content.append(row);
     }
   } catch (e) {

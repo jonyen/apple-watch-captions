@@ -44,7 +44,7 @@ describe("transcript persistence + endpoints", () => {
     const { providers, port } = start("good");
     await fetch(`${base(port)}/v1/audio?session=s1&token=good`, { method: "POST" });
     providers[0].emitReady();
-    providers[0].emitTranscript({ text: "hello", isFinal: true });
+    providers[0].emitTranscript({ text: "hello", isFinal: true, channel: 0 });
     providers[0].emitTranscript({ text: "interim", isFinal: false }); // not persisted
     providers[0].emitTranscript({ text: "world", isFinal: true });
 
@@ -58,6 +58,7 @@ describe("transcript persistence + endpoints", () => {
       await fetch(`${base(port)}/v1/transcripts/${list.transcripts[0].name}?token=good`)
     ).json();
     expect(detail.segments.map((s: { text: string }) => s.text)).toEqual(["hello", "world"]);
+    expect(detail.segments[0].channel).toBe(0);
     expect(detail.summary).toBeNull();
   });
 

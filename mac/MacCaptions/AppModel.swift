@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import CaptionCore
 
 @MainActor
@@ -11,6 +12,20 @@ final class AppModel: ObservableObject {
 
     private var controller: SessionController?
     private let panel = CaptionPanelController()
+    private var stateObservation: AnyCancellable?
+
+    init() {
+        // Reflect the store's truth in the menu/panel: an error ends the
+        // active-capture state (menu stops saying "Stop Captions", icon
+        // reverts), but the panel stays up so the user actually sees why —
+        // it's only dismissed by an explicit stop().
+        stateObservation = store.$state.sink { [weak self] state in
+            guard let self else { return }
+            if case .error = state {
+                self.capturing = false
+            }
+        }
+    }
 
     func toggle() {
         capturing ? stop() : start()
@@ -19,6 +34,7 @@ final class AppModel: ObservableObject {
     func start() {
         guard !capturing else { return }
         guard let base = settings.relayURL, settings.configured else {
+            panel.show(store: store)
             store.setError("Set the relay URL and token in Settings.")
             return
         }

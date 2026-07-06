@@ -28,9 +28,17 @@ final class DualCapture: AudioCapturing {
         if systemEnabled() {
             let system = self.system
             let interleaver = self.interleaver
+            // Snapshot the generation synchronously, before the Task exists,
+            // so a stop() that runs before the Task is even scheduled (the
+            // SCShareableContent lookup inside start() can take ~100s of ms)
+            // still gets caught: system.stop() bumps the live generation,
+            // making this snapshot stale, and start() bails out instead of
+            // leaking a capture nobody will ever stop. See the comment on
+            // SystemAudioSource.generation for the full race.
+            let expectedGeneration = system.currentGeneration
             Task {
                 do {
-                    try await system.start { interleaver.pushSystem($0) }
+                    try await system.start(expectedGeneration: expectedGeneration) { interleaver.pushSystem($0) }
                 } catch {
                     // System capture failing shouldn't kill the mic-only session.
                     print("system audio capture failed: \(error)")

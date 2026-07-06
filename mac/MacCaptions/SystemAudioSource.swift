@@ -13,12 +13,26 @@ final class SystemAudioSource: NSObject, SCStreamOutput {
     /// Bumped by stop() so a start() whose await was in flight during a
     /// stop()/start() cycle can detect it was superseded and tear down the
     /// SCStream it just spun up instead of orphaning it in self.stream.
+    ///
+    /// Race this guards against: DualCapture.start() dispatches system audio
+    /// capture on a detached Task (SCShareableContent lookup can take ~100s
+    /// of ms). If DualCapture.stop() runs before that Task even begins
+    /// executing, a generation read *inside* this function would already
+    /// reflect the post-stop value and see no mismatch, letting a capture
+    /// start that nobody will ever stop (the recording indicator stays on
+    /// forever). So the caller snapshots `currentGeneration` synchronously
+    /// (before creating the Task) and passes it in as `expectedGeneration`;
+    /// we compare against that fixed snapshot both before and after each
+    /// await, so a stop() at any point — even before this function starts
+    /// running — is caught.
     private var generation = 0
+    var currentGeneration: Int { generation }
 
-    func start(onSamples: @escaping ([Int16]) -> Void) async throws {
-        let startGeneration = generation
+    func start(expectedGeneration: Int, onSamples: @escaping ([Int16]) -> Void) async throws {
+        guard generation == expectedGeneration else { return } // stopped before we even began
         self.onSamples = onSamples
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard generation == expectedGeneration else { return } // stopped during the shareable-content lookup
         guard let display = content.displays.first else { throw CaptureError.noDisplay }
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -34,7 +48,7 @@ final class SystemAudioSource: NSObject, SCStreamOutput {
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
         try await stream.startCapture()
 
-        guard generation == startGeneration else {
+        guard generation == expectedGeneration else {
             // A stop() (and possibly a new start()) raced this await; this
             // stream is stale, so shut it down rather than assigning it.
             try? await stream.stopCapture()

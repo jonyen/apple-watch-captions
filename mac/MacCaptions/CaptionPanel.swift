@@ -38,6 +38,12 @@ struct CaptionPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if case .error(let message) = store.state {
+                Text(message)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
             ForEach(store.lines.suffix(3)) { line in
                 Text(label(line.channel) + line.text)
                     .font(.system(size: 18, weight: .medium))

@@ -12,7 +12,14 @@ struct TranscriptsView: View {
                 get: { selected?.name },
                 set: { name in
                     guard let name, let api else { return }
-                    Task { selected = try? await api.detail(name: name) }
+                    Task {
+                        do {
+                            selected = try await api.detail(name: name)
+                            error = nil
+                        } catch {
+                            self.error = "\(error)"
+                        }
+                    }
                 }
             )) { t in
                 VStack(alignment: .leading) {
@@ -59,7 +66,12 @@ struct TranscriptsView: View {
             error = "Set the relay URL and token in Settings."
             return
         }
-        do { transcripts = try await api.list() } catch { self.error = "\(error)" }
+        do {
+            transcripts = try await api.list()
+            error = nil
+        } catch {
+            self.error = "\(error)"
+        }
     }
 
     private func label(_ channel: Int?) -> String {

@@ -56,7 +56,7 @@ Token auth via `?token=<AUTH_TOKEN>` on every request.
 | `POST /v1/audio?session=<id>&since=<seq>` | raw 16 kHz mono Int16 PCM (may be empty) | `{ "events": [{seq,type,...}], "seq": <latest> }` |
 | `POST /v1/stop?session=<id>` | empty | `{ "events": [...], "seq": <latest> }` |
 | `GET /healthz` | — | `200 ok` |
-| `WS /stream?token=…` | binary PCM frames | JSON caption messages — retained for desktop testing only |
+| `WS /stream?token=…` | binary PCM frames | JSON caption messages — the mac app's production transport (WebSockets aren't restricted there the way they are on watchOS); accepts `?channels=2` for multichannel (mic + system audio), tagging captions with a `channel`. The watch still uses HTTP polling (see above). |
 
 Event payloads: `{type:"ready"}`, `{type:"caption",text,isFinal}`, `{type:"error",message}`.
 

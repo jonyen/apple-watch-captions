@@ -5,3 +5,6 @@ watch/*.xcodeproj
 watch/WatchCaptions/Secrets.swift
 watch/CaptionCore/.build/
 watch/CaptionCore/.swiftpm/
+
+# macOS app
+mac/*.xcodeproj

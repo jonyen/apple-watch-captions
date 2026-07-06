@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             if case .error = state {
                 self.capturing = false
+                self.controller = nil
             }
         }
     }

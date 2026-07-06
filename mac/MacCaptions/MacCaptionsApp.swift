@@ -8,7 +8,7 @@ struct MacCaptionsApp: App {
 
     var body: some Scene {
         MenuBarExtra("Captions", systemImage: model.capturing ? "captions.bubble.fill" : "captions.bubble") {
-            StatusLine(store: model.store)
+            StatusLine(store: model.store, capturing: model.capturing)
             Button(model.capturing ? "Stop Captions" : "Start Captions") { model.toggle() }
             Toggle("Microphone", isOn: $model.micOn)
             Toggle("System Audio", isOn: $model.systemOn)
@@ -33,18 +33,30 @@ struct MacCaptionsApp: App {
 /// itself, so MenuBarExtra's content needs its own `@ObservedObject` on the
 /// store to re-render when it changes (e.g. session error) — observing only
 /// `model.capturing` here would leave the menu showing stale status text.
+/// Status is shown only when capturing or displaying an error; fresh launches
+/// hide the default .connecting state since the Mac app doesn't auto-start.
 private struct StatusLine: View {
     @ObservedObject var store: CaptionStore
+    let capturing: Bool
+
+    var isError: Bool {
+        if case .error = store.state {
+            return true
+        }
+        return false
+    }
 
     var body: some View {
         Group {
-            switch store.state {
-            case .connecting:
-                Text("Connecting…")
-            case .listening:
-                Text("Listening…")
-            case .error(let message):
-                Text(message).foregroundStyle(.red)
+            if capturing || isError {
+                switch store.state {
+                case .connecting:
+                    Text("Connecting…")
+                case .listening:
+                    Text("Listening…")
+                case .error(let message):
+                    Text(message).foregroundStyle(.red)
+                }
             }
         }
         .font(.caption)

@@ -9,6 +9,7 @@ import {
   KEEPALIVE_MESSAGE,
   MAX_RECONNECT_ATTEMPTS,
 } from "./deepgramProvider";
+import { Transcript } from "./transcriptionProvider";
 
 /** Minimal stand-in for a Deepgram live connection. */
 class FakeLiveConnection extends EventEmitter implements LiveConnectionLike {
@@ -239,5 +240,32 @@ describe("DeepgramProvider", () => {
     });
     conns[0].emit(LiveTranscriptionEvents.Transcript, transcriptPayload("mono", true));
     expect(got).toEqual([1, undefined]);
+  });
+
+  it("does not tag mono sessions with a channel even though Deepgram sends channel_index: [0, 1]", () => {
+    const { client, conns } = fakeDeepgram();
+    const p = new DeepgramProvider(client);
+    const got: Transcript[] = [];
+    p.onTranscript((t) => got.push(t));
+    conns[0].emit(LiveTranscriptionEvents.Transcript, {
+      is_final: true,
+      channel_index: [0, 1],
+      channel: { alternatives: [{ transcript: "hi" }] },
+    });
+    expect(got).toHaveLength(1);
+    expect("channel" in got[0]).toBe(false);
+  });
+
+  it("tags multichannel sessions with the reported channel index", () => {
+    const { client, conns } = fakeDeepgram();
+    const p = new DeepgramProvider(client);
+    const got: Transcript[] = [];
+    p.onTranscript((t) => got.push(t));
+    conns[0].emit(LiveTranscriptionEvents.Transcript, {
+      is_final: true,
+      channel_index: [1, 2],
+      channel: { alternatives: [{ transcript: "hi" }] },
+    });
+    expect(got[0].channel).toBe(1);
   });
 });

@@ -80,11 +80,17 @@ export class DeepgramProvider implements TranscriptionProvider {
     conn.on(LiveTranscriptionEvents.Transcript, (data: any) => {
       if (conn !== this.conn) return;
       const text: string = data?.channel?.alternatives?.[0]?.transcript ?? "";
-      const channel = Array.isArray(data?.channel_index) ? Number(data.channel_index[0]) : undefined;
+      // Deepgram live sends channel_index on every Results message, even for
+      // mono sessions (e.g. [0, 1]). Only tag the transcript with a channel
+      // when the session is genuinely multichannel (total > 1); otherwise a
+      // mono watch session would get every caption stamped `channel: 0`.
+      const idx = Array.isArray(data?.channel_index) ? Number(data.channel_index[0]) : NaN;
+      const total = Array.isArray(data?.channel_index) ? Number(data.channel_index[1]) : NaN;
+      const channel = total > 1 && !Number.isNaN(idx) ? idx : undefined;
       this.transcriptHandler({
         text,
         isFinal: Boolean(data?.is_final),
-        ...(channel !== undefined && !Number.isNaN(channel) ? { channel } : {}),
+        ...(channel !== undefined ? { channel } : {}),
       });
     });
 

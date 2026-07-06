@@ -97,5 +97,12 @@ describe("TranscriptStore", () => {
     store.append("abc", "mono line");
     const detail = readTranscript(dir, listTranscripts(dir)[0].name);
     expect(detail?.segments.map((s) => s.channel)).toEqual([0, 1, undefined]);
+
+    // Guard against regressions where a mono segment gets serialized with an
+    // explicit `"channel": undefined`-shaped key (JSON.stringify would drop
+    // it, but a stray default value would not) — inspect the raw JSONL line.
+    const file = readdirSync(dir).find((f) => f.endsWith("_abc.jsonl"))!;
+    const lines = readFileSync(join(dir, file), "utf8").trim().split("\n");
+    expect(lines[2]).not.toContain('"channel"');
   });
 });

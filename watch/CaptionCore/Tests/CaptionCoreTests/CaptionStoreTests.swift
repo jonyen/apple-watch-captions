@@ -15,22 +15,22 @@ final class CaptionStoreTests: XCTestCase {
 
     func testPartialSetsPartialLine() {
         let s = CaptionStore()
-        s.apply(.caption(text: "hel", isFinal: false))
+        s.apply(.caption(text: "hel", isFinal: false, channel: nil))
         XCTAssertEqual(s.partial, "hel")
         XCTAssertTrue(s.lines.isEmpty)
     }
 
     func testFinalAppendsAndClearsPartial() {
         let s = CaptionStore()
-        s.apply(.caption(text: "hel", isFinal: false))
-        s.apply(.caption(text: "hello", isFinal: true))
-        XCTAssertEqual(s.lines, ["hello"])
+        s.apply(.caption(text: "hel", isFinal: false, channel: nil))
+        s.apply(.caption(text: "hello", isFinal: true, channel: nil))
+        XCTAssertEqual(s.lines, [CaptionLine(text: "hello", channel: nil)])
         XCTAssertEqual(s.partial, "")
     }
 
     func testEmptyFinalIsNotAppended() {
         let s = CaptionStore()
-        s.apply(.caption(text: "", isFinal: true))
+        s.apply(.caption(text: "", isFinal: true, channel: nil))
         XCTAssertTrue(s.lines.isEmpty)
     }
 
@@ -42,7 +42,7 @@ final class CaptionStoreTests: XCTestCase {
 
     func testResetClearsEverything() {
         let s = CaptionStore()
-        s.apply(.caption(text: "hi", isFinal: true))
+        s.apply(.caption(text: "hi", isFinal: true, channel: nil))
         s.apply(.ready)
         s.reset()
         XCTAssertTrue(s.lines.isEmpty)
@@ -54,5 +54,14 @@ final class CaptionStoreTests: XCTestCase {
         let s = CaptionStore()
         s.setError("Connection lost")
         XCTAssertEqual(s.state, .error("Connection lost"))
+    }
+
+    @MainActor func testTracksChannelsOnLinesAndPartials() {
+        let store = CaptionStore()
+        store.apply(.caption(text: "typing…", isFinal: false, channel: 1))
+        XCTAssertEqual(store.partials[1], "typing…")
+        store.apply(.caption(text: "done", isFinal: true, channel: 1))
+        XCTAssertEqual(store.lines.last, CaptionLine(text: "done", channel: 1))
+        XCTAssertEqual(store.partials[1], "")
     }
 }

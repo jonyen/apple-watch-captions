@@ -13,14 +13,14 @@ final class ServerMessageTests: XCTestCase {
     func testDecodesPartialCaption() throws {
         XCTAssertEqual(
             try decode(#"{"type":"caption","text":"hello","isFinal":false}"#),
-            .caption(text: "hello", isFinal: false)
+            .caption(text: "hello", isFinal: false, channel: nil)
         )
     }
 
     func testDecodesFinalCaption() throws {
         XCTAssertEqual(
             try decode(#"{"type":"caption","text":"hello world","isFinal":true}"#),
-            .caption(text: "hello world", isFinal: true)
+            .caption(text: "hello world", isFinal: true, channel: nil)
         )
     }
 
@@ -33,5 +33,15 @@ final class ServerMessageTests: XCTestCase {
 
     func testThrowsOnUnknownType() {
         XCTAssertThrowsError(try decode(#"{"type":"weird"}"#))
+    }
+
+    func testDecodesCaptionWithChannel() throws {
+        let data = Data(#"{"type":"caption","text":"hi","isFinal":true,"channel":1}"#.utf8)
+        XCTAssertEqual(try ServerMessage.decode(data), .caption(text: "hi", isFinal: true, channel: 1))
+    }
+
+    func testDecodesCaptionWithoutChannel() throws {
+        let data = Data(#"{"type":"caption","text":"hi","isFinal":false}"#.utf8)
+        XCTAssertEqual(try ServerMessage.decode(data), .caption(text: "hi", isFinal: false, channel: nil))
     }
 }

@@ -133,7 +133,7 @@ final class HTTPRelayClient: Relay {
             case "caption":
                 let text = event["text"] as? String ?? ""
                 let isFinal = event["isFinal"] as? Bool ?? false
-                emit(.caption(text: text, isFinal: isFinal))
+                emit(.caption(text: text, isFinal: isFinal, channel: event["channel"] as? Int))
             case "error":
                 emit(.error(message: event["message"] as? String ?? "error"))
             default:

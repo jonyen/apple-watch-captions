@@ -3,12 +3,12 @@ import Foundation
 /// A message received from the caption relay.
 public enum ServerMessage: Equatable {
     case ready
-    case caption(text: String, isFinal: Bool)
+    case caption(text: String, isFinal: Bool, channel: Int?)
     case error(message: String)
 }
 
 extension ServerMessage: Decodable {
-    private enum CodingKeys: String, CodingKey { case type, text, isFinal, message }
+    private enum CodingKeys: String, CodingKey { case type, text, isFinal, message, channel }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -18,7 +18,8 @@ extension ServerMessage: Decodable {
         case "caption":
             self = .caption(
                 text: try c.decode(String.self, forKey: .text),
-                isFinal: try c.decode(Bool.self, forKey: .isFinal)
+                isFinal: try c.decode(Bool.self, forKey: .isFinal),
+                channel: try c.decodeIfPresent(Int.self, forKey: .channel)
             )
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message))

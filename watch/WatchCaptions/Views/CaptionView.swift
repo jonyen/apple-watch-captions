@@ -8,8 +8,8 @@ struct CaptionView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(store.lines.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.system(size: 16))
+                    ForEach(store.lines) { line in
+                        Text(line.text).font(.system(size: 16))
                     }
                     if !store.partial.isEmpty {
                         Text(store.partial).font(.system(size: 16)).foregroundStyle(.secondary)

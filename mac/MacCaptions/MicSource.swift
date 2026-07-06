@@ -16,6 +16,10 @@ final class MicSource {
         }
         self.converter = converter
 
+        // Belt-and-braces: a stray tap from a prior start() (if stop() was
+        // skipped) would make installTap raise an uncatchable NSException.
+        // Safe to call even when no tap is installed.
+        input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { [weak self] buffer, _ in
             guard let self, let samples = self.convert(buffer), !samples.isEmpty else { return }
             onSamples(samples)

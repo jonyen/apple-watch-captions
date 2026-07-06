@@ -10,8 +10,13 @@ final class SystemAudioSource: NSObject, SCStreamOutput {
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
     private let queue = DispatchQueue(label: "system.audio.capture")
+    /// Bumped by stop() so a start() whose await was in flight during a
+    /// stop()/start() cycle can detect it was superseded and tear down the
+    /// SCStream it just spun up instead of orphaning it in self.stream.
+    private var generation = 0
 
     func start(onSamples: @escaping ([Int16]) -> Void) async throws {
+        let startGeneration = generation
         self.onSamples = onSamples
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first else { throw CaptureError.noDisplay }
@@ -28,10 +33,18 @@ final class SystemAudioSource: NSObject, SCStreamOutput {
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
         try await stream.startCapture()
+
+        guard generation == startGeneration else {
+            // A stop() (and possibly a new start()) raced this await; this
+            // stream is stale, so shut it down rather than assigning it.
+            try? await stream.stopCapture()
+            return
+        }
         self.stream = stream
     }
 
     func stop() {
+        generation += 1
         let s = stream
         stream = nil
         converter = nil

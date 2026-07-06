@@ -12,6 +12,7 @@ final class DualCapture: AudioCapturing {
     private let interleaver = Interleaver()
     private var timer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "dualcapture.drain")
+    private var started = false
 
     init(micEnabled: @escaping () -> Bool, systemEnabled: @escaping () -> Bool) {
         self.micEnabled = micEnabled
@@ -19,6 +20,8 @@ final class DualCapture: AudioCapturing {
     }
 
     func start(onChunk: @escaping (Data) -> Void) throws {
+        guard !started else { return }
+        started = true
         if micEnabled() {
             try mic.start { [interleaver] in interleaver.pushMic($0) }
         }
@@ -45,6 +48,7 @@ final class DualCapture: AudioCapturing {
     }
 
     func stop() {
+        started = false
         timer?.cancel()
         timer = nil
         mic.stop()

@@ -39,8 +39,13 @@ for the full design.
 | Path | What |
 |------|------|
 | [`watch/`](watch/README.md) | The watchOS app (SwiftUI) + `CaptionCore` Swift package (pure logic, unit-tested). Built with XcodeGen. |
+| [`mac/`](mac/README.md) | The macOS menu-bar app (SwiftUI) for live captions on desktop. Shares `CaptionCore` with the watch app; listens to mic and system audio. |
 | [`backend/`](backend/README.md) | The STT relay (Node/TypeScript), deployed on Fly.io. |
 | [`docs/`](docs/) | Design specs. |
+
+## Transcripts and cross-device sync
+
+Sessions end when you tap Stop (watch) or click the menu-bar button again (mac). Captions and a summary are saved to the transcript store on the relay. You can view transcripts at [`https://watch-captions-relay.fly.dev/app`](https://watch-captions-relay.fly.dev/app) or the Transcripts window in the mac app — the same transcript list syncs across all your devices via the relay.
 
 ## Transport API
 

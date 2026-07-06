@@ -29,11 +29,13 @@ cd watch/CaptionCore && swift test
 ## Build (app)
 ```bash
 cd mac && xcodebuild build -project MacCaptions.xcodeproj -scheme MacCaptions \
-  -destination 'platform=macOS'
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
+(If you have a Development cert for team 7PZN69YDL4, omit `CODE_SIGNING_ALLOWED=NO`.)
 
 ## Test (app target)
 ```bash
 cd mac && xcodebuild test -project MacCaptions.xcodeproj -scheme MacCaptions \
-  -destination 'platform=macOS'
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
+(If you have a Development cert for team 7PZN69YDL4, omit `CODE_SIGNING_ALLOWED=NO`.)

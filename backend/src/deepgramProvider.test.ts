@@ -212,4 +212,32 @@ describe("DeepgramProvider", () => {
     vi.advanceTimersByTime(KEEPALIVE_INTERVAL_MS * 3);
     expect(conns[0].keepAlives()).toBe(0);
   });
+
+  it("passes option overrides to the live connection", () => {
+    const opts: Record<string, unknown>[] = [];
+    const client: DeepgramLike = {
+      listen: {
+        live: (o?: Record<string, unknown>) => {
+          opts.push(o ?? {});
+          return new FakeLiveConnection();
+        },
+      },
+    };
+    new DeepgramProvider(client, { channels: 2, multichannel: true });
+    expect(opts[0]).toMatchObject({ channels: 2, multichannel: true, model: "nova-2" });
+  });
+
+  it("maps channel_index onto transcripts", () => {
+    const { client, conns } = fakeDeepgram();
+    const p = new DeepgramProvider(client);
+    const got: (number | undefined)[] = [];
+    p.onTranscript((t) => got.push(t.channel));
+    conns[0].emit(LiveTranscriptionEvents.Transcript, {
+      is_final: true,
+      channel_index: [1, 2],
+      channel: { alternatives: [{ transcript: "hi" }] },
+    });
+    conns[0].emit(LiveTranscriptionEvents.Transcript, transcriptPayload("mono", true));
+    expect(got).toEqual([1, undefined]);
+  });
 });

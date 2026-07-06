@@ -2,6 +2,8 @@
 export interface Transcript {
   text: string;
   isFinal: boolean;
+  /** Channel index for multichannel sessions (0 = mic, 1 = system). Absent = mono. */
+  channel?: number;
 }
 
 /**

@@ -57,12 +57,12 @@ export class DeepgramProvider implements TranscriptionProvider {
   private keepAliveTimer?: NodeJS.Timeout;
   private reconnectTimer?: NodeJS.Timeout;
 
-  constructor(private deepgram: DeepgramLike) {
+  constructor(private deepgram: DeepgramLike, private optionOverrides?: Record<string, unknown>) {
     this.connect();
   }
 
   private connect(): void {
-    const conn = this.deepgram.listen.live(DEEPGRAM_LIVE_OPTIONS);
+    const conn = this.deepgram.listen.live({ ...DEEPGRAM_LIVE_OPTIONS, ...this.optionOverrides });
     this.conn = conn;
 
     conn.on(LiveTranscriptionEvents.Open, () => {
@@ -80,7 +80,12 @@ export class DeepgramProvider implements TranscriptionProvider {
     conn.on(LiveTranscriptionEvents.Transcript, (data: any) => {
       if (conn !== this.conn) return;
       const text: string = data?.channel?.alternatives?.[0]?.transcript ?? "";
-      this.transcriptHandler({ text, isFinal: Boolean(data?.is_final) });
+      const channel = Array.isArray(data?.channel_index) ? Number(data.channel_index[0]) : undefined;
+      this.transcriptHandler({
+        text,
+        isFinal: Boolean(data?.is_final),
+        ...(channel !== undefined && !Number.isNaN(channel) ? { channel } : {}),
+      });
     });
 
     conn.on(LiveTranscriptionEvents.Error, (err: any) => {

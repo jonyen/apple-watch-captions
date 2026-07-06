@@ -5,12 +5,18 @@ import { verifyToken } from "./auth";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
+import { TranscriptStore, listTranscripts, readTranscript } from "./transcriptStore";
+import { VIEWER_HTML } from "./viewerPage";
 
 export interface StartServerOptions {
   port: number;
   authToken: string;
   /** Factory for a fresh provider per connection/session (Deepgram in prod, fake in tests). */
   createProvider: () => TranscriptionProvider;
+  /** Optional transcript persistence; also enables the /v1/transcripts endpoints. */
+  transcripts?: TranscriptStore;
+  /** Directory the transcript endpoints read from (required with `transcripts`). */
+  transcriptsDir?: string;
 }
 
 export interface CaptionServer {
@@ -23,7 +29,10 @@ const MAX_AUDIO_BYTES = 512 * 1024;
 const REAP_INTERVAL_MS = 5_000;
 
 export function startServer(opts: StartServerOptions): CaptionServer {
-  const store = new SessionStore({ createProvider: opts.createProvider });
+  const store = new SessionStore({
+    createProvider: opts.createProvider,
+    transcripts: opts.transcripts,
+  });
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
@@ -76,6 +85,37 @@ async function handleRequest(
   if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/")) {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("ok");
+    return;
+  }
+
+  // Transcript viewer web app (static page; data endpoints below need the token).
+  if (req.method === "GET" && url.pathname === "/app") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(VIEWER_HTML);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/v1/transcripts")) {
+    if (!opts.transcriptsDir) {
+      sendJSON(res, 404, { error: "transcripts not enabled" });
+      return;
+    }
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (url.pathname === "/v1/transcripts") {
+      sendJSON(res, 200, { transcripts: listTranscripts(opts.transcriptsDir) });
+      return;
+    }
+    const name = decodeURIComponent(url.pathname.slice("/v1/transcripts/".length));
+    const detail = readTranscript(opts.transcriptsDir, name);
+    if (!detail) {
+      sendJSON(res, 404, { error: "not found" });
+      return;
+    }
+    sendJSON(res, 200, detail);
     return;
   }
 

@@ -26,6 +26,13 @@ fly apps create watch-captions-relay
 AUTH_TOKEN=$(openssl rand -hex 32)
 echo "Save this token — the Watch/iOS app will use it: $AUTH_TOKEN"
 fly secrets set AUTH_TOKEN="$AUTH_TOKEN" DEEPGRAM_API_KEY="<your-deepgram-key>"
+
+# 4. Create the volume that stores transcripts (mounted at /data, see fly.toml).
+fly volumes create transcripts --size 1
+
+# 5. (Optional) Enable transcript summaries — set an Anthropic API key.
+#    Without it, transcripts are still saved; only summaries are skipped.
+fly secrets set ANTHROPIC_API_KEY="<your-anthropic-key>"
 ```
 
 ## Deploy
@@ -52,6 +59,15 @@ curl https://<app-name>.fly.dev/healthz
 # Full transcription smoke test (needs a 16kHz mono PCM file — see README):
 node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "$AUTH_TOKEN" sample.pcm
 ```
+
+## Transcripts & summaries
+
+- Final captions are appended per-session as JSONL under `/data/transcripts` on the
+  volume; a markdown summary is generated with Claude when a session ends (if
+  `ANTHROPIC_API_KEY` is set).
+- View them in a browser at `https://<app-name>.fly.dev/app` (paste the `AUTH_TOKEN`
+  once; it is kept in the browser's localStorage).
+- JSON API: `GET /v1/transcripts?token=...` and `GET /v1/transcripts/<name>?token=...`.
 
 ## Notes
 

@@ -7,6 +7,13 @@ primary_region = "sjc"  # pick a region near you: fly platform regions
 
 [env]
   PORT = "8080"
+  TRANSCRIPTS_DIR = "/data/transcripts"
+
+# Persistent volume for session transcripts + summaries.
+# Create once with: fly volumes create transcripts --size 1
+[mounts]
+  source = "transcripts"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080

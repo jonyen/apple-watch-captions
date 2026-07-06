@@ -12,6 +12,7 @@
     "usage-report": "tsx src/usageReportCli.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "@deepgram/sdk": "^3.9.0",
     "tsx": "^4.19.0",
     "ws": "^8.18.0"

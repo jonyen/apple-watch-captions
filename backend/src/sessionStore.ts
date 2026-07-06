@@ -1,5 +1,6 @@
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
+import { TranscriptStore } from "./transcriptStore";
 
 export interface SeqEvent {
   seq: number;
@@ -20,6 +21,8 @@ export interface SessionStoreOptions {
   idleTimeoutMs?: number;
   /** Injectable clock (tests). Defaults to Date.now. */
   now?: () => number;
+  /** Optional persistence for final captions. */
+  transcripts?: TranscriptStore;
 }
 
 /**
@@ -32,11 +35,13 @@ export class SessionStore {
   private readonly createProvider: () => TranscriptionProvider;
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
+  private readonly transcripts?: TranscriptStore;
 
   constructor(opts: SessionStoreOptions) {
     this.createProvider = opts.createProvider;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 15_000;
     this.now = opts.now ?? (() => Date.now());
+    this.transcripts = opts.transcripts;
   }
 
   /** Feed audio (may be empty) for a session, lazily creating it on first use. */
@@ -67,6 +72,7 @@ export class SessionStore {
     if (!session) return;
     session.caption.close();
     this.sessions.delete(id);
+    this.transcripts?.finalize(id);
   }
 
   /** Close sessions idle longer than the configured timeout. */
@@ -76,13 +82,17 @@ export class SessionStore {
       if (session.lastActivity < cutoff) {
         session.caption.close();
         this.sessions.delete(id);
+        this.transcripts?.finalize(id);
       }
     }
   }
 
   /** Close every session (server shutdown). */
   closeAll(): void {
-    for (const session of this.sessions.values()) session.caption.close();
+    for (const [id, session] of this.sessions) {
+      session.caption.close();
+      this.transcripts?.finalize(id);
+    }
     this.sessions.clear();
   }
 
@@ -102,6 +112,9 @@ export class SessionStore {
     session.caption = new CaptionSession(provider, (payload: OutboundMessage) => {
       session.seq += 1;
       session.events.push({ seq: session.seq, payload });
+      if (payload.type === "caption" && payload.isFinal) {
+        this.transcripts?.append(id, payload.text);
+      }
     });
     this.sessions.set(id, session);
     return session;

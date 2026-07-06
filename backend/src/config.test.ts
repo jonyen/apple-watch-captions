@@ -8,7 +8,24 @@ describe("loadConfig", () => {
       AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
     });
-    expect(cfg).toEqual({ port: 8080, authToken: "secret", deepgramApiKey: "dg-key" });
+    expect(cfg).toEqual({
+      port: 8080,
+      authToken: "secret",
+      deepgramApiKey: "dg-key",
+      transcriptsDir: "./data/transcripts",
+      anthropicApiKey: undefined,
+    });
+  });
+
+  it("reads transcript dir and anthropic key when set", () => {
+    const cfg = loadConfig({
+      AUTH_TOKEN: "secret",
+      DEEPGRAM_API_KEY: "dg-key",
+      TRANSCRIPTS_DIR: "/data/transcripts",
+      ANTHROPIC_API_KEY: "sk-ant-xxx",
+    });
+    expect(cfg.transcriptsDir).toBe("/data/transcripts");
+    expect(cfg.anthropicApiKey).toBe("sk-ant-xxx");
   });
 
   it("defaults the port to 8080 when unset", () => {

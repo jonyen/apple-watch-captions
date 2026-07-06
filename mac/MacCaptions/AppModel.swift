@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        guard !capturing else { return }
         guard let base = settings.relayURL, settings.configured else {
             store.setError("Set the relay URL and token in Settings.")
             return

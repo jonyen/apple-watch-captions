@@ -20,6 +20,7 @@ final class CaptionPanelController {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.hidesOnDeactivate = false
         p.contentView = view
         p.center()
         p.orderFrontRegardless()

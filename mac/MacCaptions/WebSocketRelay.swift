@@ -32,6 +32,7 @@ final class WebSocketRelay: NSObject, Relay {
     private var session: URLSession!
     private var policy = ReconnectPolicy()
     private var stopped = true
+    private let queue = DispatchQueue(label: "relay.ws")
 
     init(base: URL, token: String, channels: Int) {
         var c = URLComponents(url: base.appendingPathComponent("stream"), resolvingAgainstBaseURL: false)!
@@ -46,22 +47,34 @@ final class WebSocketRelay: NSObject, Relay {
     }
 
     func connect() {
-        stopped = false
-        policy.reset()
-        open()
+        queue.async { [weak self] in
+            guard let self else { return }
+            // Cancel any existing task so repeated connect() calls (e.g. from the
+            // app returning to the foreground) don't leak the old socket.
+            self.task?.cancel(with: .normalClosure, reason: nil)
+            self.task = nil
+            self.stopped = false
+            self.policy.reset()
+            self.open()
+        }
     }
 
     func send(_ audio: Data) {
-        task?.send(.data(audio)) { _ in }  // drop errors; reconnect path handles the failure
+        queue.async { [weak self] in
+            self?.task?.send(.data(audio)) { _ in }  // drop errors; reconnect path handles the failure
+        }
     }
 
     func close() {
-        stopped = true
-        task?.cancel(with: .normalClosure, reason: nil)
-        task = nil
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.stopped = true
+            self.task?.cancel(with: .normalClosure, reason: nil)
+            self.task = nil
+        }
     }
 
-    // MARK: - Internals
+    // MARK: - Internals (all run on `queue`)
 
     private func open() {
         let t = session.webSocketTask(with: url)
@@ -72,16 +85,19 @@ final class WebSocketRelay: NSObject, Relay {
 
     private func receiveLoop(on t: URLSessionWebSocketTask) {
         t.receive { [weak self] result in
-            guard let self, self.task === t else { return }
-            switch result {
-            case .success(let message):
-                self.policy.reset()
-                if let serverMessage = self.decode(message), let onMessage = self.onMessage {
-                    Task { @MainActor in onMessage(serverMessage) }
+            guard let self else { return }
+            self.queue.async {
+                guard self.task === t else { return }
+                switch result {
+                case .success(let message):
+                    self.policy.reset()
+                    if let serverMessage = self.decode(message), let onMessage = self.onMessage {
+                        Task { @MainActor in onMessage(serverMessage) }
+                    }
+                    self.receiveLoop(on: t)
+                case .failure:
+                    self.handleDrop()
                 }
-                self.receiveLoop(on: t)
-            case .failure:
-                self.handleDrop()
             }
         }
     }
@@ -101,7 +117,7 @@ final class WebSocketRelay: NSObject, Relay {
             if let onClose { Task { @MainActor in onClose() } }
             return
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, !self.stopped else { return }
             self.open()
         }

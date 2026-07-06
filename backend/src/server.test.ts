@@ -1,8 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { WebSocket } from "ws";
 import { AddressInfo } from "net";
-import { startServer, CaptionServer } from "./server";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { startServer, CaptionServer, ProviderOptions } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { TranscriptStore, listTranscripts } from "./transcriptStore";
 
 let running: CaptionServer | null = null;
 
@@ -92,5 +96,60 @@ describe("caption server", () => {
     ws.close();
     await new Promise((r) => setTimeout(r, 30));
     expect(provider.closed).toBe(true);
+  });
+
+  it("passes channels=2 through to the provider factory", async () => {
+    const seen: (ProviderOptions | undefined)[] = [];
+    const server = startServer({
+      port: 0,
+      authToken: "good",
+      createProvider: (o) => {
+        seen.push(o);
+        return new FakeTranscriptionProvider();
+      },
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good&channels=2`);
+    await new Promise((r) => ws.on("open", r));
+
+    expect(seen[0]).toEqual({ channels: 2 });
+
+    ws.close();
+  });
+
+  it("persists and finalizes transcripts for WS sessions", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "transcripts-ws-"));
+    try {
+      const providers: FakeTranscriptionProvider[] = [];
+      const server = startServer({
+        port: 0,
+        authToken: "good",
+        createProvider: () => {
+          const p = new FakeTranscriptionProvider();
+          providers.push(p);
+          return p;
+        },
+        transcripts: new TranscriptStore({ dir }),
+        transcriptsDir: dir,
+      });
+      running = server;
+      const port = (server.address() as AddressInfo).port;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good`);
+      await new Promise((r) => ws.on("open", r));
+
+      providers[0].emitTranscript({ text: "ws line", isFinal: true, channel: 0 });
+
+      ws.close();
+      await new Promise((r) => setTimeout(r, 20));
+
+      const transcripts = listTranscripts(dir);
+      expect(transcripts).toHaveLength(1);
+      expect(transcripts[0].segmentCount).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

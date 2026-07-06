@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer, Server, IncomingMessage, ServerResponse } from "http";
 import { AddressInfo } from "net";
+import { randomUUID } from "crypto";
 import { verifyToken } from "./auth";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
@@ -8,11 +9,15 @@ import { SessionStore } from "./sessionStore";
 import { TranscriptStore, listTranscripts, readTranscript } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
 
+export interface ProviderOptions {
+  channels?: number;
+}
+
 export interface StartServerOptions {
   port: number;
   authToken: string;
   /** Factory for a fresh provider per connection/session (Deepgram in prod, fake in tests). */
-  createProvider: () => TranscriptionProvider;
+  createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Optional transcript persistence; also enables the /v1/transcripts endpoints. */
   transcripts?: TranscriptStore;
   /** Directory the transcript endpoints read from (required with `transcripts`). */
@@ -56,7 +61,10 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts));
+    const channels = url.searchParams.get("channels") === "2" ? 2 : undefined;
+    wss.handleUpgrade(req, socket, head, (ws) =>
+      handleConnection(ws, opts, channels ? { channels } : undefined),
+    );
   });
 
   http.listen(opts.port);
@@ -184,9 +192,17 @@ function readBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   });
 }
 
-function handleConnection(ws: WebSocket, opts: StartServerOptions): void {
-  const provider = opts.createProvider();
+function handleConnection(
+  ws: WebSocket,
+  opts: StartServerOptions,
+  providerOpts?: ProviderOptions,
+): void {
+  const provider = opts.createProvider(providerOpts);
+  const sessionId = randomUUID();
   const send = (message: OutboundMessage) => {
+    if (message.type === "caption" && message.isFinal) {
+      opts.transcripts?.append(sessionId, message.text, message.channel);
+    }
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   };
   const session = new CaptionSession(provider, send);
@@ -196,6 +212,7 @@ function handleConnection(ws: WebSocket, opts: StartServerOptions): void {
     if (closed) return;
     closed = true;
     session.close();
+    opts.transcripts?.finalize(sessionId);
   };
 
   ws.on("message", (data: Buffer, isBinary: boolean) => {

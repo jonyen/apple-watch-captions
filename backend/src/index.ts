@@ -24,7 +24,11 @@ const transcripts = new TranscriptStore({
 const server = startServer({
   port: config.port,
   authToken: config.authToken,
-  createProvider: () => new DeepgramProvider(deepgram),
+  createProvider: (opts) =>
+    new DeepgramProvider(
+      deepgram,
+      opts?.channels === 2 ? { channels: 2, multichannel: true } : undefined,
+    ),
   transcripts,
   transcriptsDir: config.transcriptsDir,
 });

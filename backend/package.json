@@ -8,8 +8,7 @@
     "test:watch": "vitest",
     "build": "tsc --noEmit",
     "start": "tsx src/index.ts",
-    "dev": "tsx src/index.ts",
-    "usage-report": "tsx src/usageReportCli.ts"
+    "dev": "tsx src/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

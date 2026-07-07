@@ -6,9 +6,14 @@ import CaptionCore
 final class CaptionPanelController {
     private var panel: NSPanel?
 
+    private var savedFrame: NSRect?
+
     func show(store: CaptionStore, onClose: @escaping () -> Void) {
         if panel != nil { return }
-        let view = NSHostingView(rootView: CaptionPanelView(store: store, onClose: onClose))
+        let view = NSHostingView(rootView: CaptionPanelView(
+            store: store,
+            onClose: onClose,
+            onDoubleTap: { [weak self] in self?.toggleZoom() }))
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 120, width: 560, height: 140),
             styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView, .resizable],
@@ -21,6 +26,11 @@ final class CaptionPanelController {
         p.isOpaque = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false
+        // The overlay's own hover X is the close affordance; the system
+        // traffic lights don't belong on a floating caption panel.
+        for b: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+            p.standardWindowButton(b)?.isHidden = true
+        }
         p.contentView = view
         p.center()
         p.orderFrontRegardless()
@@ -30,12 +40,27 @@ final class CaptionPanelController {
     func hide() {
         panel?.orderOut(nil)
         panel = nil
+        savedFrame = nil
+    }
+
+    /// Double-click: grow the panel to fill the screen's visible area;
+    /// double-click again to restore the previous frame.
+    private func toggleZoom() {
+        guard let p = panel, let screen = p.screen ?? NSScreen.main else { return }
+        if let saved = savedFrame {
+            p.setFrame(saved, display: true, animate: true)
+            savedFrame = nil
+        } else {
+            savedFrame = p.frame
+            p.setFrame(screen.visibleFrame, display: true, animate: true)
+        }
     }
 }
 
 struct CaptionPanelView: View {
     @ObservedObject var store: CaptionStore
     let onClose: () -> Void
+    let onDoubleTap: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -61,6 +86,8 @@ struct CaptionPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture(count: 2) { onDoubleTap() }
         .overlay(alignment: .topTrailing) {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")

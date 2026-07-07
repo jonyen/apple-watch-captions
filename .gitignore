@@ -8,3 +8,4 @@ watch/CaptionCore/.swiftpm/
 
 # macOS app
 mac/*.xcodeproj
+*.profraw

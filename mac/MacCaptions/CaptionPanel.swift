@@ -5,14 +5,13 @@ import CaptionCore
 @MainActor
 final class CaptionPanelController {
     private var panel: NSPanel?
-
     private var savedFrame: NSRect?
 
-    func show(store: CaptionStore, onClose: @escaping () -> Void) {
+    func show(model: AppModel) {
         if panel != nil { return }
         let view = NSHostingView(rootView: CaptionPanelView(
-            store: store,
-            onClose: onClose,
+            model: model,
+            store: model.store,
             onDoubleTap: { [weak self] in self?.toggleZoom() }))
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 120, width: 560, height: 140),
@@ -26,7 +25,7 @@ final class CaptionPanelController {
         p.isOpaque = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false
-        // The overlay's own hover X is the close affordance; the system
+        // The overlay's own controls are the affordances; the system
         // traffic lights don't belong on a floating caption panel.
         for b: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
             p.standardWindowButton(b)?.isHidden = true
@@ -58,8 +57,8 @@ final class CaptionPanelController {
 }
 
 struct CaptionPanelView: View {
+    @ObservedObject var model: AppModel
     @ObservedObject var store: CaptionStore
-    let onClose: () -> Void
     let onDoubleTap: () -> Void
     @State private var hovering = false
 
@@ -89,15 +88,25 @@ struct CaptionPanelView: View {
         .contentShape(RoundedRectangle(cornerRadius: 14))
         .onTapGesture(count: 2) { onDoubleTap() }
         .overlay(alignment: .topTrailing) {
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button { model.pauseResume() } label: {
+                    Image(systemName: model.capturing ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(model.capturing ? "Pause captions" : "Start captions")
+                Button { model.stop() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Stop captions and close")
             }
-            .buttonStyle(.plain)
             .padding(8)
-            .opacity(hovering ? 1 : 0)
-            .help("Stop captions and close")
+            // Keep controls discoverable while idle; fade them out mid-caption.
+            .opacity(hovering || !model.capturing ? 1 : 0)
         }
         .onHover { hovering = $0 }
         .padding(8)

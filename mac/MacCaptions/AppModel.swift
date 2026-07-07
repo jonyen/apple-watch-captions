@@ -26,16 +26,28 @@ final class AppModel: ObservableObject {
                 self.controller = nil
             }
         }
+        AppDelegate.onReopen = { [weak self] in self?.showPanel() }
     }
 
     func toggle() {
         capturing ? stop() : start()
     }
 
+    /// Overlay ▶/⏸ control: pause ends the relay session (a new one starts on
+    /// resume — Deepgram has no idle mode), but the panel stays up.
+    func pauseResume() {
+        capturing ? pause() : start()
+    }
+
+    /// Show the overlay without starting capture (Spotlight/Finder reopen).
+    func showPanel() {
+        panel.show(model: self)
+    }
+
     func start() {
         guard !capturing else { return }
+        panel.show(model: self)
         guard let base = settings.relayURL, settings.configured else {
-            panel.show(store: store) { [weak self] in self?.stop() }
             store.setError("Set the relay URL and token in Settings.")
             return
         }
@@ -47,14 +59,17 @@ final class AppModel: ObservableObject {
             store: store, relay: relay, audio: capture, permission: MacPermissions())
         self.controller = controller
         capturing = true
-        panel.show(store: store) { [weak self] in self?.stop() }
         Task { await controller.start() }
     }
 
-    func stop() {
+    func pause() {
         controller?.stop()
         controller = nil
         capturing = false
+    }
+
+    func stop() {
+        pause()
         panel.hide()
     }
 }

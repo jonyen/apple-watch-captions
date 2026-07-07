@@ -1,8 +1,20 @@
 import SwiftUI
 import CaptionCore
 
+/// Reopen events (Spotlight/Finder launching the already-running app) have no
+/// SwiftUI hook, so a minimal delegate forwards them to the model.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor static var onReopen: (() -> Void)?
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        Task { @MainActor in AppDelegate.onReopen?() }
+        return false
+    }
+}
+
 @main
 struct MacCaptionsApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings

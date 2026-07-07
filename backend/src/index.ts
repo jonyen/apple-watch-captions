@@ -5,6 +5,7 @@ import { DeepgramProvider, DeepgramLike } from "./deepgramProvider";
 import { TranscriptStore } from "./transcriptStore";
 import { createClaudeSummarizer } from "./summarizer";
 import { createFinalizer } from "./finalizer";
+import { createUsageService } from "./usageService";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -31,6 +32,7 @@ const server = startServer({
     ),
   transcripts,
   transcriptsDir: config.transcriptsDir,
+  usage: createUsageService({ env: process.env }),
 });
 
 const addr = server.address();

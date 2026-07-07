@@ -22,7 +22,38 @@ struct TranscriptDetail: Codable {
     let summary: String?
 }
 
-/// Thin client for the relay's transcript endpoints.
+struct UsageDeepgram: Codable {
+    let hours: Double
+    let requests: Int
+}
+
+struct UsageFlyMachine: Codable, Identifiable {
+    let id: String
+    let state: String
+    let region: String
+}
+
+struct UsageFly: Codable {
+    let appName: String
+    let machines: [UsageFlyMachine]?
+    let machinesError: String?
+    let monthlyCostUsd: Double
+}
+
+struct UsageReport: Codable {
+    let rangeStart: String
+    let rangeEnd: String
+    let deepgram: UsageDeepgram?
+    let deepgramError: String?
+    let deepgramRatePerMin: Double
+    let fly: UsageFly
+
+    var estimatedDeepgramCost: Double? {
+        deepgram.map { $0.hours * 60 * deepgramRatePerMin }
+    }
+}
+
+/// Thin client for the relay's transcript and usage endpoints.
 struct RelayAPI {
     let base: URL
     let token: String
@@ -35,6 +66,10 @@ struct RelayAPI {
 
     func detail(name: String) async throws -> TranscriptDetail {
         try await get(path: "v1/transcripts/\(name)", as: TranscriptDetail.self)
+    }
+
+    func usage() async throws -> UsageReport {
+        try await get(path: "v1/usage", as: UsageReport.self)
     }
 
     private func get<T: Codable>(path: String, as type: T.Type) async throws -> T {

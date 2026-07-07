@@ -35,7 +35,7 @@ final class AppModel: ObservableObject {
     func start() {
         guard !capturing else { return }
         guard let base = settings.relayURL, settings.configured else {
-            panel.show(store: store)
+            panel.show(store: store) { [weak self] in self?.stop() }
             store.setError("Set the relay URL and token in Settings.")
             return
         }
@@ -47,7 +47,7 @@ final class AppModel: ObservableObject {
             store: store, relay: relay, audio: capture, permission: MacPermissions())
         self.controller = controller
         capturing = true
-        panel.show(store: store)
+        panel.show(store: store) { [weak self] in self?.stop() }
         Task { await controller.start() }
     }
 

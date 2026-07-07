@@ -6,9 +6,9 @@ import CaptionCore
 final class CaptionPanelController {
     private var panel: NSPanel?
 
-    func show(store: CaptionStore) {
+    func show(store: CaptionStore, onClose: @escaping () -> Void) {
         if panel != nil { return }
-        let view = NSHostingView(rootView: CaptionPanelView(store: store))
+        let view = NSHostingView(rootView: CaptionPanelView(store: store, onClose: onClose))
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 120, width: 560, height: 140),
             styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView, .resizable],
@@ -35,6 +35,8 @@ final class CaptionPanelController {
 
 struct CaptionPanelView: View {
     @ObservedObject var store: CaptionStore
+    let onClose: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -59,6 +61,18 @@ struct CaptionPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(8)
+            .opacity(hovering ? 1 : 0)
+            .help("Stop captions and close")
+        }
+        .onHover { hovering = $0 }
         .padding(8)
     }
 

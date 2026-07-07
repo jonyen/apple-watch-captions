@@ -5,6 +5,7 @@ import CaptionCore
 struct MacCaptionsApp: App {
     @StateObject private var model = AppModel()
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some Scene {
         MenuBarExtra("Captions", systemImage: model.capturing ? "captions.bubble.fill" : "captions.bubble") {
@@ -13,8 +14,16 @@ struct MacCaptionsApp: App {
             Toggle("Microphone", isOn: $model.micOn)
             Toggle("System Audio", isOn: $model.systemOn)
             Divider()
-            Button("Transcripts…") { openWindow(id: "transcripts") }
-            SettingsLink { Text("Settings…") }
+            Button("Transcripts…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "transcripts")
+            }
+            // SettingsLink doesn't activate an LSUIElement app, so the
+            // Settings window opens behind every other window; activate first.
+            Button("Settings…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
+            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         Settings {

@@ -72,12 +72,12 @@ struct CaptionPanelView: View {
                     .lineLimit(2)
             }
             ForEach(store.lines.suffix(3)) { line in
-                Text(label(line.channel) + line.text)
+                Text(line.text)
                     .font(.system(size: 18, weight: .medium))
             }
             ForEach(store.partials.sorted(by: { $0.key < $1.key }), id: \.key) { channel, text in
                 if !text.isEmpty {
-                    Text(label(channel) + text)
+                    Text(text)
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -101,10 +101,5 @@ struct CaptionPanelView: View {
         }
         .onHover { hovering = $0 }
         .padding(8)
-    }
-
-    private func label(_ channel: Int?) -> String {
-        // Own speech needs no label; only tag the other side.
-        channel == 1 ? "Them: " : ""
     }
 }

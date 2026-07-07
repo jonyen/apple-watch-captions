@@ -1,4 +1,4 @@
-name: MacCaptions
+name: Captions
 options:
   bundleIdPrefix: com.jonyen.watchcaptions
   deploymentTarget:
@@ -7,7 +7,7 @@ packages:
   CaptionCore:
     path: ../watch/CaptionCore
 targets:
-  MacCaptions:
+  Captions:
     type: application
     platform: macOS
     sources:
@@ -31,10 +31,10 @@ targets:
         DEVELOPMENT_TEAM: "7PZN69YDL4"
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
-  MacCaptionsTests:
+  CaptionsTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: MacCaptionsTests
     dependencies:
-      - target: MacCaptions
+      - target: Captions

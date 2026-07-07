@@ -1,4 +1,4 @@
-# MacCaptions — macOS menu bar caption app
+# Captions — macOS menu bar caption app
 
 Menu-bar-only (no Dock icon) companion app that streams Mac mic + system audio to the
 caption relay and shows live captions in a floating panel.
@@ -32,7 +32,7 @@ caption relay and shows live captions in a floating panel.
 - `project.yml` — XcodeGen project definition. The `.xcodeproj` is generated (gitignored).
 
 ## Setup
-1. `cd mac && xcodegen generate && open MacCaptions.xcodeproj`
+1. `cd mac && xcodegen generate && open Captions.xcodeproj`
 2. Select your signing team in Xcode if `DEVELOPMENT_TEAM` in `project.yml` doesn't match.
 3. Run. The app lives in the menu bar (look for the captions icon) — no Dock icon, no window.
 4. Open Settings from the menu and enter the relay URL and auth token (mirrors
@@ -49,14 +49,14 @@ cd watch/CaptionCore && swift test
 
 ## Build (app)
 ```bash
-cd mac && xcodebuild build -project MacCaptions.xcodeproj -scheme MacCaptions \
+cd mac && xcodebuild build -project Captions.xcodeproj -scheme Captions \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 (If you have a Development cert for team 7PZN69YDL4, omit `CODE_SIGNING_ALLOWED=NO`.)
 
 ## Test (app target)
 ```bash
-cd mac && xcodebuild test -project MacCaptions.xcodeproj -scheme MacCaptions \
+cd mac && xcodebuild test -project Captions.xcodeproj -scheme Captions \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 (If you have a Development cert for team 7PZN69YDL4, omit `CODE_SIGNING_ALLOWED=NO`.)

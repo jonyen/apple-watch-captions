@@ -14,6 +14,10 @@ struct MacCaptionsApp: App {
             Toggle("Microphone", isOn: $model.micOn)
             Toggle("System Audio", isOn: $model.systemOn)
             Divider()
+            Button("Usage…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "usage")
+            }
             Button("Transcripts…") {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "transcripts")
@@ -35,6 +39,12 @@ struct MacCaptionsApp: App {
                 : nil)
         }
         .defaultSize(width: 720, height: 480)
+        Window("Usage", id: "usage") {
+            UsageView(api: model.settings.configured
+                ? RelayAPI(base: model.settings.relayURL!, token: model.settings.token)
+                : nil)
+        }
+        .defaultSize(width: 420, height: 360)
     }
 }
 

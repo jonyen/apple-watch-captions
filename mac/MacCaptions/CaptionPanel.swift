@@ -104,10 +104,7 @@ struct CaptionPanelView: View {
     }
 
     private func label(_ channel: Int?) -> String {
-        switch channel {
-        case 0: return "Me: "
-        case 1: return "Them: "
-        default: return ""
-        }
+        // Own speech needs no label; only tag the other side.
+        channel == 1 ? "Them: " : ""
     }
 }

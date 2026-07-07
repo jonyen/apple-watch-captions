@@ -8,6 +8,7 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { TranscriptStore, listTranscripts, readTranscript } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
+import type { ReportData } from "./usageReport";
 
 export interface ProviderOptions {
   channels?: number;
@@ -22,6 +23,8 @@ export interface StartServerOptions {
   transcripts?: TranscriptStore;
   /** Directory the transcript endpoints read from (required with `transcripts`). */
   transcriptsDir?: string;
+  /** Optional usage data source; enables GET /v1/usage. */
+  usage?: { getUsage(): Promise<ReportData> };
 }
 
 export interface CaptionServer {
@@ -124,6 +127,24 @@ async function handleRequest(
       return;
     }
     sendJSON(res, 200, detail);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/usage") {
+    if (!opts.usage) {
+      sendJSON(res, 404, { error: "usage not enabled" });
+      return;
+    }
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    try {
+      sendJSON(res, 200, await opts.usage.getUsage());
+    } catch {
+      sendJSON(res, 500, { error: "usage fetch failed" });
+    }
     return;
   }
 

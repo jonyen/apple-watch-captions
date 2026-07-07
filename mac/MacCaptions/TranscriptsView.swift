@@ -42,10 +42,7 @@ struct TranscriptsView: View {
                         }
                         Text("Transcript").font(.title3.bold())
                         ForEach(d.segments) { s in
-                            HStack(alignment: .top, spacing: 6) {
-                                Text(label(s.channel)).bold().frame(width: 50, alignment: .leading)
-                                Text(s.text).textSelection(.enabled)
-                            }
+                            Text(s.text).textSelection(.enabled)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -71,14 +68,6 @@ struct TranscriptsView: View {
             error = nil
         } catch {
             self.error = "\(error)"
-        }
-    }
-
-    private func label(_ channel: Int?) -> String {
-        switch channel {
-        case 0: return "Me"
-        case 1: return "Them"
-        default: return ""
         }
     }
 

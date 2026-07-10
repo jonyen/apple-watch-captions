@@ -2,30 +2,32 @@ import Foundation
 import Combine
 import CaptionCore
 
+/// One running caption engine: its provider, transcript store, and controller.
+@MainActor
+struct ProviderSession: Identifiable {
+    let id = UUID()
+    let provider: CaptionProvider
+    let store: CaptionStore
+    let controller: SessionController
+}
+
 @MainActor
 final class AppModel: ObservableObject {
+    /// Primary transcript store — the menu status line and single-provider
+    /// overlay observe this stable instance; the first session always uses it.
     let store = CaptionStore()
     let settings = SettingsStore()
     @Published private(set) var capturing = false
+    @Published private(set) var sessions: [ProviderSession] = []
     @Published var micOn = true
     @Published var systemOn = true
 
-    private var controller: SessionController?
+    private var hub: AudioHub?
     private let panel = CaptionPanelController()
-    private var stateObservation: AnyCancellable?
+    private var stateObservations: [AnyCancellable] = []
 
     init() {
-        // Reflect the store's truth in the menu/panel: an error ends the
-        // active-capture state (menu stops saying "Stop Captions", icon
-        // reverts), but the panel stays up so the user actually sees why —
-        // it's only dismissed by an explicit stop().
-        stateObservation = store.$state.sink { [weak self] state in
-            guard let self else { return }
-            if case .error = state {
-                self.capturing = false
-                self.controller = nil
-            }
-        }
+        observeStores()
         AppDelegate.onReopen = { [weak self] in self?.showPanel() }
     }
 
@@ -33,8 +35,8 @@ final class AppModel: ObservableObject {
         capturing ? stop() : start()
     }
 
-    /// Overlay ▶/⏸ control: pause ends the relay session (a new one starts on
-    /// resume — Deepgram has no idle mode), but the panel stays up.
+    /// Overlay ▶/⏸ control: pause ends the sessions (new ones start on
+    /// resume — the streaming providers have no idle mode), but the panel stays up.
     func pauseResume() {
         capturing ? pause() : start()
     }
@@ -47,29 +49,73 @@ final class AppModel: ObservableObject {
     func start() {
         guard !capturing else { return }
         panel.show(model: self)
-        guard let base = settings.relayURL, settings.configured else {
-            store.setError("Set the relay URL and token in Settings.")
-            return
+
+        let providers: [CaptionProvider] = settings.compareProviders
+            ? CaptionProvider.allCases
+            : [settings.provider]
+        let needsRelay = providers.contains { $0.needsRelay }
+        var base: URL?
+        if needsRelay {
+            guard let url = settings.relayURL, settings.configured else {
+                store.setError("Set the relay URL and token in Settings.")
+                return
+            }
+            base = url
         }
-        let relay = WebSocketRelay(base: base, token: settings.token, channels: 2)
-        let capture = DualCapture(
+
+        let hub = AudioHub(capture: DualCapture(
             micEnabled: { [weak self] in self?.micOn ?? false },
-            systemEnabled: { [weak self] in self?.systemOn ?? false })
-        let controller = SessionController(
-            store: store, relay: relay, audio: capture, permission: MacPermissions())
-        self.controller = controller
+            systemEnabled: { [weak self] in self?.systemOn ?? false }))
+        self.hub = hub
+
+        sessions = providers.enumerated().map { index, provider in
+            let sessionStore = index == 0 ? store : CaptionStore()
+            let relay: Relay = provider.needsRelay
+                ? WebSocketRelay(base: base!, token: settings.token, channels: 2, provider: provider)
+                : LocalSpeechRelay()
+            let controller = SessionController(
+                store: sessionStore, relay: relay, audio: hub.makeTap(),
+                permission: MacPermissions())
+            return ProviderSession(provider: provider, store: sessionStore, controller: controller)
+        }
+        observeStores()
         capturing = true
-        Task { await controller.start() }
+        for session in sessions {
+            Task { await session.controller.start() }
+        }
     }
 
     func pause() {
-        controller?.stop()
-        controller = nil
+        for session in sessions { session.controller.stop() }
+        hub = nil
         capturing = false
     }
 
     func stop() {
         pause()
         panel.hide()
+    }
+
+    /// Reflect the stores' truth in the menu/panel: capture counts as ended
+    /// only when every session has errored out (in compare mode one failing
+    /// provider just shows the error in its own pane). The panel stays up so
+    /// the user actually sees why — it's only dismissed by an explicit stop().
+    private func observeStores() {
+        let stores = sessions.isEmpty ? [store] : sessions.map(\.store)
+        stateObservations = stores.map { observed in
+            observed.$state.sink { [weak self] state in
+                guard let self, case .error = state else { return }
+                let allFailed = stores.allSatisfy { candidate in
+                    if candidate === observed { return true }  // sink fires before $state updates
+                    if case .error = candidate.state { return true }
+                    return false
+                }
+                if allFailed {
+                    self.capturing = false
+                    for session in self.sessions { session.controller.stop() }
+                    self.hub = nil
+                }
+            }
+        }
     }
 }

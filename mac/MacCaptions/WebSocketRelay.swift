@@ -34,12 +34,13 @@ final class WebSocketRelay: NSObject, Relay {
     private var stopped = true
     private let queue = DispatchQueue(label: "relay.ws")
 
-    init(base: URL, token: String, channels: Int) {
+    init(base: URL, token: String, channels: Int, provider: CaptionProvider = .deepgram) {
         var c = URLComponents(url: base.appendingPathComponent("stream"), resolvingAgainstBaseURL: false)!
         c.scheme = base.scheme == "http" ? "ws" : "wss"
         c.queryItems = [
             URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "channels", value: String(channels)),
+            URLQueryItem(name: "provider", value: provider.rawValue),
         ]
         url = c.url!
         super.init()

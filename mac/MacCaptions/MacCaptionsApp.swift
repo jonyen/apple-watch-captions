@@ -100,11 +100,34 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            TextField("Relay URL", text: $settings.relayURLString,
-                      prompt: Text("https://watch-captions-relay.fly.dev"))
-            SecureField("Auth token", text: $settings.token)
+            Section("Relay") {
+                TextField("Relay URL", text: $settings.relayURLString,
+                          prompt: Text("https://watch-captions-relay.fly.dev"))
+                SecureField("Auth token", text: $settings.token)
+            }
+            Section("Captions") {
+                Picker("Provider", selection: $settings.provider) {
+                    ForEach(CaptionProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .disabled(settings.compareProviders)
+                Toggle("Compare all providers", isOn: $settings.compareProviders)
+                Text("Runs every provider at once with a caption pane per provider. Cloud providers need their API key configured on the relay.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Slider(value: $settings.fontSize, in: 12...48, step: 1) {
+                        Text("Text size")
+                    }
+                    Text("\(Int(settings.fontSize)) pt")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+            }
         }
-        .padding()
-        .frame(width: 420)
+        .formStyle(.grouped)
+        .frame(width: 460)
     }
 }

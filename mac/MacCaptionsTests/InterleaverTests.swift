@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacCaptions
+@testable import Captions
 
 final class InterleaverTests: XCTestCase {
     private func samples(_ data: Data) -> [Int16] {

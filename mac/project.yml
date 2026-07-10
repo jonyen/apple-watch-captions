@@ -21,6 +21,7 @@ targets:
         LSUIElement: true
         NSMicrophoneUsageDescription: "Captions your side of conversations."
         NSAudioCaptureUsageDescription: "Captions audio playing on your Mac (calls, videos)."
+        NSSpeechRecognitionUsageDescription: "Generates captions on-device with Apple speech recognition."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.watchcaptions.mac
@@ -39,3 +40,8 @@ targets:
       - path: MacCaptionsTests
     dependencies:
       - target: Captions
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        DEVELOPMENT_TEAM: "7PZN69YDL4"
+        CODE_SIGN_STYLE: Automatic

@@ -26,5 +26,7 @@
 	<string>Captions audio playing on your Mac (calls, videos).</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Captions your side of conversations.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Generates captions on-device with Apple speech recognition.</string>
 </dict>
 </plist>

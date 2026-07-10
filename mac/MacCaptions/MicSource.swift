@@ -10,6 +10,13 @@ final class MicSource {
 
     func start(onSamples: @escaping ([Int16]) -> Void) throws {
         let input = engine.inputNode
+        // Echo cancellation: without it, speaker playback (already captured on
+        // the system-audio channel) bleeds into the mic and the same speech is
+        // transcribed twice, once per channel. Best-effort — some devices
+        // don't support voice processing, and plain capture still works.
+        if !input.isVoiceProcessingEnabled {
+            try? input.setVoiceProcessingEnabled(true)
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw CaptureError.converterUnavailable

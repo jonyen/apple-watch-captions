@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacCaptions
+@testable import Captions
 
 final class ReconnectPolicyTests: XCTestCase {
     func testBacksOffAndCaps() {

@@ -7,6 +7,10 @@ export interface Config {
   transcriptsDir: string;
   /** Optional; when set, transcripts are summarized with Claude on session end. */
   anthropicApiKey?: string;
+  /** Optional; enables the `openai` caption provider. */
+  openaiApiKey?: string;
+  /** Optional; enables the `assemblyai` caption provider. */
+  assemblyaiApiKey?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -23,5 +27,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     deepgramApiKey,
     transcriptsDir,
     anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
+    openaiApiKey: env.OPENAI_API_KEY || undefined,
+    assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
   };
 }

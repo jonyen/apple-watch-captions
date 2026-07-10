@@ -119,6 +119,37 @@ describe("caption server", () => {
     ws.close();
   });
 
+  it("passes a known provider param through to the provider factory", async () => {
+    const seen: (ProviderOptions | undefined)[] = [];
+    const server = startServer({
+      port: 0,
+      authToken: "good",
+      createProvider: (o) => {
+        seen.push(o);
+        return new FakeTranscriptionProvider();
+      },
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/stream?token=good&channels=2&provider=openai`,
+    );
+    await new Promise((r) => ws.on("open", r));
+    expect(seen[0]).toEqual({ channels: 2, provider: "openai" });
+    ws.close();
+  });
+
+  it("rejects an unknown provider param", async () => {
+    const { port, providers } = startWithFakes("good");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good&provider=nope`);
+    const code = await new Promise<number>((resolve) => {
+      ws.on("close", (c) => resolve(c));
+    });
+    expect(code).toBe(4002);
+    expect(providers).toHaveLength(0);
+  });
+
   it("persists and finalizes transcripts for WS sessions", async () => {
     const dir = mkdtempSync(join(tmpdir(), "transcripts-ws-"));
     try {

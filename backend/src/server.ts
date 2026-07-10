@@ -10,8 +10,13 @@ import { TranscriptStore, listTranscripts, readTranscript } from "./transcriptSt
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
 
+export const PROVIDER_NAMES = ["deepgram", "openai", "assemblyai"] as const;
+export type ProviderName = (typeof PROVIDER_NAMES)[number];
+
 export interface ProviderOptions {
   channels?: number;
+  /** Requested transcription backend; absent = deepgram. */
+  provider?: ProviderName;
 }
 
 export interface StartServerOptions {
@@ -65,9 +70,17 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       return;
     }
     const channels = url.searchParams.get("channels") === "2" ? 2 : undefined;
-    wss.handleUpgrade(req, socket, head, (ws) =>
-      handleConnection(ws, opts, channels ? { channels } : undefined),
-    );
+    const requested = url.searchParams.get("provider");
+    const provider = PROVIDER_NAMES.find((name) => name === requested);
+    if (requested && !provider) {
+      wss.handleUpgrade(req, socket, head, (ws) => ws.close(4002, "unknown provider"));
+      return;
+    }
+    const providerOpts: ProviderOptions | undefined =
+      channels || provider
+        ? { ...(channels ? { channels } : {}), ...(provider ? { provider } : {}) }
+        : undefined;
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts, providerOpts));
   });
 
   http.listen(opts.port);

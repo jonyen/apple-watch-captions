@@ -8,6 +8,10 @@ speech-to-text and streams caption text back.
 Runs whenever the app is open (no buttons); works over the paired iPhone, Wi‑Fi,
 or the Watch's own **cellular** when the phone is away.
 
+<img src="docs/images/watch-captions.png" alt="Live captions on the Apple Watch: finalized caption lines in white, the in-progress line in gray, and a green live indicator" width="300">
+
+*Live on the watch: finalized lines in white, the in-progress caption in gray.*
+
 ## How it works
 
 ```

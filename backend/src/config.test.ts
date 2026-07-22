@@ -28,6 +28,17 @@ describe("loadConfig", () => {
     expect(cfg.anthropicApiKey).toBe("sk-ant-xxx");
   });
 
+  it("reads the notion keys when set", () => {
+    const cfg = loadConfig({
+      AUTH_TOKEN: "secret",
+      DEEPGRAM_API_KEY: "dg-key",
+      NOTION_API_KEY: "ntn-xxx",
+      NOTION_DATABASE_ID: "db-123",
+    });
+    expect(cfg.notionApiKey).toBe("ntn-xxx");
+    expect(cfg.notionDatabaseId).toBe("db-123");
+  });
+
   it("defaults the port to 8080 when unset", () => {
     const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.port).toBe(8080);

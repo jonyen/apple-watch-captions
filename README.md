@@ -51,6 +51,8 @@ for the full design.
 
 Sessions end when you tap Stop (watch) or click the menu-bar button again (mac). Captions and a summary are saved to the transcript store on the relay. You can view transcripts at [`https://watch-captions-relay.fly.dev/app`](https://watch-captions-relay.fly.dev/app) or the Transcripts window in the mac app — the same transcript list syncs across all your devices via the relay.
 
+Transcripts can also sync to **Notion**: set `NOTION_API_KEY` and `NOTION_DATABASE_ID` on the relay and each finished session becomes a page (summary + timestamped transcript) in your Notion database. See [`backend/README.md`](backend/README.md#notion-sync-optional) for setup and the backfill command.
+
 ## Transport API
 
 Token auth via `?token=<AUTH_TOKEN>` on every request.

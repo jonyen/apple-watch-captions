@@ -22,6 +22,37 @@ npm install
 AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
 ```
 
+## Notion sync (optional)
+
+When both env vars are set, every finished session's transcript (and its Claude
+summary, if enabled) is created as a page in a Notion database:
+
+```bash
+NOTION_API_KEY=<integration secret> NOTION_DATABASE_ID=<database id> npm run dev
+```
+
+Setup:
+
+1. Create an internal integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)
+   and copy its secret.
+2. Create (or pick) a database for transcripts and connect the integration to it
+   (database page → `...` → Connections).
+3. The database id is the 32-char hex segment of its URL.
+
+Each page gets a title like `2026-07-06 01:02 — first words of the session…`, a
+**Summary** section when one was generated, and the full timestamped transcript.
+A `<name>.notion.json` marker next to each transcript records the created page,
+so nothing is synced twice.
+
+To backfill transcripts recorded before Notion was configured (or after an
+outage), run the same sync over the stored files:
+
+```bash
+NOTION_API_KEY=... NOTION_DATABASE_ID=... TRANSCRIPTS_DIR=./data/transcripts npm run sync:notion
+```
+
+On Fly: `fly secrets set NOTION_API_KEY=... NOTION_DATABASE_ID=...`
+
 ## Test
 
 ```bash

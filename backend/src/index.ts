@@ -9,6 +9,7 @@ import { UnavailableProvider } from "./unavailableProvider";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
 import { createClaudeSummarizer } from "./summarizer";
+import { createNotionSync } from "./notionSync";
 import { createFinalizer } from "./finalizer";
 import { createUsageService } from "./usageService";
 
@@ -22,9 +23,17 @@ if (!summarize) {
   console.log("ANTHROPIC_API_KEY not set — transcripts are saved without summaries");
 }
 
+const notionSync =
+  config.notionApiKey && config.notionDatabaseId
+    ? createNotionSync({ apiKey: config.notionApiKey, databaseId: config.notionDatabaseId })
+    : undefined;
+if (!notionSync) {
+  console.log("NOTION_API_KEY / NOTION_DATABASE_ID not set — transcripts are not synced to Notion");
+}
+
 const transcripts = new TranscriptStore({
   dir: config.transcriptsDir,
-  onFinalize: createFinalizer({ dir: config.transcriptsDir, summarize }),
+  onFinalize: createFinalizer({ dir: config.transcriptsDir, summarize, notionSync }),
 });
 
 /**

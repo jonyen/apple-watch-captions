@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createFinalizer } from "./finalizer";
+import { notionPageIdFor } from "./notionSync";
 import { FinalizedTranscript, readTranscript, TranscriptStore, listTranscripts } from "./transcriptStore";
 
 function transcript(texts: string[]): FinalizedTranscript {
@@ -58,5 +59,43 @@ describe("createFinalizer", () => {
     });
     expect(() => finalize(transcript(LONG))).not.toThrow();
     await settle();
+  });
+
+  it("syncs to Notion with the generated summary and records the page", async () => {
+    const notionSync = vi.fn(async () => "page-1");
+    const finalize = createFinalizer({ dir, summarize: async () => "A chat happened.", notionSync });
+    const t = transcript(LONG);
+    finalize(t);
+    await settle();
+
+    expect(notionSync).toHaveBeenCalledWith(t, "A chat happened.");
+    expect(notionPageIdFor(dir, t.name)).toBe("page-1");
+  });
+
+  it("syncs to Notion without a summary when no summarizer is configured", async () => {
+    const notionSync = vi.fn(async () => "page-2");
+    createFinalizer({ dir, notionSync })(transcript(["hi"]));
+    await settle();
+
+    expect(notionSync).toHaveBeenCalledWith(expect.anything(), null);
+  });
+
+  it("still summarizes when the Notion sync fails", async () => {
+    const store = new TranscriptStore({ dir, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    store.append("abc", LONG[0]);
+    const name = listTranscripts(dir)[0].name;
+
+    const finalize = createFinalizer({
+      dir,
+      summarize: async () => "Summary survives.",
+      notionSync: async () => {
+        throw new Error("notion down");
+      },
+    });
+    expect(() => finalize({ ...transcript(LONG), name })).not.toThrow();
+    await settle();
+
+    expect(readTranscript(dir, name)?.summary).toBe("Summary survives.");
+    expect(notionPageIdFor(dir, name)).toBeNull();
   });
 });

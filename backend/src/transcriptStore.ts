@@ -140,7 +140,7 @@ export interface TranscriptDetail {
 /** Read one stored transcript (and its summary, if generated). Null if absent. */
 export function readTranscript(dir: string, name: string): TranscriptDetail | null {
   // The name is client-supplied: only accept names our writer produces.
-  if (!/^[A-Za-z0-9_-]+$/.test(name)) return null;
+  if (!isSafeName(name)) return null;
   const file = join(dir, `${name}.jsonl`);
   if (!existsSync(file)) return null;
   const summaryFile = join(dir, `${name}.summary.md`);
@@ -154,6 +154,44 @@ export function readTranscript(dir: string, name: string): TranscriptDetail | nu
 /** Write a generated summary next to its transcript. */
 export function writeSummary(dir: string, name: string, summary: string): void {
   writeFileSync(join(dir, `${name}.summary.md`), summary);
+}
+
+export interface ExportMarker {
+  /** Notion page the transcript was exported to. */
+  pageId: string;
+  url: string;
+  exportedAt?: string;
+}
+
+/**
+ * Records that a transcript reached Notion, so a retry sweep can tell which
+ * transcripts still need exporting after a crash or an outage.
+ */
+export function writeExportMarker(
+  dir: string,
+  name: string,
+  marker: Omit<ExportMarker, "exportedAt">,
+): void {
+  const body: ExportMarker = { ...marker, exportedAt: new Date().toISOString() };
+  writeFileSync(join(dir, `${name}.notion.json`), JSON.stringify(body));
+}
+
+/** The export marker for a transcript, or null if it has never been exported. */
+export function readExportMarker(dir: string, name: string): ExportMarker | null {
+  if (!isSafeName(name)) return null;
+  const file = join(dir, `${name}.notion.json`);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as ExportMarker;
+  } catch {
+    // A truncated marker means the export never completed: treat as unexported.
+    return null;
+  }
+}
+
+/** Only accept names our writer produces — these reach the filesystem. */
+function isSafeName(name: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(name);
 }
 
 function readSegments(file: string): TranscriptSegment[] {

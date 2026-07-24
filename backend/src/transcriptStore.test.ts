@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from "fs";
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -8,6 +8,8 @@ import {
   listTranscripts,
   readTranscript,
   writeSummary,
+  readExportMarker,
+  writeExportMarker,
 } from "./transcriptStore";
 
 describe("TranscriptStore", () => {
@@ -80,6 +82,42 @@ describe("TranscriptStore", () => {
 
   it("rejects path-traversal names on read", () => {
     expect(readTranscript(dir, "../etc/passwd")).toBeNull();
+  });
+
+  it("round-trips an export marker", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+
+    expect(readExportMarker(dir, name)).toBeNull();
+    writeExportMarker(dir, name, { pageId: "page-1", url: "https://notion.so/page-1" });
+
+    expect(readExportMarker(dir, name)).toMatchObject({
+      pageId: "page-1",
+      url: "https://notion.so/page-1",
+    });
+  });
+
+  it("rejects path-traversal names on marker read", () => {
+    expect(readExportMarker(dir, "../../secrets")).toBeNull();
+  });
+
+  it("treats an unreadable marker as not exported", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+    writeFileSync(join(dir, `${name}.notion.json`), "{ truncated");
+
+    expect(readExportMarker(dir, name)).toBeNull();
+  });
+
+  it("does not mistake a marker file for a transcript", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+    writeExportMarker(dir, name, { pageId: "page-1", url: "u" });
+
+    expect(listTranscripts(dir)).toHaveLength(1);
   });
 
   it("sanitizes hostile session ids in filenames", () => {

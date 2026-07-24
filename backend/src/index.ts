@@ -10,6 +10,8 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
 import { createClaudeSummarizer } from "./summarizer";
 import { createFinalizer } from "./finalizer";
+import { createNotionExporter } from "./notionExporter";
+import { backfillNotion } from "./notionBackfill";
 import { createUsageService } from "./usageService";
 
 const config = loadConfig(process.env);
@@ -22,9 +24,18 @@ if (!summarize) {
   console.log("ANTHROPIC_API_KEY not set — transcripts are saved without summaries");
 }
 
+const exportTranscript = config.notion ? createNotionExporter(config.notion) : undefined;
+if (!exportTranscript) {
+  console.log("NOTION_TOKEN/NOTION_DATABASE_ID not set — transcripts are not exported to Notion");
+}
+
 const transcripts = new TranscriptStore({
   dir: config.transcriptsDir,
-  onFinalize: createFinalizer({ dir: config.transcriptsDir, summarize }),
+  onFinalize: createFinalizer({
+    dir: config.transcriptsDir,
+    summarize,
+    export: exportTranscript,
+  }),
 });
 
 /**
@@ -71,3 +82,15 @@ const addr = server.address();
 const port = typeof addr === "object" && addr ? addr.port : config.port;
 console.log(`Caption relay listening on ws://0.0.0.0:${port}/stream`);
 console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app`);
+
+// Catch up on anything that never reached Notion — transcripts from before the
+// integration was configured, plus exports that failed while it was down.
+if (exportTranscript) {
+  void backfillNotion({ dir: config.transcriptsDir, export: exportTranscript })
+    .then((r) => {
+      if (r.exported || r.failed) {
+        console.log(`Notion backfill: ${r.exported} exported, ${r.failed} failed`);
+      }
+    })
+    .catch((err) => console.error("Notion backfill failed:", err));
+}

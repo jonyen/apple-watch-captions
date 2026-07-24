@@ -11,6 +11,15 @@ export interface Config {
   openaiApiKey?: string;
   /** Optional; enables the `assemblyai` caption provider. */
   assemblyaiApiKey?: string;
+  /** Optional; when set, finished transcripts are exported to Notion. */
+  notion?: NotionConfig;
+}
+
+export interface NotionConfig {
+  /** Internal integration token (`ntn_…`). */
+  token: string;
+  /** Target database id; it must be shared with the integration. */
+  databaseId: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -29,5 +38,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
     openaiApiKey: env.OPENAI_API_KEY || undefined,
     assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
+    notion: loadNotion(env),
   };
+}
+
+/**
+ * Notion needs both halves to work. A half-configured integration is a
+ * misconfiguration, but not one worth refusing to serve captions over —
+ * warn and leave the export disabled.
+ */
+function loadNotion(env: NodeJS.ProcessEnv): NotionConfig | undefined {
+  const token = env.NOTION_TOKEN || undefined;
+  const databaseId = env.NOTION_DATABASE_ID || undefined;
+  if (token && databaseId) return { token, databaseId };
+  if (token || databaseId) {
+    console.warn("Notion export disabled: set both NOTION_TOKEN and NOTION_DATABASE_ID");
+  }
+  return undefined;
 }

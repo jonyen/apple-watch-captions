@@ -33,6 +33,12 @@ fly volumes create transcripts --size 1
 # 5. (Optional) Enable transcript summaries — set an Anthropic API key.
 #    Without it, transcripts are still saved; only summaries are skipped.
 fly secrets set ANTHROPIC_API_KEY="<your-anthropic-key>"
+
+# 6. (Optional) Export finished transcripts to a Notion database.
+#    Verify access first — a 404 here means the database isn't shared with
+#    the integration. See backend/README.md "Notion export" for setup.
+node scripts/notion-check.mjs "<ntn_token>" "<database-id>"
+fly secrets set NOTION_TOKEN="<ntn_token>" NOTION_DATABASE_ID="<database-id>"
 ```
 
 ## Deploy

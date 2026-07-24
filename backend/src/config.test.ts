@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { loadConfig } from "./config";
 
 describe("loadConfig", () => {
@@ -26,6 +26,33 @@ describe("loadConfig", () => {
     });
     expect(cfg.transcriptsDir).toBe("/data/transcripts");
     expect(cfg.anthropicApiKey).toBe("sk-ant-xxx");
+  });
+
+  it("reads the Notion integration when both token and database are set", () => {
+    const cfg = loadConfig({
+      AUTH_TOKEN: "secret",
+      DEEPGRAM_API_KEY: "dg-key",
+      NOTION_TOKEN: "ntn_xxx",
+      NOTION_DATABASE_ID: "db-123",
+    });
+    expect(cfg.notion).toEqual({ token: "ntn_xxx", databaseId: "db-123" });
+  });
+
+  it("leaves Notion off when it is not configured", () => {
+    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    expect(cfg.notion).toBeUndefined();
+  });
+
+  it("ignores a half-configured Notion integration rather than failing to boot", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({
+      AUTH_TOKEN: "secret",
+      DEEPGRAM_API_KEY: "dg-key",
+      NOTION_TOKEN: "ntn_xxx",
+    });
+    expect(cfg.notion).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("defaults the port to 8080 when unset", () => {

@@ -95,8 +95,16 @@ In `CaptionCore` (pure logic, unit-tested, matching the existing package split):
 - `ResumeDecision` — the launch rule, as a pure function over "last transcript
   name" and "ended at".
 
-Views: `HomeView` (New / Continue / Browse), `HistoryListView` (date + title),
+Views: `HomeView` (New / Continue / Browse), `HistoryListView`,
 `TranscriptDetailView` (summary, then caption lines).
+
+**List row layout:** the title is the primary line, with the date as a smaller
+subheading beneath it — the topic is what you scan for, the date only
+disambiguates. Rows for sessions with no summary fall back to the dated name as
+the primary line with no subheading.
+
+To support that, `GET /v1/transcripts` returns a parsed `title` per entry
+alongside the existing fields.
 
 **Launch rule:** if the last session ended less than 10 minutes ago, resume it
 silently — glancing away costs nothing. After a longer gap, land on `HomeView`.

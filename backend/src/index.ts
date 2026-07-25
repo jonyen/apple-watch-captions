@@ -10,8 +10,9 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
 import { createClaudeSummarizer } from "./summarizer";
 import { createFinalizer } from "./finalizer";
-import { createNotionExporter } from "./notionExporter";
+import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
+import { backfillSummaries } from "./summaryBackfill";
 import { createUsageService } from "./usageService";
 
 const config = loadConfig(process.env);
@@ -83,14 +84,31 @@ const port = typeof addr === "object" && addr ? addr.port : config.port;
 console.log(`Caption relay listening on ws://0.0.0.0:${port}/stream`);
 console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app`);
 
-// Catch up on anything that never reached Notion — transcripts from before the
-// integration was configured, plus exports that failed while it was down.
-if (exportTranscript) {
-  void backfillNotion({ dir: config.transcriptsDir, export: exportTranscript })
-    .then((r) => {
-      if (r.exported || r.failed) {
-        console.log(`Notion backfill: ${r.exported} exported, ${r.failed} failed`);
-      }
-    })
-    .catch((err) => console.error("Notion backfill failed:", err));
+/**
+ * Catch up on stored transcripts: summarize any that never got one (the key
+ * was unset, out of credit, or erroring at the time), then export anything
+ * that never reached Notion. Summaries run first so a transcript exported in
+ * the same sweep carries its summary.
+ */
+async function runBackfills(): Promise<void> {
+  if (summarize) {
+    const r = await backfillSummaries({
+      dir: config.transcriptsDir,
+      summarize,
+      patchPage: config.notion ? createNotionSummaryPatcher(config.notion) : undefined,
+    });
+    if (r.summarized || r.failed) {
+      console.log(
+        `Summary backfill: ${r.summarized} written, ${r.patched} added to Notion, ${r.failed} failed`,
+      );
+    }
+  }
+  if (exportTranscript) {
+    const r = await backfillNotion({ dir: config.transcriptsDir, export: exportTranscript });
+    if (r.exported || r.failed) {
+      console.log(`Notion backfill: ${r.exported} exported, ${r.failed} failed`);
+    }
+  }
 }
+
+void runBackfills().catch((err) => console.error("backfill failed:", err));

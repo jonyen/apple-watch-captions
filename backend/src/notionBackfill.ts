@@ -1,8 +1,8 @@
 import {
-  FinalizedTranscript,
   listTranscripts,
   readExportMarker,
   readTranscript,
+  rebuildFinalized,
 } from "./transcriptStore";
 import { ExportTranscript } from "./notionExporter";
 import { exportOnce, isSubstantial } from "./finalizer";
@@ -47,7 +47,7 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
       result.skipped++;
       continue;
     }
-    const transcript = rebuild(listed.name, detail.segments);
+    const transcript = rebuildFinalized(listed.name, detail.segments);
     if (!isSubstantial(transcript)) {
       result.skipped++;
       continue;
@@ -57,18 +57,4 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
     done ? result.exported++ : result.failed++;
   }
   return result;
-}
-
-/** Rebuild the finalized shape from what's on disk. */
-function rebuild(
-  name: string,
-  segments: FinalizedTranscript["segments"],
-): FinalizedTranscript {
-  return {
-    name,
-    sessionId: name.slice(name.indexOf("_") + 1),
-    startedAt: segments[0]?.at ?? "",
-    endedAt: segments.at(-1)?.at ?? segments[0]?.at ?? "",
-    segments,
-  };
 }

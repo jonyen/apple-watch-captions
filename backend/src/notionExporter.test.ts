@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createNotionExporter } from "./notionExporter";
+import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { FinalizedTranscript } from "./transcriptStore";
 
 const DB_ID = "db-123";
@@ -291,6 +291,29 @@ describe("createNotionExporter", () => {
 
     // A later export must be able to succeed once Notion recovers.
     await expect(exporter(transcript(), null)).resolves.toMatchObject({ pageId: "page-1" });
+  });
+
+  it("adds a Summary toggle to an existing page without creating a new one", async () => {
+    const notion = fakeNotion();
+    const patch = createNotionSummaryPatcher({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await patch("page-9", "An overview.\n- ship it");
+
+    expect(notion.calls.find((c) => c.url.endsWith("/pages"))).toBeUndefined();
+    const append = notion.calls.find((c) => c.url.includes("/blocks/page-9/children"))!;
+    expect(append.method).toBe("PATCH");
+
+    const toggle = append.body.children[0];
+    expect(toggle.type).toBe("toggle");
+    expect(toggle.toggle.rich_text[0].text.content).toBe("Summary");
+    expect(toggle.toggle.children.map(textOf)).toEqual(["An overview.", "ship it"]);
+  });
+
+  it("throws when the page update fails, so the caller can report it", async () => {
+    const fetch = vi.fn(async () => json({ message: "Could not find block" }, 404));
+    const patch = createNotionSummaryPatcher({ token: "t", databaseId: DB_ID, fetch: fetch as any });
+
+    await expect(patch("page-9", "An overview.")).rejects.toThrow(/404/);
   });
 
   it("looks up the database schema once across exports", async () => {

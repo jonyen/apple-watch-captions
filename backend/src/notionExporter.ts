@@ -26,18 +26,19 @@ export interface NotionExporterOptions {
 }
 
 /**
- * Exports transcripts as pages in a Notion database: summary in the body,
- * the full transcript inside a collapsed toggle.
+ * Exports transcripts as pages in a Notion database: a collapsed Summary
+ * toggle and a collapsed Full transcript toggle.
  *
  * Property names are read from the database schema rather than assumed, so
  * whatever the user named their title column works, and the optional
  * Started/Ended/Segments/Session columns are filled only if they exist.
  */
-export function createNotionExporter(opts: NotionExporterOptions): ExportTranscript {
-  const doFetch = opts.fetch ?? ((url, init) => fetch(url, init));
-  let schema: Promise<DatabaseSchema> | undefined;
+type Request = (path: string, method: string, body?: unknown) => Promise<any>;
 
-  const request = async (path: string, method: string, body?: unknown): Promise<any> => {
+/** Authenticated Notion request that throws with the API's status and message. */
+function createRequest(opts: NotionExporterOptions): Request {
+  const doFetch = opts.fetch ?? ((url, init) => fetch(url, init));
+  return async (path, method, body) => {
     const response = await doFetch(`${API}${path}`, {
       method,
       headers: {
@@ -54,6 +55,30 @@ export function createNotionExporter(opts: NotionExporterOptions): ExportTranscr
     }
     return payload;
   };
+}
+
+/**
+ * Adds a Summary toggle to a page that was exported before its summary
+ * existed — used by the summary backfill so it updates the page in place
+ * instead of creating a duplicate.
+ *
+ * The toggle lands after the transcript on these pages, since Notion's append
+ * API has no prepend; freshly exported pages still get Summary first.
+ */
+export function createNotionSummaryPatcher(
+  opts: NotionExporterOptions,
+): (pageId: string, summary: string) => Promise<void> {
+  const request = createRequest(opts);
+  return async (pageId, summary) => {
+    const blocks = markdownToBlocks(summary);
+    if (blocks.length === 0) return;
+    await appendToggle(request, pageId, "Summary", blocks);
+  };
+}
+
+export function createNotionExporter(opts: NotionExporterOptions): ExportTranscript {
+  const request = createRequest(opts);
+  let schema: Promise<DatabaseSchema> | undefined;
 
   return async (transcript, summary) => {
     // Cache the schema, but never cache a failure: a Notion blip during the

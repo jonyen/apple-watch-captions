@@ -62,6 +62,12 @@ Behavior worth knowing:
 - **Exports are recorded.** A successful export writes `<name>.notion.json` next
   to the transcript. Nothing with a marker is exported again, so no duplicate
   pages.
+- **Missing summaries are backfilled.** On every boot the relay summarizes any
+  stored transcript that has no `<name>.summary.md` — sessions that ended while
+  `ANTHROPIC_API_KEY` was unset, out of credit, or erroring. If that transcript
+  was already exported, its existing Notion page gets the Summary toggle added
+  in place rather than a duplicate page (the toggle lands after the transcript
+  there, since Notion's append API has no prepend).
 - **Failures retry.** A failed export leaves no marker; the relay sweeps for
   unmarked transcripts on every boot and exports them oldest-first. That same
   sweep backfills history from before the integration was configured.

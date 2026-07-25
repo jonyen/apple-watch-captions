@@ -189,6 +189,23 @@ export function readExportMarker(dir: string, name: string): ExportMarker | null
   }
 }
 
+/**
+ * Rebuild the finalized shape from what's on disk, for the backfill sweeps that
+ * work from stored transcripts rather than a live session.
+ */
+export function rebuildFinalized(
+  name: string,
+  segments: TranscriptSegment[],
+): FinalizedTranscript {
+  return {
+    name,
+    sessionId: name.slice(name.indexOf("_") + 1),
+    startedAt: segments[0]?.at ?? "",
+    endedAt: segments.at(-1)?.at ?? segments[0]?.at ?? "",
+    segments,
+  };
+}
+
 /** Only accept names our writer produces — these reach the filesystem. */
 function isSafeName(name: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(name);

@@ -62,6 +62,27 @@ describe("createGeminiSummarizer", () => {
     expect(await summarize(transcript())).toBe("A chat happened.");
   });
 
+  it("parses the shape the live API actually returns", async () => {
+    // Captured from a real POST /v1beta/interactions response. There is no
+    // output_text on raw REST (that is an SDK convenience), and the thought
+    // step carries no `content` — a parser that assumes it does will throw.
+    const live = {
+      id: "v1_Chd6U2Rr",
+      status: "completed",
+      object: "interaction",
+      model: "gemini-3.6-flash",
+      usage: { total_tokens: 75, total_thought_tokens: 69 },
+      steps: [
+        { type: "thought", signature: "EskCCsYCARFNMg" },
+        { type: "model_output", content: [{ type: "text", text: "A chat happened." }] },
+      ],
+    };
+    const fetch = vi.fn(async () => json(live));
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    expect(await summarize(transcript())).toBe("A chat happened.");
+  });
+
   it("throws rather than returning empty when no text can be found", async () => {
     // A silent "" here is what let the previous summarizer fail invisibly:
     // the finalizer skips empty summaries without logging a failure.

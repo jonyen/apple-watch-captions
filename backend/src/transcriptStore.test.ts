@@ -250,3 +250,28 @@ describe("TranscriptStore", () => {
     expect(lines[2]).not.toContain('"channel"');
   });
 });
+
+describe("activeName", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "active-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("reports the transcript a live session is writing to", () => {
+    const store = new TranscriptStore({ dir, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    expect(store.activeName("abc")).toBeUndefined();
+
+    store.append("abc", "hello");
+
+    expect(store.activeName("abc")).toBe(listTranscripts(dir)[0].name);
+  });
+
+  it("forgets the name once the session is finalized", () => {
+    const store = new TranscriptStore({ dir, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    store.append("abc", "hello");
+    store.finalize("abc");
+
+    expect(store.activeName("abc")).toBeUndefined();
+  });
+});

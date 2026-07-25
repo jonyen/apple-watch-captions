@@ -79,6 +79,14 @@ export class TranscriptStore {
   }
 
   /**
+   * The transcript a live session is writing to, or undefined before its first
+   * caption. The watch stores this so it can resume the session later.
+   */
+  activeName(sessionId: string): string | undefined {
+    return this.active.get(sessionId)?.name;
+  }
+
+  /**
    * Bind a session to an existing transcript so its captions append there
    * instead of starting a new one. Unknown or unsafe names are ignored, and
    * the session falls back to a normal new transcript.

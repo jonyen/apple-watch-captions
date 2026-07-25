@@ -192,7 +192,13 @@ async function handleRequest(
       }
       store.feed(session, body);
       const { events, seq } = store.drain(session, since);
-      sendJSON(res, 200, { events: flatten(events), seq });
+      sendJSON(res, 200, {
+        events: flatten(events),
+        seq,
+        // Names the transcript this session is writing to, so the client can
+        // resume it later. Absent until the first caption creates the file.
+        transcript: opts.transcripts?.activeName(session),
+      });
       return;
     }
 

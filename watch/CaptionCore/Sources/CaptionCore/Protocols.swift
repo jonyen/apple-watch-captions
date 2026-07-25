@@ -4,7 +4,8 @@ import Foundation
 public protocol Relay: AnyObject {
     var onMessage: (@MainActor (ServerMessage) -> Void)? { get set }
     var onClose: (@MainActor () -> Void)? { get set }
-    func connect()
+    /// `resuming` names an existing transcript to append to; nil starts a new one.
+    func connect(resuming name: String?)
     func send(_ audio: Data)
     func close()
 }

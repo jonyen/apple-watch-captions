@@ -3,6 +3,7 @@ import CaptionCore
 
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
+    let onStop: () -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -22,6 +23,15 @@ struct CaptionView: View {
             .onChange(of: store.partial) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .overlay(alignment: .topTrailing) {
                 Circle().fill(.green).frame(width: 7, height: 7)
+            }
+            .toolbar {
+                // Lowering your wrist no longer ends the session, so ending it
+                // needs somewhere to live.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(action: onStop) {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                }
             }
         }
     }

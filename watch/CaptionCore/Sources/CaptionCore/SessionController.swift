@@ -21,7 +21,9 @@ public final class SessionController {
     }
 
     /// Begin a session. Safe to call repeatedly; no-op if already running.
-    public func start() async {
+    /// Pass `resuming` to append to an existing transcript instead of opening a
+    /// new one — what the app does when you glance back mid-conversation.
+    public func start(resuming name: String? = nil) async {
         guard !running else { return }
         running = true
         store.reset()
@@ -31,7 +33,7 @@ public final class SessionController {
             return
         }
         guard running else { return }   // stopped during the await
-        relay.connect()
+        relay.connect(resuming: name)
     }
 
     /// End the session and tear down audio + transport.

@@ -8,9 +8,10 @@ final class SessionControllerTests: XCTestCase {
         var onMessage: (@MainActor (ServerMessage) -> Void)?
         var onClose: (@MainActor () -> Void)?
         var connected = false
+        var resumedName: String??
         var closed = false
         var sent: [Data] = []
-        func connect() { connected = true }
+        func connect(resuming name: String?) { connected = true; resumedName = name }
         func send(_ audio: Data) { sent.append(audio) }
         func close() { closed = true }
         @MainActor func deliver(_ m: ServerMessage) { onMessage?(m) }
@@ -113,5 +114,18 @@ final class SessionControllerTests: XCTestCase {
         relay.deliver(.ready)
         XCTAssertFalse(audio.started)
         XCTAssertEqual(store.state, .connecting)
+    }
+
+    func testStartPassesTheTranscriptToResumeToTheRelay() async {
+        let (controller, store, relay, _) = make()
+        await controller.start(resuming: "2026-07-25T09-00-00Z_abc")
+        XCTAssertEqual(relay.resumedName, "2026-07-25T09-00-00Z_abc")
+        XCTAssertEqual(store.state, .connecting)
+    }
+
+    func testStartWithoutResumeAsksForAFreshTranscript() async {
+        let (controller, _, relay, _) = make()
+        await controller.start()
+        XCTAssertEqual(relay.resumedName, String?.none)
     }
 }

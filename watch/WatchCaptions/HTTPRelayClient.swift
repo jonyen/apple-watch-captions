@@ -7,6 +7,9 @@ import CaptionCore
 final class HTTPRelayClient: Relay {
     var onMessage: (@MainActor (ServerMessage) -> Void)?
     var onClose: (@MainActor () -> Void)?
+    /// Fires once with the transcript this session is writing to, so the app
+    /// can offer to resume it later. The relay assigns the name.
+    var onTranscript: (@MainActor (String) -> Void)?
 
     private let base: URL
     private let token: String
@@ -14,6 +17,8 @@ final class HTTPRelayClient: Relay {
     private let queue = DispatchQueue(label: "relay.http")
 
     private var sessionID = UUID().uuidString
+    private var resumeName: String?
+    private var transcriptDelivered = false
     private var pending = Data()        // accumulated PCM awaiting the next flush
     private var lastSeq = 0
     private var inFlight = false
@@ -32,13 +37,16 @@ final class HTTPRelayClient: Relay {
         session = URLSession(configuration: config)
     }
 
-    func connect() {
+    func connect(resuming name: String?) {
         queue.async { [weak self] in
             guard let self else { return }
             // Start a fresh session each connect so reconnects (Try Again, returning
-            // to the foreground, a network change) don't reuse stale state.
+            // to the foreground, a network change) don't reuse stale state. When
+            // resuming, the relay binds that new session to an existing transcript.
             self.timer?.cancel()
             self.sessionID = UUID().uuidString
+            self.resumeName = name
+            self.transcriptDelivered = false
             self.pending = Data()
             self.lastSeq = 0
             self.readyDelivered = false
@@ -111,6 +119,7 @@ final class HTTPRelayClient: Relay {
             URLQueryItem(name: "token", value: token),
         ]
         if let since { items.append(URLQueryItem(name: "since", value: String(since))) }
+        if let resumeName { items.append(URLQueryItem(name: "resume", value: resumeName)) }
         c.queryItems = items
         return c.url!
     }
@@ -125,6 +134,10 @@ final class HTTPRelayClient: Relay {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
         if let seq = obj["seq"] as? Int { lastSeq = max(lastSeq, seq) }
+        if !transcriptDelivered, let name = obj["transcript"] as? String {
+            transcriptDelivered = true
+            if let onTranscript { Task { @MainActor in onTranscript(name) } }
+        }
         guard let events = obj["events"] as? [[String: Any]] else { return }
         for event in events {
             switch event["type"] as? String {

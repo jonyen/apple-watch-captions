@@ -1,7 +1,14 @@
 # WatchCaptions — watchOS live-caption app
 
 Standalone watchOS app that streams the Watch mic to the caption relay and shows live captions.
-Runs whenever the app is open (no buttons); stops when you lower your wrist / background it.
+Opening the app picks up where you left off: if the last session ended less than
+ten minutes ago it resumes that transcript silently, so glancing away mid-conversation
+costs nothing. After a longer gap — or after you tap Stop, which is a decision rather
+than a pause — you land on a menu: **New session**, **Continue last**, **Transcripts**.
+
+Transcripts lists past sessions newest first, each row leading with what the recording
+was about and the date beneath. Opening one shows its summary and captions, and offers
+to continue that conversation.
 
 ## Layout
 - `CaptionCore/` — Swift package with the pure logic (`ServerMessage`, `CaptionStore`,

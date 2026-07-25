@@ -7,6 +7,10 @@ export interface Config {
   transcriptsDir: string;
   /** Optional; when set, transcripts are summarized with Claude on session end. */
   anthropicApiKey?: string;
+  /** Optional; the free-tier alternative to Claude for summaries. */
+  geminiApiKey?: string;
+  /** Which backend summarizes; defaults to whichever key is set. */
+  summaryProvider?: SummaryProvider;
   /** Optional; enables the `openai` caption provider. */
   openaiApiKey?: string;
   /** Optional; enables the `assemblyai` caption provider. */
@@ -14,6 +18,8 @@ export interface Config {
   /** Optional; when set, finished transcripts are exported to Notion. */
   notion?: NotionConfig;
 }
+
+export type SummaryProvider = "claude" | "gemini";
 
 export interface NotionConfig {
   /** Internal integration token (`ntn_…`). */
@@ -36,10 +42,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     deepgramApiKey,
     transcriptsDir,
     anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
+    geminiApiKey: env.GEMINI_API_KEY || undefined,
+    summaryProvider: loadSummaryProvider(env),
     openaiApiKey: env.OPENAI_API_KEY || undefined,
     assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
     notion: loadNotion(env),
   };
+}
+
+/** Only the backends we actually implement; anything else is a typo. */
+function loadSummaryProvider(env: NodeJS.ProcessEnv): SummaryProvider | undefined {
+  const value = env.SUMMARY_PROVIDER;
+  if (!value) return undefined;
+  if (value === "claude" || value === "gemini") return value;
+  console.warn(`Ignoring SUMMARY_PROVIDER="${value}" — expected "claude" or "gemini"`);
+  return undefined;
 }
 
 /**

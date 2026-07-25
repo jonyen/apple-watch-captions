@@ -8,7 +8,8 @@ import { ChannelSplitProvider } from "./channelSplitProvider";
 import { UnavailableProvider } from "./unavailableProvider";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
-import { createClaudeSummarizer } from "./summarizer";
+import { Summarize, createClaudeSummarizer } from "./summarizer";
+import { createGeminiSummarizer } from "./geminiSummarizer";
 import { createFinalizer } from "./finalizer";
 import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
@@ -18,12 +19,31 @@ import { createUsageService } from "./usageService";
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
 
-const summarize = config.anthropicApiKey
-  ? createClaudeSummarizer(config.anthropicApiKey)
-  : undefined;
-if (!summarize) {
-  console.log("ANTHROPIC_API_KEY not set — transcripts are saved without summaries");
+/**
+ * Pick the summarizer backend: an explicit SUMMARY_PROVIDER wins, otherwise
+ * whichever key is configured (Claude first, since it is the better model).
+ */
+function chooseSummarizer(): Summarize | undefined {
+  const wanted =
+    config.summaryProvider ??
+    (config.anthropicApiKey ? "claude" : config.geminiApiKey ? "gemini" : undefined);
+
+  if (wanted === "claude") {
+    if (config.anthropicApiKey) return createClaudeSummarizer(config.anthropicApiKey);
+    console.warn("SUMMARY_PROVIDER=claude but ANTHROPIC_API_KEY is not set");
+  } else if (wanted === "gemini") {
+    if (config.geminiApiKey) return createGeminiSummarizer(config.geminiApiKey);
+    console.warn("SUMMARY_PROVIDER=gemini but GEMINI_API_KEY is not set");
+  }
+  return undefined;
 }
+
+const summarize = chooseSummarizer();
+console.log(
+  summarize
+    ? `Summaries via ${config.summaryProvider ?? (config.anthropicApiKey ? "claude" : "gemini")}`
+    : "No summary provider configured — transcripts are saved without summaries",
+);
 
 const exportTranscript = config.notion ? createNotionExporter(config.notion) : undefined;
 if (!exportTranscript) {

@@ -74,7 +74,7 @@ Event payloads: `{type:"ready"}`, `{type:"caption",text,isFinal}`, `{type:"error
 cd backend
 npm install
 AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
-npm test            # 176 tests, no API key needed
+npm test            # 186 tests, no API key needed
 ```
 
 **Watch app** (see [`watch/README.md`](watch/README.md)):

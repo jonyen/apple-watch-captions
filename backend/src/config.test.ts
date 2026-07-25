@@ -28,6 +28,35 @@ describe("loadConfig", () => {
     expect(cfg.anthropicApiKey).toBe("sk-ant-xxx");
   });
 
+  it("reads the Gemini key and summary provider", () => {
+    const cfg = loadConfig({
+      AUTH_TOKEN: "secret",
+      DEEPGRAM_API_KEY: "dg-key",
+      GEMINI_API_KEY: "gk-xxx",
+      SUMMARY_PROVIDER: "gemini",
+    });
+    expect(cfg.geminiApiKey).toBe("gk-xxx");
+    expect(cfg.summaryProvider).toBe("gemini");
+  });
+
+  it("leaves the summary provider unset when not configured", () => {
+    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    expect(cfg.summaryProvider).toBeUndefined();
+    expect(cfg.geminiApiKey).toBeUndefined();
+  });
+
+  it("ignores an unrecognized summary provider rather than failing to boot", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({
+      AUTH_TOKEN: "secret",
+      DEEPGRAM_API_KEY: "dg-key",
+      SUMMARY_PROVIDER: "llama",
+    });
+    expect(cfg.summaryProvider).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("reads the Notion integration when both token and database are set", () => {
     const cfg = loadConfig({
       AUTH_TOKEN: "secret",

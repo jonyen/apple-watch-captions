@@ -28,6 +28,21 @@ AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
 npm test          # full unit/integration suite (no API key needed)
 ```
 
+## Summaries (optional)
+
+When a session ends, its transcript is summarized and stored next to it as
+`<name>.summary.md`. Two backends are supported; pick with `SUMMARY_PROVIDER`,
+or leave it unset and the relay uses whichever key is configured (Claude first).
+
+| Provider | Env | Notes |
+|----------|-----|-------|
+| `claude` | `ANTHROPIC_API_KEY` | Better summaries; paid, though a full backlog costs cents. |
+| `gemini` | `GEMINI_API_KEY` | Free tier at [aistudio.google.com](https://aistudio.google.com/apikey). **The free tier may use your inputs to improve Google's products; the paid tier does not.** Transcripts can hold sensitive material — choose deliberately. |
+
+With neither key set, transcripts are still saved; only summaries are skipped.
+Transcripts that never got a summary are picked up by a sweep on the next boot,
+so fixing a key or switching providers backfills the gap without manual steps.
+
 ## Notion export (optional)
 
 When `NOTION_TOKEN` and `NOTION_DATABASE_ID` are both set, each finished session

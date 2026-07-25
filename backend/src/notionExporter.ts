@@ -1,5 +1,6 @@
 import { FinalizedTranscript, TranscriptSegment } from "./transcriptStore";
 import { NotionBlock, batches, markdownToBlocks, paragraph, toggle } from "./notionBlocks";
+import { parseSummary } from "./summaryPrompt";
 
 const API = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
@@ -70,9 +71,32 @@ export function createNotionSummaryPatcher(
 ): (pageId: string, summary: string) => Promise<void> {
   const request = createRequest(opts);
   return async (pageId, summary) => {
-    const blocks = markdownToBlocks(summary);
+    const blocks = markdownToBlocks(parseSummary(summary).body);
     if (blocks.length === 0) return;
     await appendToggle(request, pageId, "Summary", blocks);
+  };
+}
+
+/**
+ * Renames an existing page. Used to give pages exported before titles existed
+ * a descriptive name, and by the resume path when a session's topic moves on.
+ */
+export function createNotionTitlePatcher(
+  opts: NotionExporterOptions,
+): (pageId: string, title: string) => Promise<void> {
+  const request = createRequest(opts);
+  let schema: Promise<DatabaseSchema> | undefined;
+  return async (pageId, title) => {
+    schema ??= request(`/databases/${opts.databaseId}`, "GET")
+      .then(readSchema)
+      .catch((err) => {
+        schema = undefined;
+        throw err;
+      });
+    const { titleProperty } = await schema;
+    await request(`/pages/${pageId}`, "PATCH", {
+      properties: { [titleProperty]: { title: [{ type: "text", text: { content: title } }] } },
+    });
   };
 }
 
@@ -89,7 +113,8 @@ export function createNotionExporter(opts: NotionExporterOptions): ExportTranscr
         schema = undefined;
         throw err;
       });
-    const properties = buildProperties(await schema, transcript);
+    const parsed = parseSummary(summary ?? "");
+    const properties = buildProperties(await schema, transcript, parsed.title);
 
     const page = await request("/pages", "POST", {
       parent: { database_id: opts.databaseId },
@@ -100,7 +125,7 @@ export function createNotionExporter(opts: NotionExporterOptions): ExportTranscr
     // Two collapsed sections: the summary and the raw transcript. Both are
     // appended rather than created with the page, so each response hands back
     // its toggle's block id and content longer than one request nests under it.
-    const summaryBlocks = summary ? markdownToBlocks(summary) : [];
+    const summaryBlocks = summary ? markdownToBlocks(parsed.body) : [];
     if (summaryBlocks.length > 0) {
       await appendToggle(request, pageId, "Summary", summaryBlocks);
     }
@@ -157,9 +182,15 @@ function readSchema(database: any): DatabaseSchema {
   return { titleProperty, types };
 }
 
-function buildProperties(schema: DatabaseSchema, t: FinalizedTranscript): Record<string, unknown> {
+function buildProperties(
+  schema: DatabaseSchema,
+  t: FinalizedTranscript,
+  summaryTitle?: string,
+): Record<string, unknown> {
   const properties: Record<string, unknown> = {
-    [schema.titleProperty]: { title: [{ type: "text", text: { content: title(t) } }] },
+    [schema.titleProperty]: {
+      title: [{ type: "text", text: { content: pageTitle(t, summaryTitle) } }],
+    },
   };
 
   const optional: Record<string, { type: string; value: unknown }> = {
@@ -179,8 +210,13 @@ function buildProperties(schema: DatabaseSchema, t: FinalizedTranscript): Record
   return properties;
 }
 
-/** `Captions 2026-07-06 01:02 UTC` — sorts naturally and is timezone-stable. */
-function title(t: FinalizedTranscript): string {
+/**
+ * `2026-07-06 01:02 — Vendor call about code review`, or the plain dated form
+ * when the summary carried no title. Both sort naturally and are
+ * timezone-stable.
+ */
+export function pageTitle(t: FinalizedTranscript, summaryTitle?: string): string {
   const [date, time = ""] = t.startedAt.split("T");
-  return `Captions ${date} ${time.slice(0, 5)} UTC`.trim();
+  const when = `${date} ${time.slice(0, 5)}`.trim();
+  return summaryTitle ? `${when} — ${summaryTitle}` : `Captions ${when} UTC`;
 }

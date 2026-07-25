@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
+import {
+  createNotionExporter,
+  createNotionSummaryPatcher,
+  createNotionTitlePatcher,
+} from "./notionExporter";
 import { FinalizedTranscript } from "./transcriptStore";
 
 const DB_ID = "db-123";
@@ -46,6 +50,9 @@ function fakeNotion(opts: { properties?: Record<string, { type: string }> } = {}
     }
     if (url.endsWith("/pages")) {
       return json({ id: "page-1", url: "https://notion.so/page-1" });
+    }
+    if (url.includes("/pages/")) {
+      return json({ id: url.split("/pages/")[1], object: "page" }); // property update
     }
     // Appending children echoes back the blocks it created.
     const body = JSON.parse(init.body);
@@ -117,6 +124,40 @@ describe("createNotionExporter", () => {
     const create = notion.calls.find((c) => c.url.endsWith("/pages"))!;
     const title = create.body.properties.Name.title[0].text.content;
     expect(title).toContain("2026-07-06");
+  });
+
+  it("names the page with the date and the summary's title", async () => {
+    const notion = fakeNotion();
+    const exporter = createNotionExporter({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await exporter(transcript(), "Title: Vendor call about code review\n\nAn overview.");
+
+    const create = notion.calls.find((c) => c.url.endsWith("/pages"))!;
+    expect(create.body.properties.Name.title[0].text.content).toBe(
+      "2026-07-06 01:02 — Vendor call about code review",
+    );
+  });
+
+  it("falls back to a plain date name when the summary carries no title", async () => {
+    const notion = fakeNotion();
+    const exporter = createNotionExporter({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await exporter(transcript(), "An overview with no title line.");
+
+    const create = notion.calls.find((c) => c.url.endsWith("/pages"))!;
+    expect(create.body.properties.Name.title[0].text.content).toBe("Captions 2026-07-06 01:02 UTC");
+  });
+
+  it("keeps the title line out of the Summary toggle", async () => {
+    const notion = fakeNotion();
+    const exporter = createNotionExporter({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await exporter(transcript(), "Title: A chat\n\nAn overview.");
+
+    const summary = allBlocks(notion.calls).find(
+      (b) => b.type === "toggle" && b.toggle.rich_text[0].text.content === "Summary",
+    )!;
+    expect(summary.toggle.children.map(textOf)).toEqual(["An overview."]);
   });
 
   it("uses whatever the database calls its title property", async () => {
@@ -307,6 +348,29 @@ describe("createNotionExporter", () => {
     expect(toggle.type).toBe("toggle");
     expect(toggle.toggle.rich_text[0].text.content).toBe("Summary");
     expect(toggle.toggle.children.map(textOf)).toEqual(["An overview.", "ship it"]);
+  });
+
+  it("keeps the title line out of a patched Summary toggle too", async () => {
+    const notion = fakeNotion();
+    const patch = createNotionSummaryPatcher({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await patch("page-9", "Title: A chat\n\nAn overview.");
+
+    const append = notion.calls.find((c) => c.url.includes("/blocks/page-9/children"))!;
+    expect(append.body.children[0].toggle.children.map(textOf)).toEqual(["An overview."]);
+  });
+
+  it("retitles an existing page using the database's title property", async () => {
+    const notion = fakeNotion({ properties: { Session: { type: "title" } } });
+    const retitle = createNotionTitlePatcher({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await retitle("page-9", "2026-07-10 18:05 — Vendor call");
+
+    const update = notion.calls.find((c) => c.url.endsWith("/pages/page-9"))!;
+    expect(update.method).toBe("PATCH");
+    expect(update.body.properties.Session.title[0].text.content).toBe(
+      "2026-07-10 18:05 — Vendor call",
+    );
   });
 
   it("throws when the page update fails, so the caller can report it", async () => {

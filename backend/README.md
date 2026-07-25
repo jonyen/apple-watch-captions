@@ -46,7 +46,9 @@ so fixing a key or switching providers backfills the gap without manual steps.
 ## Notion export (optional)
 
 When `NOTION_TOKEN` and `NOTION_DATABASE_ID` are both set, each finished session
-becomes a page in that database as two collapsed sections: a **Summary** toggle
+becomes a page in that database, named `2026-07-10 18:05 — <what it was about>`
+(the summarizer writes the topic; sessions without a summary fall back to a plain
+dated name). The page holds two collapsed sections: a **Summary** toggle
 holding the Claude summary, and a **Full transcript** toggle holding every caption
 line. The Summary toggle is omitted when no summary was generated. Set neither and
 transcripts are still saved locally — only the export is skipped.

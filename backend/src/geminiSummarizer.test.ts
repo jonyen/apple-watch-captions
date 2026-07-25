@@ -48,6 +48,18 @@ describe("createGeminiSummarizer", () => {
     expect(body.system_instruction).toContain("summar");
   });
 
+  it("keeps thinking low, since summarizing does not need deep reasoning", async () => {
+    // A trivial live call burned 69 thinking tokens for a 2-token answer;
+    // the free tier is capped on daily tokens, so cap the thinking instead.
+    const fetch = vi.fn(async () => withOutputText("s"));
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await summarize(transcript());
+
+    const body = JSON.parse((fetch.mock.calls[0] as any)[1].body);
+    expect(body.generation_config.thinking_level).toBe("low");
+  });
+
   it("returns the generated summary", async () => {
     const fetch = vi.fn(async () => withOutputText("A chat happened."));
     const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });

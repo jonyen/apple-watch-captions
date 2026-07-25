@@ -38,6 +38,10 @@ export function createGeminiSummarizer(
         model,
         input: summaryPrompt(transcript),
         system_instruction: SUMMARY_SYSTEM_PROMPT,
+        // Summarizing is not a reasoning-heavy task, and the free tier is
+        // capped on daily tokens — thinking defaults high enough to dominate
+        // the bill (69 thought tokens for a 2-token reply, measured).
+        generation_config: { thinking_level: "low" },
       }),
     } as RequestInit);
 

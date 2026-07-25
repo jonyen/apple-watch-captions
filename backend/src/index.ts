@@ -14,6 +14,7 @@ import { createFinalizer } from "./finalizer";
 import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
+import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
 
 const config = loadConfig(process.env);
@@ -56,6 +57,7 @@ const transcripts = new TranscriptStore({
     dir: config.transcriptsDir,
     summarize,
     export: exportTranscript,
+    update: config.notion ? createNotionUpdater(config.notion) : undefined,
   }),
 });
 

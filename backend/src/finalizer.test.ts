@@ -97,6 +97,68 @@ describe("createFinalizer", () => {
     expect(exportTranscript).toHaveBeenCalledOnce();
   });
 
+  it("records how much of the transcript reached the page on first export", async () => {
+    const exportTranscript = vi.fn(
+      async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
+    );
+
+    createFinalizer({ dir, export: exportTranscript })(transcript(LONG));
+    await settle();
+
+    expect(readExportMarker(dir, transcript(LONG).name)).toMatchObject({
+      pageId: "p1",
+      exportedSegments: 2,
+    });
+  });
+
+  it("updates the existing page when a resumed session ends", async () => {
+    const exportTranscript = vi.fn(
+      async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
+    );
+    const update = vi.fn(async () => ({ pageId: "p1", url: "u1", exportedSegments: 5 }));
+    const finalize = createFinalizer({ dir, export: exportTranscript, update });
+
+    finalize(transcript(LONG));
+    await settle();
+    finalize({ ...transcript(LONG), resumed: true });
+    await settle();
+
+    expect(exportTranscript).toHaveBeenCalledOnce(); // not re-created
+    expect(update).toHaveBeenCalledOnce();
+    expect(readExportMarker(dir, transcript(LONG).name)).toMatchObject({ exportedSegments: 5 });
+  });
+
+  it("leaves an exported transcript alone when no updater is configured", async () => {
+    const exportTranscript = vi.fn(
+      async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
+    );
+    const finalize = createFinalizer({ dir, export: exportTranscript });
+
+    finalize(transcript(LONG));
+    await settle();
+    finalize({ ...transcript(LONG), resumed: true });
+    await settle();
+
+    expect(exportTranscript).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the old marker when updating the page fails, so it retries", async () => {
+    const exportTranscript = vi.fn(
+      async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
+    );
+    const update = vi.fn(async () => {
+      throw new Error("notion down");
+    });
+    const finalize = createFinalizer({ dir, export: exportTranscript, update });
+
+    finalize(transcript(LONG));
+    await settle();
+    finalize({ ...transcript(LONG), resumed: true });
+    await settle();
+
+    expect(readExportMarker(dir, transcript(LONG).name)).toMatchObject({ exportedSegments: 2 });
+  });
+
   it("leaves no marker when the export fails, so it can be retried", async () => {
     const exportTranscript = vi.fn(async () => {
       throw new Error("notion down");

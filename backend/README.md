@@ -74,6 +74,22 @@ Setup:
    fly secrets set NOTION_TOKEN="ntn_…" NOTION_DATABASE_ID="<database-id>"
    ```
 
+### Resuming a session
+
+`POST /v1/audio?session=<id>&resume=<transcriptName>` binds a new session to an
+existing transcript, so its captions append there instead of opening a new file.
+When that session ends, the summary is regenerated over the combined transcript
+and the existing Notion page is updated in place: the stale Summary toggle is
+replaced, only the new caption lines are appended, and the page is retitled.
+
+The export marker records `exportedSegments`, which is what keeps a resumed
+session from duplicating lines already on the page. Markers written before this
+existed count as zero, so their next update re-appends from the start — a
+one-time duplication on already-exported pages, not an ongoing one.
+
+Sessions are finalized after **10 minutes** without audio (was 15 seconds), so
+lowering your wrist mid-conversation no longer ends the session.
+
 Behavior worth knowing:
 
 - **Exports are recorded.** A successful export writes `<name>.notion.json` next

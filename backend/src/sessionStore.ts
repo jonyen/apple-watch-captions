@@ -18,6 +18,11 @@ export interface SessionStoreOptions {
   /** Factory for a fresh provider per session (Deepgram in prod, fake in tests). */
   createProvider: () => TranscriptionProvider;
   /** Close sessions with no activity for this long. Defaults to 15s. */
+  /**
+   * How long a session may go without audio before it is finalized. Long
+   * enough that lowering your wrist mid-conversation does not end the
+   * session — the watch resumes into the same transcript when it comes back.
+   */
   idleTimeoutMs?: number;
   /** Injectable clock (tests). Defaults to Date.now. */
   now?: () => number;
@@ -39,7 +44,7 @@ export class SessionStore {
 
   constructor(opts: SessionStoreOptions) {
     this.createProvider = opts.createProvider;
-    this.idleTimeoutMs = opts.idleTimeoutMs ?? 15_000;
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? 10 * 60_000;
     this.now = opts.now ?? (() => Date.now());
     this.transcripts = opts.transcripts;
   }

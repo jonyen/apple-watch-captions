@@ -34,10 +34,10 @@ export interface NotionExporterOptions {
  * whatever the user named their title column works, and the optional
  * Started/Ended/Segments/Session columns are filled only if they exist.
  */
-type Request = (path: string, method: string, body?: unknown) => Promise<any>;
+export type Request = (path: string, method: string, body?: unknown) => Promise<any>;
 
 /** Authenticated Notion request that throws with the API's status and message. */
-function createRequest(opts: NotionExporterOptions): Request {
+export function createRequest(opts: NotionExporterOptions): Request {
   const doFetch = opts.fetch ?? ((url, init) => fetch(url, init));
   return async (path, method, body) => {
     const response = await doFetch(`${API}${path}`, {
@@ -138,7 +138,7 @@ export function createNotionExporter(opts: NotionExporterOptions): ExportTranscr
 }
 
 /** Append a collapsed section, nesting any overflow beyond one request inside it. */
-async function appendToggle(
+export async function appendToggle(
   request: (path: string, method: string, body?: unknown) => Promise<any>,
   pageId: string,
   title: string,
@@ -151,7 +151,7 @@ async function appendToggle(
   for (const batch of rest) await appendChildren(request, toggleId, batch);
 }
 
-function appendChildren(
+export function appendChildren(
   request: (path: string, method: string, body?: unknown) => Promise<any>,
   blockId: string,
   children: NotionBlock[],
@@ -160,19 +160,19 @@ function appendChildren(
 }
 
 /** `Me:`/`Them:` prefixes for dual-channel sessions, matching the summarizer. */
-function label(segment: TranscriptSegment): string {
+export function label(segment: TranscriptSegment): string {
   if (segment.channel === 0) return `Me: ${segment.text}`;
   if (segment.channel === 1) return `Them: ${segment.text}`;
   return segment.text;
 }
 
-interface DatabaseSchema {
+export interface DatabaseSchema {
   /** Name of the database's title property, whatever the user called it. */
   titleProperty: string;
   types: Record<string, string>;
 }
 
-function readSchema(database: any): DatabaseSchema {
+export function readSchema(database: any): DatabaseSchema {
   const properties: Record<string, { type: string }> = database?.properties ?? {};
   const types = Object.fromEntries(Object.entries(properties).map(([k, v]) => [k, v.type]));
   const titleProperty = Object.keys(types).find((k) => types[k] === "title");

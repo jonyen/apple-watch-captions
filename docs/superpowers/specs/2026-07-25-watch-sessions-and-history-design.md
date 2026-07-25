@@ -1,7 +1,7 @@
 # Watch sessions and history — design
 
 **Date:** 2026-07-25
-**Status:** approved; phase 1 in progress
+**Status:** approved; phases 1 and 2 shipped, phase 3 next
 
 ## Problem
 
@@ -66,7 +66,9 @@ Notion pages; session ids are not (they already map to multiple files).
 existing `.jsonl` instead of opening a new one, and the finalized transcript is
 flagged as resumed.
 
-**Export marker** gains `exportedSegments: number` and `summaryToggleId: string`.
+**Export marker** gains `exportedSegments: number`. (A `summaryToggleId` was
+considered and dropped: the updater finds the toggles by their titles in the
+page's own blocks, which needs no migration for pages exported earlier.)
 On re-finalize where a marker exists:
 
 1. Regenerate the summary over the combined transcript.

@@ -26,6 +26,55 @@ function startWithFakes(authToken: string) {
   return { providers, port };
 }
 
+describe("resume", () => {
+  it("binds the session to an existing transcript when ?resume= is given", async () => {
+    const reopened: Array<[string, string]> = [];
+    const server = startServer({
+      port: 0,
+      authToken: "t",
+      createProvider: () => new FakeTranscriptionProvider(),
+      transcripts: {
+        reopen: (sessionId: string, name: string) => reopened.push([sessionId, name]),
+        append: () => {},
+        finalize: () => {},
+        finalizeAll: () => {},
+      } as any,
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
+
+    await fetch(
+      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&resume=2026-07-06T01-02-03Z_abc`,
+      { method: "POST", body: new Uint8Array(0) },
+    );
+
+    expect(reopened).toEqual([["s1", "2026-07-06T01-02-03Z_abc"]]);
+  });
+
+  it("only reopens once, not on every audio post for the session", async () => {
+    const reopened: string[] = [];
+    const server = startServer({
+      port: 0,
+      authToken: "t",
+      createProvider: () => new FakeTranscriptionProvider(),
+      transcripts: {
+        reopen: (_id: string, name: string) => reopened.push(name),
+        append: () => {},
+        finalize: () => {},
+        finalizeAll: () => {},
+      } as any,
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&resume=2026-07-06T01-02-03Z_abc`;
+
+    await fetch(url, { method: "POST", body: new Uint8Array(0) });
+    await fetch(url, { method: "POST", body: new Uint8Array(0) });
+
+    expect(reopened).toHaveLength(1);
+  });
+});
+
 const audio = (port: number, query: string) =>
   `http://127.0.0.1:${port}/v1/audio?${query}`;
 

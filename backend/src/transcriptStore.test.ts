@@ -80,6 +80,112 @@ describe("TranscriptStore", () => {
     expect(listTranscripts(dir)[0].hasSummary).toBe(true);
   });
 
+  it("appends into an existing transcript when a session is reopened", () => {
+    const first = new TranscriptStore({ dir, now: () => T0 });
+    first.append("abc", "first line");
+    const name = listTranscripts(dir)[0].name;
+    first.finalize("abc");
+
+    // A later session resumes that transcript rather than starting a new one.
+    const second = new TranscriptStore({ dir, now: () => T0 + 60_000 });
+    second.reopen("xyz", name);
+    second.append("xyz", "second line");
+
+    expect(listTranscripts(dir)).toHaveLength(1);
+    expect(readTranscript(dir, name)?.segments.map((s) => s.text)).toEqual([
+      "first line",
+      "second line",
+    ]);
+  });
+
+  it("reports a reopened transcript as resumed, with the segments it already had", () => {
+    const first = new TranscriptStore({ dir, now: () => T0 });
+    first.append("abc", "first line");
+    const name = listTranscripts(dir)[0].name;
+    first.finalize("abc");
+
+    let finalized: FinalizedTranscript | undefined;
+    const second = new TranscriptStore({
+      dir,
+      now: () => T0 + 60_000,
+      onFinalize: (t) => (finalized = t),
+    });
+    second.reopen("xyz", name);
+    second.append("xyz", "second line");
+    second.finalize("xyz");
+
+    expect(finalized?.name).toBe(name);
+    expect(finalized?.resumed).toBe(true);
+    expect(finalized?.segments.map((s) => s.text)).toEqual(["first line", "second line"]);
+  });
+
+  it("keeps the original start time when resuming", () => {
+    const first = new TranscriptStore({ dir, now: () => T0 });
+    first.append("abc", "first line");
+    const name = listTranscripts(dir)[0].name;
+    const startedAt = readTranscript(dir, name)!.segments[0].at;
+    first.finalize("abc");
+
+    let finalized: FinalizedTranscript | undefined;
+    const second = new TranscriptStore({
+      dir,
+      now: () => T0 + 60_000,
+      onFinalize: (t) => (finalized = t),
+    });
+    second.reopen("xyz", name);
+    second.append("xyz", "second line");
+    second.finalize("xyz");
+
+    expect(finalized?.startedAt).toBe(startedAt);
+  });
+
+  it("ignores a reopen for a transcript that does not exist", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.reopen("xyz", "2026-01-01T00-00-00Z_nope");
+    store.append("xyz", "hello");
+
+    // Falls back to a normal new transcript rather than throwing.
+    const listed = listTranscripts(dir);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].name).not.toContain("nope");
+  });
+
+  it("rejects a hostile name on reopen", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.reopen("xyz", "../../etc/passwd");
+    store.append("xyz", "hello");
+
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).not.toContain("..");
+  });
+
+  it("records how much of a transcript has been exported", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+
+    writeExportMarker(dir, name, { pageId: "p1", url: "u", exportedSegments: 1 });
+
+    expect(readExportMarker(dir, name)).toMatchObject({ exportedSegments: 1 });
+  });
+
+  it("exposes the summary title in the listing", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+    writeSummary(dir, name, "Title: A chat about roadmaps\n\nAn overview.");
+
+    expect(listTranscripts(dir)[0].title).toBe("A chat about roadmaps");
+  });
+
+  it("leaves the listing title unset when a transcript has no summary", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+
+    expect(listTranscripts(dir)[0].title).toBeUndefined();
+  });
+
   it("rejects path-traversal names on read", () => {
     expect(readTranscript(dir, "../etc/passwd")).toBeNull();
   });

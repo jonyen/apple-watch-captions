@@ -7,6 +7,7 @@ import {
   existsSync,
 } from "fs";
 import { join, basename } from "path";
+import { parseSummary } from "./summaryPrompt";
 
 export interface TranscriptSegment {
   /** ISO timestamp the final caption arrived. */
@@ -22,6 +23,8 @@ export interface FinalizedTranscript {
   startedAt: string;
   endedAt: string;
   segments: TranscriptSegment[];
+  /** True when this transcript was reopened rather than started fresh. */
+  resumed?: boolean;
 }
 
 export interface TranscriptStoreOptions {
@@ -36,6 +39,8 @@ interface ActiveTranscript {
   name: string;
   startedAt: string;
   segments: TranscriptSegment[];
+  /** Set when the entry came from `reopen` rather than a first append. */
+  resumed?: boolean;
 }
 
 /**
@@ -73,6 +78,24 @@ export class TranscriptStore {
     }
   }
 
+  /**
+   * Bind a session to an existing transcript so its captions append there
+   * instead of starting a new one. Unknown or unsafe names are ignored, and
+   * the session falls back to a normal new transcript.
+   */
+  reopen(sessionId: string, name: string): void {
+    if (!isSafeName(name)) return;
+    const file = join(this.dir, `${name}.jsonl`);
+    if (!existsSync(file)) return;
+    const segments = readSegments(file);
+    this.active.set(sessionId, {
+      name,
+      startedAt: segments[0]?.at ?? new Date(this.now()).toISOString(),
+      segments,
+      resumed: true,
+    });
+  }
+
   /** Session ended: hand the collected transcript to the finalize hook. */
   finalize(sessionId: string): void {
     const entry = this.active.get(sessionId);
@@ -84,6 +107,7 @@ export class TranscriptStore {
       startedAt: entry.startedAt,
       endedAt: new Date(this.now()).toISOString(),
       segments: entry.segments,
+      ...(entry.resumed ? { resumed: true } : {}),
     });
   }
 
@@ -106,6 +130,8 @@ export interface TranscriptSummary {
   segmentCount: number;
   preview: string;
   hasSummary: boolean;
+  /** Topic line from the summary, when one was generated. */
+  title?: string;
 }
 
 /** List stored transcripts, newest first. */
@@ -118,6 +144,11 @@ export function listTranscripts(dir: string): TranscriptSummary[] {
     .map((f) => {
       const name = basename(f, ".jsonl");
       const segments = readSegments(join(dir, f));
+      const summaryFile = join(dir, `${name}.summary.md`);
+      const hasSummary = existsSync(summaryFile);
+      const title = hasSummary
+        ? parseSummary(readFileSync(summaryFile, "utf8")).title
+        : undefined;
       return {
         name,
         startedAt: segments[0]?.at ?? nameToIso(name),
@@ -126,7 +157,8 @@ export function listTranscripts(dir: string): TranscriptSummary[] {
           .map((s) => s.text)
           .join(" ")
           .slice(0, 120),
-        hasSummary: existsSync(join(dir, `${name}.summary.md`)),
+        hasSummary,
+        ...(title ? { title } : {}),
       };
     });
 }
@@ -161,6 +193,13 @@ export interface ExportMarker {
   pageId: string;
   url: string;
   exportedAt?: string;
+  /**
+   * How many segments have already been written to the page, so a resumed
+   * session appends only what is new instead of duplicating the transcript.
+   */
+  exportedSegments?: number;
+  /** The page's Summary toggle, replaced when the summary is regenerated. */
+  summaryToggleId?: string;
 }
 
 /**

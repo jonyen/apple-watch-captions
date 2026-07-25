@@ -175,6 +175,14 @@ async function handleRequest(
     const since = Number(url.searchParams.get("since") ?? "0") || 0;
 
     if (url.pathname === "/v1/audio") {
+      // A resumed session appends to an existing transcript instead of opening
+      // a new one. Only meaningful before the session exists; later posts for
+      // the same session carry the param but must not re-bind it.
+      const resume = url.searchParams.get("resume");
+      if (resume && !store.has(session)) {
+        opts.transcripts?.reopen(session, resume);
+      }
+
       let body: Buffer;
       try {
         body = await readBody(req, MAX_AUDIO_BYTES);

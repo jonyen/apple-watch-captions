@@ -51,7 +51,7 @@ for the full design.
 
 Sessions end when you tap Stop (watch) or click the menu-bar button again (mac). Captions and a summary are saved to the transcript store on the relay. You can view transcripts at [`https://watch-captions-relay.fly.dev/app`](https://watch-captions-relay.fly.dev/app) or the Transcripts window in the mac app — the same transcript list syncs across all your devices via the relay.
 
-Set `NOTION_TOKEN` and `NOTION_DATABASE_ID` on the relay and each finished session also lands in a Notion database — summary in the page body, full transcript in a collapsed toggle. Exports are recorded per transcript, so they never duplicate, and anything that failed (or predates the integration) is retried on the next relay boot. Setup and the pre-flight check are in [`backend/README.md`](backend/README.md#notion-export-optional).
+Set `NOTION_TOKEN` and `NOTION_DATABASE_ID` on the relay and each finished session also lands in a Notion database — a collapsed Summary toggle and a collapsed Full transcript toggle. Exports are recorded per transcript, so they never duplicate, and anything that failed (or predates the integration) is retried on the next relay boot. Setup and the pre-flight check are in [`backend/README.md`](backend/README.md#notion-export-optional).
 
 ## Transport API
 
@@ -74,7 +74,7 @@ Event payloads: `{type:"ready"}`, `{type:"caption",text,isFinal}`, `{type:"error
 cd backend
 npm install
 AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
-npm test            # 161 tests, no API key needed
+npm test            # 163 tests, no API key needed
 ```
 
 **Watch app** (see [`watch/README.md`](watch/README.md)):

@@ -75,6 +75,13 @@ function textOf(block: any): string {
   return block[block.type].rich_text.map((r: any) => r.text.content).join("");
 }
 
+/** The "Full transcript" toggle, now that pages carry a Summary toggle too. */
+function transcriptToggle(calls: Call[]): any {
+  return allBlocks(calls).find(
+    (b) => b.type === "toggle" && b.toggle.rich_text[0].text.content === "Full transcript",
+  );
+}
+
 describe("createNotionExporter", () => {
   it("creates a page in the configured database and returns its id and url", async () => {
     const notion = fakeNotion();
@@ -145,16 +152,51 @@ describe("createNotionExporter", () => {
     expect(Object.keys(props)).toEqual(["Name"]);
   });
 
-  it("writes the summary into the page body as blocks", async () => {
+  it("puts the summary in its own toggle, separate from the transcript", async () => {
     const notion = fakeNotion();
     const exporter = createNotionExporter({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
 
     await exporter(transcript(), "An overview.\n\n## Action items\n- ship it");
 
-    const texts = allBlocks(notion.calls).map(textOf);
-    expect(texts).toContain("An overview.");
-    expect(texts).toContain("Action items");
-    expect(texts).toContain("ship it");
+    const toggles = allBlocks(notion.calls).filter((b) => b.type === "toggle");
+    const titles = toggles.map((t) => t.toggle.rich_text[0].text.content);
+    expect(titles).toEqual(["Summary", "Full transcript"]);
+
+    const summary = toggles[0].toggle.children;
+    expect(summary.map(textOf)).toEqual(["An overview.", "Action items", "ship it"]);
+    expect(summary.map((b: any) => b.type)).toEqual([
+      "paragraph",
+      "heading_2",
+      "bulleted_list_item",
+    ]);
+  });
+
+  it("omits the summary toggle when there is no summary", async () => {
+    const notion = fakeNotion();
+    const exporter = createNotionExporter({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await exporter(transcript(), null);
+
+    const toggles = allBlocks(notion.calls).filter((b) => b.type === "toggle");
+    expect(toggles.map((t) => t.toggle.rich_text[0].text.content)).toEqual(["Full transcript"]);
+  });
+
+  it("appends summary blocks past the request limit into the summary toggle", async () => {
+    const notion = fakeNotion();
+    const exporter = createNotionExporter({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+    const longSummary = Array.from({ length: 150 }, (_, i) => `point ${i}`).join("\n");
+
+    await exporter(transcript(), longSummary);
+
+    const sent = allBlocks(notion.calls);
+    const summaryToggle = sent.find(
+      (b) => b.type === "toggle" && b.toggle.rich_text[0].text.content === "Summary",
+    )!;
+    expect(summaryToggle.toggle.children.length).toBeLessThanOrEqual(100);
+
+    const all = [...summaryToggle.toggle.children, ...sent.filter((b) => b.type === "paragraph")];
+    const points = all.map(textOf).filter((t) => t.startsWith("point "));
+    expect(points.length).toBe(150);
   });
 
   it("puts the transcript lines in a toggle", async () => {
@@ -163,7 +205,7 @@ describe("createNotionExporter", () => {
 
     await exporter(transcript(), "A short chat.");
 
-    const toggle = allBlocks(notion.calls).find((b) => b.type === "toggle")!;
+    const toggle = transcriptToggle(notion.calls);
     expect(toggle).toBeDefined();
     expect(toggle.toggle.children.map(textOf)).toEqual(["hello there", "how are you"]);
   });
@@ -182,7 +224,7 @@ describe("createNotionExporter", () => {
       null,
     );
 
-    const toggle = allBlocks(notion.calls).find((b) => b.type === "toggle")!;
+    const toggle = transcriptToggle(notion.calls);
     expect(toggle.toggle.children.map(textOf)).toEqual(["Me: my line", "Them: their line"]);
   });
 
@@ -197,7 +239,7 @@ describe("createNotionExporter", () => {
     await exporter(transcript({ segments }), null);
 
     const sent = allBlocks(notion.calls);
-    const toggle = sent.find((b) => b.type === "toggle")!;
+    const toggle = transcriptToggle(notion.calls);
     expect(toggle.toggle.children.length).toBeLessThanOrEqual(100);
 
     // Every line lands somewhere: inside the toggle or in a follow-up append.
@@ -230,7 +272,7 @@ describe("createNotionExporter", () => {
     const result = await exporter(transcript(), null);
 
     expect(result.pageId).toBe("page-1");
-    expect(allBlocks(notion.calls).find((b) => b.type === "toggle")).toBeDefined();
+    expect(transcriptToggle(notion.calls)).toBeDefined();
   });
 
   it("retries the schema lookup after it fails, instead of caching the failure", async () => {

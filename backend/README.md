@@ -31,8 +31,9 @@ npm test          # full unit/integration suite (no API key needed)
 ## Notion export (optional)
 
 When `NOTION_TOKEN` and `NOTION_DATABASE_ID` are both set, each finished session
-becomes a page in that database: the Claude summary in the page body, the full
-transcript inside a collapsed **Full transcript** toggle. Set neither and
+becomes a page in that database as two collapsed sections: a **Summary** toggle
+holding the Claude summary, and a **Full transcript** toggle holding every caption
+line. The Summary toggle is omitted when no summary was generated. Set neither and
 transcripts are still saved locally — only the export is skipped.
 
 Setup:

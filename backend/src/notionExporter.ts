@@ -66,33 +66,39 @@ export function createNotionExporter(opts: NotionExporterOptions): ExportTranscr
       });
     const properties = buildProperties(await schema, transcript);
 
-    const summaryBlocks = summary ? markdownToBlocks(summary) : [];
-    const [firstSummary = [], ...restSummary] = batches(summaryBlocks);
-
     const page = await request("/pages", "POST", {
       parent: { database_id: opts.databaseId },
       properties,
-      children: firstSummary,
     });
     const pageId = page.id as string;
 
-    for (const batch of restSummary) await appendChildren(request, pageId, batch);
-
-    // The toggle is appended (not created with the page) so the response hands
-    // back its block id — transcripts longer than one request nest under it.
-    const lines = transcript.segments.flatMap((s) => paragraph(label(s)));
-    const [firstLines = [], ...restLines] = batches(lines);
-    const created = await appendChildren(request, pageId, [
-      toggle("Full transcript", firstLines),
-    ]);
-    const toggleId = created.results?.[0]?.id as string | undefined;
-
-    if (toggleId) {
-      for (const batch of restLines) await appendChildren(request, toggleId, batch);
+    // Two collapsed sections: the summary and the raw transcript. Both are
+    // appended rather than created with the page, so each response hands back
+    // its toggle's block id and content longer than one request nests under it.
+    const summaryBlocks = summary ? markdownToBlocks(summary) : [];
+    if (summaryBlocks.length > 0) {
+      await appendToggle(request, pageId, "Summary", summaryBlocks);
     }
+
+    const lines = transcript.segments.flatMap((s) => paragraph(label(s)));
+    await appendToggle(request, pageId, "Full transcript", lines);
 
     return { pageId, url: page.url as string };
   };
+}
+
+/** Append a collapsed section, nesting any overflow beyond one request inside it. */
+async function appendToggle(
+  request: (path: string, method: string, body?: unknown) => Promise<any>,
+  pageId: string,
+  title: string,
+  blocks: NotionBlock[],
+): Promise<void> {
+  const [first = [], ...rest] = batches(blocks);
+  const created = await appendChildren(request, pageId, [toggle(title, first)]);
+  const toggleId = created.results?.[0]?.id as string | undefined;
+  if (!toggleId) return;
+  for (const batch of rest) await appendChildren(request, toggleId, batch);
 }
 
 function appendChildren(

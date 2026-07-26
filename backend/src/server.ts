@@ -6,7 +6,12 @@ import { verifyToken } from "./auth";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
-import { TranscriptStore, listTranscripts, readTranscript } from "./transcriptStore";
+import {
+  TranscriptStore,
+  listTranscripts,
+  readTranscript,
+  deleteTranscript,
+} from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
 
@@ -140,6 +145,27 @@ async function handleRequest(
       return;
     }
     sendJSON(res, 200, detail);
+    return;
+  }
+
+  // Deleting forgets the relay's copy — captions, summary, export marker. Any
+  // Notion page stays: it is the archive, and the only way back.
+  if (req.method === "DELETE" && url.pathname.startsWith("/v1/transcripts/")) {
+    if (!opts.transcriptsDir) {
+      sendJSON(res, 404, { error: "transcripts not enabled" });
+      return;
+    }
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const name = decodeURIComponent(url.pathname.slice("/v1/transcripts/".length));
+    if (!deleteTranscript(opts.transcriptsDir, name)) {
+      sendJSON(res, 404, { error: "not found" });
+      return;
+    }
+    sendJSON(res, 200, { deleted: name });
     return;
   }
 

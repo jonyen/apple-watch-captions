@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   existsSync,
+  rmSync,
 } from "fs";
 import { join, basename } from "path";
 import { parseSummary } from "./summaryPrompt";
@@ -189,6 +190,24 @@ export function readTranscript(dir: string, name: string): TranscriptDetail | nu
     segments: readSegments(file),
     summary: existsSync(summaryFile) ? readFileSync(summaryFile, "utf8") : null,
   };
+}
+
+/**
+ * Forget a stored transcript: its captions, its summary, and its export
+ * marker. False when the name is unsafe or no transcript is there. The Notion
+ * page, if one was exported, is left alone — it is the archive, and the only
+ * way back from a delete.
+ */
+export function deleteTranscript(dir: string, name: string): boolean {
+  if (!isSafeName(name)) return false;
+  const file = join(dir, `${name}.jsonl`);
+  if (!existsSync(file)) return false;
+  // Dropping the marker with the captions keeps the export backfill sweep from
+  // seeing a half-deleted transcript.
+  for (const suffix of [".jsonl", ".summary.md", ".notion.json"]) {
+    rmSync(join(dir, `${name}${suffix}`), { force: true });
+  }
+  return true;
 }
 
 /** Write a generated summary next to its transcript. */

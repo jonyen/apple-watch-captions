@@ -1,5 +1,10 @@
 .superpowers/
 
+# Secrets (Doppler downloads)
+.env
+*.env
+backend/.env
+
 # watchOS app
 watch/*.xcodeproj
 watch/WatchCaptions/Secrets.swift

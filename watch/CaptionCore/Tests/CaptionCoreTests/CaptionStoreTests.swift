@@ -188,7 +188,9 @@ final class CaptionStoreTests: XCTestCase {
         XCTAssertTrue(s.paragraphs.isEmpty)
     }
 
-    func testResetClearsAPendingBreak() {
+    /// Once `paragraphs` is empty, a stale `pendingBreak` has no observable
+    /// effect — so this pins the restart behaviour, not the flag itself.
+    func testASessionRestartedByResetJoinsItsFinals() {
         let clock = TestClock()
         let s = store(clock)
         s.apply(.caption(text: "before", isFinal: true, channel: nil))

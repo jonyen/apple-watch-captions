@@ -8,14 +8,19 @@ public final class SessionController {
     private let relay: Relay
     private let audio: AudioCapturing
     private let permission: MicPermissionProviding
+    private let history: HistoryClient?
+    /// Retained so tests can await the restore. The app never waits on it.
+    private var prefillTask: Task<Void, Never>?
     private var running = false
 
     public init(store: CaptionStore, relay: Relay,
-                audio: AudioCapturing, permission: MicPermissionProviding) {
+                audio: AudioCapturing, permission: MicPermissionProviding,
+                history: HistoryClient? = nil) {
         self.store = store
         self.relay = relay
         self.audio = audio
         self.permission = permission
+        self.history = history
         self.relay.onMessage = { [weak self] message in self?.handle(message) }
         self.relay.onClose = { [weak self] in self?.handleClose() }
     }
@@ -27,6 +32,7 @@ public final class SessionController {
         guard !running else { return }
         running = true
         store.reset()
+        prefillTask = nil
         guard await permission.ensureGranted() else {
             store.setError("Microphone access is off. Enable it in Settings › Privacy.")
             running = false
@@ -34,12 +40,14 @@ public final class SessionController {
         }
         guard running else { return }   // stopped during the await
         relay.connect(resuming: name)
+        if let name { restorePreviousTranscript(named: name) }
     }
 
     /// End the session and tear down audio + transport.
     public func stop() {
         guard running else { return }
         running = false
+        prefillTask?.cancel()
         audio.stop()
         relay.close()
     }
@@ -69,5 +77,25 @@ public final class SessionController {
             store.setError("Microphone error")
             stop()
         }
+    }
+
+    /// Put the transcript being resumed back in the scroll, so a conversation
+    /// you glanced away from reads continuously.
+    ///
+    /// Deliberately not awaited: the captions screen appears at once and the
+    /// history fills in behind it. A failure is dropped — an error banner over a
+    /// working session would be worse than missing scrollback.
+    private func restorePreviousTranscript(named name: String) {
+        guard let history else { return }
+        prefillTask = Task { [weak self] in
+            guard let segments = try? await history.detail(name: name).segments else { return }
+            guard let self, self.running else { return }
+            self.store.prepend(segments)
+        }
+    }
+
+    /// Awaits the restore started by `start(resuming:)`. Tests only.
+    func waitForPrefill() async {
+        await prefillTask?.value
     }
 }

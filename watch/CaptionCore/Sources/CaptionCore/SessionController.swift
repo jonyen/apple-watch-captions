@@ -11,7 +11,16 @@ public final class SessionController {
     private let history: HistoryClient?
     /// Retained so tests can await the restore. The app never waits on it.
     private var prefillTask: Task<Void, Never>?
+    /// The restore a new session superseded. Retained only so tests can await
+    /// it; production never waits on either slot.
+    private var supersededPrefillTask: Task<Void, Never>?
     private var running = false
+    /// Identifies the current session. `prefillTask?.cancel()` is only a
+    /// best-effort request — a fetch already in flight can still complete and
+    /// deliver a result after the session that started it has ended, so
+    /// `running` alone cannot tell that session apart from a later one that
+    /// reused the flag. Bumped whenever a session starts or ends.
+    private var generation = 0
 
     public init(store: CaptionStore, relay: Relay,
                 audio: AudioCapturing, permission: MicPermissionProviding,
@@ -31,7 +40,9 @@ public final class SessionController {
     public func start(resuming name: String? = nil) async {
         guard !running else { return }
         running = true
+        generation += 1
         store.reset()
+        supersededPrefillTask = prefillTask
         prefillTask = nil
         guard await permission.ensureGranted() else {
             store.setError("Microphone access is off. Enable it in Settings › Privacy.")
@@ -47,6 +58,7 @@ public final class SessionController {
     public func stop() {
         guard running else { return }
         running = false
+        generation += 1
         prefillTask?.cancel()
         audio.stop()
         relay.close()
@@ -65,6 +77,7 @@ public final class SessionController {
     private func handleClose() {
         guard running else { return }
         running = false
+        generation += 1   // this session is over too; see the note on `generation`
         store.setError("Connection lost")
         audio.stop()
     }
@@ -87,15 +100,19 @@ public final class SessionController {
     /// working session would be worse than missing scrollback.
     private func restorePreviousTranscript(named name: String) {
         guard let history else { return }
+        let generation = self.generation
         prefillTask = Task { [weak self] in
             guard let segments = try? await history.detail(name: name).segments else { return }
-            guard let self, self.running else { return }
+            guard let self, self.running, self.generation == generation else { return }
             self.store.prepend(segments)
         }
     }
 
-    /// Awaits the restore started by `start(resuming:)`. Tests only.
+    /// Awaits the restore started by `start(resuming:)`, including one that a
+    /// later `start` superseded before it finished. Tests only — production
+    /// never waits on either.
     func waitForPrefill() async {
+        await supersededPrefillTask?.value
         await prefillTask?.value
     }
 }

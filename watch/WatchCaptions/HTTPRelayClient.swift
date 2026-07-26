@@ -134,9 +134,14 @@ final class HTTPRelayClient: Relay {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
         if let seq = obj["seq"] as? Int { lastSeq = max(lastSeq, seq) }
-        if !transcriptDelivered, let name = obj["transcript"] as? String {
-            transcriptDelivered = true
-            if let onTranscript { Task { @MainActor in onTranscript(name) } }
+        if let name = obj["transcript"] as? String {
+            // Bind to this transcript from now on, so a session the relay has
+            // since reaped resumes into it rather than opening a new one.
+            resumeName = name
+            if !transcriptDelivered {
+                transcriptDelivered = true
+                if let onTranscript { Task { @MainActor in onTranscript(name) } }
+            }
         }
         guard let events = obj["events"] as? [[String: Any]] else { return }
         for event in events {

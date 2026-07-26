@@ -24,6 +24,10 @@ targets:
         WKWatchOnly: true
         CFBundleDisplayName: Captions
         NSMicrophoneUsageDescription: "Used to caption what people near you are saying."
+        # Keeps the app running with the mic live when the wrist drops and the
+        # screen turns off, so a conversation is not cut in half by a glance away.
+        UIBackgroundModes:
+          - audio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.watchcaptions.watchkitapp

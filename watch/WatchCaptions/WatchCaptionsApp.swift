@@ -13,11 +13,11 @@ struct WatchCaptionsApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            // Capture stops when the app leaves the foreground, but the session
-            // stays resumable — `launch()` decides whether to pick it back up.
+            // Lowering your wrist backgrounds the app but must not end the
+            // session — the audio background mode keeps the mic live, so
+            // capture simply continues. Only Stop ends a session.
             case .active: Task { await model.launch() }
-            case .background: model.pause()
-            case .inactive: break
+            case .background, .inactive: break
             @unknown default: break
             }
         }

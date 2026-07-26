@@ -1,6 +1,10 @@
 # WatchCaptions — watchOS live-caption app
 
 Standalone watchOS app that streams the Watch mic to the caption relay and shows live captions.
+Lowering your wrist does not stop a session. The app declares the `audio`
+background mode, so the mic stays live and captions keep accumulating with the
+screen off — only **Stop** ends a session.
+
 Opening the app picks up where you left off: if the last session ended less than
 ten minutes ago it resumes that transcript silently, so glancing away mid-conversation
 costs nothing. After a longer gap — or after you tap Stop, which is a decision rather

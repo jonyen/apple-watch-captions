@@ -50,8 +50,8 @@ struct TranscriptDetailView: View {
                     Text("Transcript")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    ForEach(detail.segments) { segment in
-                        Text(label(for: segment)).font(.system(size: 14))
+                    ForEach(buildParagraphs(from: detail.segments)) { paragraph in
+                        Text(label(for: paragraph)).font(.system(size: 14))
                     }
                 }
             }
@@ -59,12 +59,13 @@ struct TranscriptDetailView: View {
         }
     }
 
-    /// Mirrors how the relay labels dual-channel captures.
-    private func label(for segment: TranscriptSegment) -> String {
-        switch segment.channel {
-        case 0: return "Me: \(segment.text)"
-        case 1: return "Them: \(segment.text)"
-        default: return segment.text
+    /// Mirrors how the relay labels dual-channel captures. A change of channel
+    /// always starts a new paragraph, so one label per paragraph is right.
+    private func label(for paragraph: CaptionParagraph) -> String {
+        switch paragraph.channel {
+        case 0: return "Me: \(paragraph.text)"
+        case 1: return "Them: \(paragraph.text)"
+        default: return paragraph.text
         }
     }
 }

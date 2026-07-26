@@ -10,6 +10,7 @@ import {
   writeSummary,
   readExportMarker,
   writeExportMarker,
+  deleteTranscript,
 } from "./transcriptStore";
 
 describe("TranscriptStore", () => {
@@ -273,5 +274,56 @@ describe("activeName", () => {
     store.finalize("abc");
 
     expect(store.activeName("abc")).toBeUndefined();
+  });
+});
+
+describe("deleteTranscript", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "delete-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const T0 = Date.UTC(2026, 6, 6, 1, 2, 3);
+
+  /** A stored transcript with its summary and export marker alongside it. */
+  function storeOne(): string {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+    writeSummary(dir, name, "Title: A chat\n\nAn overview.");
+    writeExportMarker(dir, name, { pageId: "page-1", url: "https://notion.so/page-1" });
+    return name;
+  }
+
+  it("removes the transcript, its summary, and its export marker", () => {
+    const name = storeOne();
+
+    expect(deleteTranscript(dir, name)).toBe(true);
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(listTranscripts(dir)).toEqual([]);
+  });
+
+  it("deletes a transcript that was never summarized or exported", () => {
+    const store = new TranscriptStore({ dir, now: () => T0 });
+    store.append("abc", "hello");
+    const name = listTranscripts(dir)[0].name;
+
+    expect(deleteTranscript(dir, name)).toBe(true);
+
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("reports false for a transcript that is not there", () => {
+    expect(deleteTranscript(dir, "2026-07-06T01-02-03Z_missing")).toBe(false);
+  });
+
+  it("rejects path-traversal names without touching the filesystem", () => {
+    const name = storeOne();
+
+    expect(deleteTranscript(dir, "../../etc/passwd")).toBe(false);
+
+    expect(listTranscripts(dir).map((t) => t.name)).toEqual([name]);
   });
 });

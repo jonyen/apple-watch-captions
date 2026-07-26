@@ -87,6 +87,46 @@ describe("transcript persistence + endpoints", () => {
     expect(res.status).toBe(404);
   });
 
+  it("deletes a transcript so it drops off the listing", async () => {
+    const { providers, port } = start("good");
+    await fetch(`${base(port)}/v1/audio?session=s1&token=good`, { method: "POST" });
+    providers[0].emitTranscript({ text: "hello", isFinal: true });
+    const name = listTranscripts(dir)[0].name;
+
+    const res = await fetch(`${base(port)}/v1/transcripts/${name}?token=good`, {
+      method: "DELETE",
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ deleted: name });
+    const list = await (await fetch(`${base(port)}/v1/transcripts?token=good`)).json();
+    expect(list.transcripts).toEqual([]);
+  });
+
+  it("404s deleting an unknown transcript", async () => {
+    const { port } = start("good");
+    const res = await fetch(`${base(port)}/v1/transcripts/nope?token=good`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(404);
+    // Asserting the body, not just the status: the unrouted fallback also
+    // answers 404, so a bare status check would pass without the route.
+    expect(await res.json()).toEqual({ error: "not found" });
+  });
+
+  it("rejects a delete without a valid token", async () => {
+    const { providers, port } = start("good");
+    await fetch(`${base(port)}/v1/audio?session=s1&token=good`, { method: "POST" });
+    providers[0].emitTranscript({ text: "hello", isFinal: true });
+    const name = listTranscripts(dir)[0].name;
+    const url = `${base(port)}/v1/transcripts/${name}`;
+
+    expect((await fetch(url, { method: "DELETE" })).status).toBe(401);
+    expect((await fetch(`${url}?token=bad`, { method: "DELETE" })).status).toBe(401);
+
+    expect(listTranscripts(dir)).toHaveLength(1);
+  });
+
   it("serves the viewer page without a token", async () => {
     const { port } = start("good");
     const res = await fetch(`${base(port)}/app`);

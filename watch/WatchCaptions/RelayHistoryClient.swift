@@ -3,33 +3,18 @@ import CaptionCore
 
 /// Reads stored transcripts from the relay's `/v1/transcripts` endpoints.
 /// Plain `URLSession` requests, the only networking watchOS allows here.
+/// Decoding lives in CaptionCore, where it is unit-tested against the relay's
+/// real response shape.
 struct RelayHistoryClient: HistoryFetching {
     let base: URL
     let token: String
 
     func list() async throws -> [TranscriptListItem] {
-        let json = try await get(path: "v1/transcripts", name: nil)
-        guard let entries = json["transcripts"] as? [[String: Any]] else {
-            throw HistoryError.message("Unexpected response")
-        }
-        return entries.compactMap { entry in
-            guard let name = entry["name"] as? String else { return nil }
-            return TranscriptListItem(
-                name: name,
-                title: entry["title"] as? String,
-                startedAt: entry["startedAt"] as? String ?? "",
-                segmentCount: entry["segmentCount"] as? Int ?? 0,
-                hasSummary: entry["hasSummary"] as? Bool ?? false)
-        }
+        try decodeTranscriptList(await get(path: "v1/transcripts", name: nil))
     }
 
     func detail(name: String) async throws -> TranscriptDetail {
-        let json = try await get(path: "v1/transcripts", name: name)
-        let segments = (json["segments"] as? [[String: Any]] ?? []).map { segment in
-            TranscriptSegment(text: segment["text"] as? String ?? "",
-                              channel: segment["channel"] as? Int)
-        }
-        return TranscriptDetail(name: name, summary: json["summary"] as? String, segments: segments)
+        decodeTranscriptDetail(try await get(path: "v1/transcripts", name: name), name: name)
     }
 
     private func get(path: String, name: String?) async throws -> [String: Any] {

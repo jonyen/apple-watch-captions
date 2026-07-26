@@ -181,3 +181,31 @@ public final class HistoryStore: ObservableObject {
         (error as? HistoryError)?.text ?? error.localizedDescription
     }
 }
+
+// MARK: - Decoding
+
+/// Decode `GET /v1/transcripts`. Entries without a name are skipped rather than
+/// failing the whole list — one bad row should not empty the screen.
+public func decodeTranscriptList(_ json: [String: Any]) throws -> [TranscriptListItem] {
+    guard let entries = json["transcripts"] as? [[String: Any]] else {
+        throw HistoryError.message("Unexpected response")
+    }
+    return entries.compactMap { entry in
+        guard let name = entry["name"] as? String else { return nil }
+        return TranscriptListItem(
+            name: name,
+            title: entry["title"] as? String,
+            startedAt: entry["startedAt"] as? String ?? "",
+            segmentCount: entry["segmentCount"] as? Int ?? 0,
+            hasSummary: entry["hasSummary"] as? Bool ?? false)
+    }
+}
+
+/// Decode `GET /v1/transcripts/<name>`.
+public func decodeTranscriptDetail(_ json: [String: Any], name: String) -> TranscriptDetail {
+    let segments = (json["segments"] as? [[String: Any]] ?? []).map { segment in
+        TranscriptSegment(text: segment["text"] as? String ?? "",
+                          channel: segment["channel"] as? Int)
+    }
+    return TranscriptDetail(name: name, summary: json["summary"] as? String, segments: segments)
+}

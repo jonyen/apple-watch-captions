@@ -74,4 +74,17 @@ final class TranscriptDecodingTests: XCTestCase {
         XCTAssertTrue(detail.segments.isEmpty)
         XCTAssertNil(detail.summaryBody)
     }
+
+    func testDetailDecodesSegmentTimestamps() {
+        let json: [String: Any] = [
+            "segments": [
+                ["at": "2026-07-10T18:05:22Z", "text": "hello"],
+                ["text": "no timestamp"],
+            ],
+        ]
+
+        let detail = decodeTranscriptDetail(json, name: "2026-07-10T18-05-22Z_f9dd")
+
+        XCTAssertEqual(detail.segments.map(\.at), ["2026-07-10T18:05:22Z", nil])
+    }
 }

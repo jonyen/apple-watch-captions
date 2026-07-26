@@ -26,14 +26,19 @@ public struct TranscriptSegment: Equatable, Identifiable, Sendable {
     public let id = UUID()
     public let text: String
     public let channel: Int?
+    /// ISO 8601 time the final caption arrived, as the relay stores it. Absent
+    /// on rows written before the relay recorded it, and in tests that do not
+    /// care about timing.
+    public let at: String?
 
-    public init(text: String, channel: Int?) {
+    public init(text: String, channel: Int?, at: String? = nil) {
         self.text = text
         self.channel = channel
+        self.at = at
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.text == rhs.text && lhs.channel == rhs.channel
+        lhs.text == rhs.text && lhs.channel == rhs.channel && lhs.at == rhs.at
     }
 }
 
@@ -226,7 +231,8 @@ public func decodeTranscriptList(_ json: [String: Any]) throws -> [TranscriptLis
 public func decodeTranscriptDetail(_ json: [String: Any], name: String) -> TranscriptDetail {
     let segments = (json["segments"] as? [[String: Any]] ?? []).map { segment in
         TranscriptSegment(text: segment["text"] as? String ?? "",
-                          channel: segment["channel"] as? Int)
+                          channel: segment["channel"] as? Int,
+                          at: segment["at"] as? String)
     }
     return TranscriptDetail(name: name, summary: json["summary"] as? String, segments: segments)
 }

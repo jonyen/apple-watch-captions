@@ -41,9 +41,12 @@ cd watch && xcodebuild build -project WatchCaptions.xcodeproj -scheme WatchCapti
 ## Run on your Watch (manual)
 1. Open `WatchCaptions.xcodeproj` in Xcode, select your paired Apple Watch, set your signing team.
 2. Run. On first launch, allow the microphone prompt.
-3. Speak (or have someone speak) — captions appear live (partial dimmed → final). The green dot
-   means it's streaming. Lower your wrist / leave the app to stop.
-4. Error check: temporarily set a wrong `authToken` → app shows "Connection lost" / Try Again.
+3. Speak (or have someone speak) — captions appear live, flowing as a paragraph with the
+   dimmed in-progress text at the end. A pause of a few seconds starts a new paragraph.
+   The green dot means it's streaming. Lower your wrist / leave the app to stop.
+4. Reopen within ten minutes: the session resumes and its transcript so far is restored
+   above the live captions.
+5. Error check: temporarily set a wrong `authToken` → app shows "Connection lost" / Try Again.
 
 ## Verifying in the simulator
 

@@ -36,27 +36,28 @@ private struct RootView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            switch model.screen {
-            case .home:
+        if model.capturing {
+            // Capture owns the screen; there is nothing to navigate back to.
+            captions
+        } else {
+            NavigationStack(path: $model.path) {
                 HomeView(
                     lastSession: model.lastSession,
                     onNew: { Task { await model.startNew() } },
                     onContinue: { Task { await model.continueLast() } },
                     onBrowse: { Task { await model.showHistory() } })
-
-            case .captions:
-                captions
-
-            case .history:
-                HistoryListView(history: history) { name in
-                    Task { await model.showDetail(name: name) }
-                }
-
-            case .detail:
-                TranscriptDetailView(history: history) { name in
-                    Task { await model.resume(name: name) }
-                }
+                    .navigationDestination(for: AppModel.Route.self) { route in
+                        switch route {
+                        case .history:
+                            HistoryListView(history: history) { name in
+                                Task { await model.showDetail(name: name) }
+                            }
+                        case .detail:
+                            TranscriptDetailView(history: history) { name in
+                                Task { await model.resume(name: name) }
+                            }
+                        }
+                    }
             }
         }
     }

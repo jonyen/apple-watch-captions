@@ -3,15 +3,17 @@ import CaptionCore
 
 @MainActor
 final class AppModel: ObservableObject {
-    /// Which screen the app is on. Capture only runs on `.captions`.
-    enum Screen: Equatable {
-        case home
-        case captions
+    /// A screen pushed on top of the menu. Pushed views get a back chevron and
+    /// the edge-swipe gesture for free; a swapped-out root view does not.
+    enum Route: Hashable {
         case history
         case detail(name: String)
     }
 
-    @Published private(set) var screen: Screen = .home
+    /// Navigation stack above the menu.
+    @Published var path: [Route] = []
+    /// True while a session is capturing, which takes over the whole screen.
+    @Published private(set) var capturing = false
     let store = CaptionStore()
     let history: HistoryStore
 
@@ -54,19 +56,24 @@ final class AppModel: ObservableObject {
         if let forced = ProcessInfo.processInfo.arguments
             .drop(while: { $0 != "-startScreen" }).dropFirst().first {
             if forced == "history" { await showHistory(); return }
+            if forced == "detail" {
+                await showHistory()
+                if let first = history.items.first { await showDetail(name: first.name) }
+                return
+            }
         }
         #endif
 
         // Respect wherever the user navigated to; only a launch that lands on
         // the menu is eligible to auto-resume.
-        guard screen == .home else { return }
+        guard !capturing, path.isEmpty else { return }
 
         switch launchAction(last: lastSession, now: Date(),
                             stoppedExplicitly: stoppedExplicitly) {
         case .resume(let name):
             await startCaptions(resuming: name)
         case .menu:
-            screen = .home
+            break   // already on the menu
         }
     }
 
@@ -89,7 +96,8 @@ final class AppModel: ObservableObject {
     private func startCaptions(resuming name: String?) async {
         stoppedExplicitly = false
         currentTranscript = name
-        screen = .captions
+        path = []            // capture replaces the stack, not pushes onto it
+        capturing = true
         await controller.start(resuming: name)
     }
 
@@ -98,13 +106,13 @@ final class AppModel: ObservableObject {
         stoppedExplicitly = true
         controller.stop()
         rememberCurrentSession()
-        screen = .home
+        capturing = false
     }
 
     /// Backgrounding stops capture but keeps the session resumable — the relay
     /// holds the transcript open for ten minutes.
     func pause() {
-        guard screen == .captions else { return }
+        guard capturing else { return }
         controller.stop()
         rememberCurrentSession()
     }
@@ -119,15 +127,13 @@ final class AppModel: ObservableObject {
 
     // MARK: - Navigation
 
-    func showHome() { screen = .home }
-
     func showHistory() async {
-        screen = .history
+        path = [.history]
         await history.load()
     }
 
     func showDetail(name: String) async {
-        screen = .detail(name: name)
+        path.append(.detail(name: name))
         await history.loadDetail(name: name)
     }
 

@@ -8,10 +8,11 @@ final class SessionControllerTests: XCTestCase {
         var onMessage: (@MainActor (ServerMessage) -> Void)?
         var onClose: (@MainActor () -> Void)?
         var connected = false
+        var connectCount = 0
         var resumedName: String??
         var closed = false
         var sent: [Data] = []
-        func connect(resuming name: String?) { connected = true; resumedName = name }
+        func connect(resuming name: String?) { connected = true; connectCount += 1; resumedName = name }
         func send(_ audio: Data) { sent.append(audio) }
         func close() { closed = true }
         @MainActor func deliver(_ m: ServerMessage) { onMessage?(m) }
@@ -81,6 +82,49 @@ final class SessionControllerTests: XCTestCase {
             if registeredCalls < count {
                 await withCheckedContinuation { arrivalWatchers.append((count, $0)) }
             }
+            waiters.forEach { $0.resume() }
+            waiters.removeAll()
+        }
+
+        private func notifyArrivals() {
+            arrivalWatchers.removeAll { watcher in
+                guard registeredCalls >= watcher.need else { return false }
+                watcher.continuation.resume()
+                return true
+            }
+        }
+    }
+
+    /// A `MicPermissionProviding` whose `ensureGranted()` calls block until a
+    /// test releases them, so a `start` suspended mid-permission-check can be
+    /// superseded deterministically instead of racing on real concurrency.
+    /// Mirrors `GatedHistory`, split into a separate arrival wait and release
+    /// since the caller needs to act (stop + start again) between the two.
+    actor GatedPermission: MicPermissionProviding {
+        private let granted: Bool
+        private var registeredCalls = 0
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private var arrivalWatchers: [(need: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+        init(granted: Bool = true) { self.granted = granted }
+
+        func ensureGranted() async -> Bool {
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+                registeredCalls += 1
+                notifyArrivals()
+            }
+            return granted
+        }
+
+        /// Waits until `count` calls have arrived, without releasing them.
+        func waitForArrival(_ count: Int) async {
+            if registeredCalls < count {
+                await withCheckedContinuation { arrivalWatchers.append((count, $0)) }
+            }
+        }
+
+        func releaseAll() {
             waiters.forEach { $0.resume() }
             waiters.removeAll()
         }
@@ -270,5 +314,37 @@ final class SessionControllerTests: XCTestCase {
         await controller.waitForPrefill()   // covers both the current and the superseded restore
 
         XCTAssertEqual(store.paragraphs.map(\.text), ["earlier talk"])
+    }
+
+    /// The mirror image of `testAStaleRestoreDoesNotLandInALaterSession`, one
+    /// step earlier: a `start` suspended in the permission check — before
+    /// `running` even means anything about *which* session — must not go on
+    /// to connect for its own stale session once a stop + second start have
+    /// superseded it. `running` alone can't distinguish the two; only
+    /// `generation` can.
+    func testASupersededStartDoesNotConnect() async {
+        let permission = GatedPermission()
+        let store = CaptionStore()
+        let relay = FakeRelay()
+        let audio = FakeAudio()
+        let controller = SessionController(store: store, relay: relay, audio: audio,
+                                            permission: permission)
+
+        let staleStart = Task { await controller.start(resuming: "stale") }
+        await permission.waitForArrival(1)
+
+        controller.stop()
+        let currentStart = Task { await controller.start(resuming: "current") }
+        await permission.waitForArrival(2)
+
+        // Release both permission checks together; order between them no
+        // longer matters because the guard, not sequencing, must keep the
+        // stale one from connecting.
+        await permission.releaseAll()
+        await staleStart.value
+        await currentStart.value
+
+        XCTAssertEqual(relay.connectCount, 1)
+        XCTAssertEqual(relay.resumedName, "current")
     }
 }

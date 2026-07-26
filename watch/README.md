@@ -43,7 +43,7 @@ cd watch && xcodebuild build -project WatchCaptions.xcodeproj -scheme WatchCapti
 2. Run. On first launch, allow the microphone prompt.
 3. Speak (or have someone speak) — captions appear live, flowing as a paragraph with the
    dimmed in-progress text at the end. A pause of a few seconds starts a new paragraph.
-   The green dot means it's streaming. Lower your wrist / leave the app to stop.
+   The green dot means it's streaming.
 4. Lower your wrist or leave the app, then reopen within ten minutes: the session resumes
    and its transcript so far is restored above the live captions. (Tapping **Stop** instead
    ends the session for good — reopening lands on the menu, not a resume.)

@@ -41,6 +41,7 @@ public final class SessionController {
         guard !running else { return }
         running = true
         generation += 1
+        let generation = self.generation
         store.reset()
         supersededPrefillTask = prefillTask
         prefillTask = nil
@@ -49,7 +50,9 @@ public final class SessionController {
             running = false
             return
         }
-        guard running else { return }   // stopped during the await
+        // `running` alone can't tell this session apart from a stop+start that
+        // reused the flag while we were suspended; compare generation too.
+        guard running, self.generation == generation else { return }
         relay.connect(resuming: name)
         if let name { restorePreviousTranscript(named: name) }
     }
@@ -78,6 +81,7 @@ public final class SessionController {
         guard running else { return }
         running = false
         generation += 1   // this session is over too; see the note on `generation`
+        prefillTask?.cancel()
         store.setError("Connection lost")
         audio.stop()
     }

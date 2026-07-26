@@ -27,7 +27,8 @@ struct CaptionView: View {
             .toolbar {
                 // Lowering your wrist no longer ends the session, so ending it
                 // needs somewhere to live.
-                ToolbarItem(placement: .cancellationAction) {
+                // Trailing, so it does not take the back chevron's slot.
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(action: onStop) {
                         Label("Stop", systemImage: "stop.fill")
                     }

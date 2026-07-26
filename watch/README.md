@@ -50,4 +50,6 @@ accept a launch argument that opens a screen directly:
 xcrun simctl launch <sim-id> com.jonyen.watchcaptions.watchkitapp -startScreen history
 ```
 
+`captions` and `detail` work the same way.
+
 It is compiled out of release builds.

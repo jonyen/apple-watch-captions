@@ -6,6 +6,7 @@ final class AppModel: ObservableObject {
     /// A screen pushed on top of the menu. Pushed views get a back chevron and
     /// the edge-swipe gesture for free; a swapped-out root view does not.
     enum Route: Hashable {
+        case captions
         case history
         case detail(name: String)
     }
@@ -56,6 +57,7 @@ final class AppModel: ObservableObject {
         if let forced = ProcessInfo.processInfo.arguments
             .drop(while: { $0 != "-startScreen" }).dropFirst().first {
             if forced == "history" { await showHistory(); return }
+            if forced == "captions" { path = [.captions]; capturing = true; return }
             if forced == "detail" {
                 await showHistory()
                 if let first = history.items.first { await showDetail(name: first.name) }
@@ -96,14 +98,28 @@ final class AppModel: ObservableObject {
     private func startCaptions(resuming name: String?) async {
         stoppedExplicitly = false
         currentTranscript = name
-        path = []            // capture replaces the stack, not pushes onto it
+        path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
         await controller.start(resuming: name)
     }
 
     /// End the session and remember it, so reopening can offer to continue.
+    /// Ends the session deliberately: it will not be auto-resumed on reopen.
     func stop() {
         stoppedExplicitly = true
+        endCapture()
+        path = []
+    }
+
+    /// Navigating back leaves the session paused rather than ended, so it is
+    /// still offered under "Continue last" and auto-resumes if you come
+    /// straight back.
+    func leaveCaptions() {
+        guard capturing else { return }
+        endCapture()
+    }
+
+    private func endCapture() {
         controller.stop()
         rememberCurrentSession()
         capturing = false

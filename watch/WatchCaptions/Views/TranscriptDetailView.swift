@@ -29,7 +29,8 @@ struct TranscriptDetailView: View {
     }
 
     private func content(for detail: TranscriptDetail) -> some View {
-        ScrollView {
+        let paragraphs = buildParagraphs(from: detail.segments)
+        return ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 if let title = detail.title {
                     Text(title).font(.system(size: 16, weight: .semibold))
@@ -46,11 +47,13 @@ struct TranscriptDetailView: View {
                 }
                 .padding(.vertical, 4)
 
-                if !detail.segments.isEmpty {
+                // Guard on paragraphs, not raw segments: empty-text segments are
+                // dropped when building paragraphs, so the header must not outlive its rows.
+                if !paragraphs.isEmpty {
                     Text("Transcript")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    ForEach(buildParagraphs(from: detail.segments)) { paragraph in
+                    ForEach(paragraphs) { paragraph in
                         Text(label(for: paragraph)).font(.system(size: 14))
                     }
                 }

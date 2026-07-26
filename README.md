@@ -12,6 +12,21 @@ or the Watch's own **cellular** when the phone is away.
 
 *Live on the watch: finalized lines in white, the in-progress caption in gray.*
 
+<table>
+<tr>
+<td><img src="docs/images/watch-home.png" alt="The menu, listing New session and Transcripts" width="240"></td>
+<td><img src="docs/images/watch-transcripts.png" alt="Past transcripts, each row showing what the session was about with its date beneath" width="240"></td>
+<td><img src="docs/images/watch-transcript-detail.png" alt="One transcript, showing its title and summary" width="240"></td>
+</tr>
+<tr>
+<td align="center"><em>Menu</em></td>
+<td align="center"><em>Transcripts</em></td>
+<td align="center"><em>Summary</em></td>
+</tr>
+</table>
+
+*Transcripts and summaries shown above use sample data.*
+
 ## How it works
 
 ```

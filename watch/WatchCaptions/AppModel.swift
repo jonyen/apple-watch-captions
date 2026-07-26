@@ -48,6 +48,15 @@ final class AppModel: ObservableObject {
     /// Decide what opening the app does: pick up a conversation you glanced away
     /// from, or offer the menu.
     func launch() async {
+        #if DEBUG
+        // Lets a harness open a screen directly, since the watchOS simulator
+        // offers no way to drive taps from the command line.
+        if let forced = ProcessInfo.processInfo.arguments
+            .drop(while: { $0 != "-startScreen" }).dropFirst().first {
+            if forced == "history" { await showHistory(); return }
+        }
+        #endif
+
         // Respect wherever the user navigated to; only a launch that lands on
         // the menu is eligible to auto-resume.
         guard screen == .home else { return }

@@ -40,3 +40,14 @@ cd watch && xcodebuild build -project WatchCaptions.xcodeproj -scheme WatchCapti
 3. Speak (or have someone speak) — captions appear live (partial dimmed → final). The green dot
    means it's streaming. Lower your wrist / leave the app to stop.
 4. Error check: temporarily set a wrong `authToken` → app shows "Connection lost" / Try Again.
+
+## Verifying in the simulator
+
+The watchOS simulator has no command-line way to drive taps, so debug builds
+accept a launch argument that opens a screen directly:
+
+```bash
+xcrun simctl launch <sim-id> com.jonyen.watchcaptions.watchkitapp -startScreen history
+```
+
+It is compiled out of release builds.

@@ -76,7 +76,7 @@ final class SessionControllerTests: XCTestCase {
         await c.start()
         relay.deliver(.ready)
         relay.deliver(.caption(text: "hi", isFinal: true, channel: nil))
-        XCTAssertEqual(store.lines, [CaptionLine(text: "hi", channel: nil)])
+        XCTAssertEqual(store.paragraphs.map(\.text), ["hi"])
     }
 
     func testRelayErrorStopsAndShowsError() async {

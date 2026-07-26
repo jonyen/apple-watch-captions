@@ -9,8 +9,8 @@ struct CaptionView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.lines) { line in
-                        Text(line.text).font(.system(size: 16))
+                    ForEach(store.paragraphs) { paragraph in
+                        Text(paragraph.text).font(.system(size: 16))
                     }
                     if !store.partial.isEmpty {
                         Text(store.partial).font(.system(size: 16)).foregroundStyle(.secondary)
@@ -19,7 +19,7 @@ struct CaptionView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: store.lines.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: store.paragraphs.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: store.partial) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .overlay(alignment: .topTrailing) {
                 Circle().fill(.green).frame(width: 7, height: 7)

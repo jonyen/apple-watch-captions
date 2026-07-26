@@ -1,11 +1,20 @@
 import XCTest
 @testable import CaptionCore
 
-private struct FakeHistory: HistoryFetching {
+/// Records what the store asked the relay to delete. A box, because the client
+/// protocol is `Sendable` and its methods cannot mutate the fake.
+private final class DeleteLog: @unchecked Sendable {
+    private(set) var names: [String] = []
+    func record(_ name: String) { names.append(name) }
+}
+
+private struct FakeHistory: HistoryClient {
     var items: [TranscriptListItem] = []
     var detail: TranscriptDetail?
     var listError: Error?
     var detailError: Error?
+    var deleteError: Error?
+    let deleted = DeleteLog()
 
     func list() async throws -> [TranscriptListItem] {
         if let listError { throw listError }
@@ -16,6 +25,11 @@ private struct FakeHistory: HistoryFetching {
         if let detailError { throw detailError }
         guard let detail else { throw HistoryError.message("missing") }
         return detail
+    }
+
+    func delete(name: String) async throws {
+        if let deleteError { throw deleteError }
+        deleted.record(name)
     }
 }
 
@@ -94,6 +108,45 @@ final class HistoryStoreTests: XCTestCase {
         await recovered.load()
 
         XCTAssertEqual(recovered.listState, .loaded)
+    }
+
+    func testDeleteDropsTheRowAndTellsTheRelay() async {
+        let fake = FakeHistory(items: [item("a", title: "A"), item("b", title: "B"),
+                                       item("c", title: "C")])
+        let store = HistoryStore(client: fake)
+        await store.load()
+
+        await store.delete(item("b", title: "B"))
+
+        XCTAssertEqual(store.items.map(\.name), ["a", "c"])
+        XCTAssertEqual(fake.deleted.names, ["b"])
+        XCTAssertNil(store.deleteError)
+    }
+
+    func testFailedDeletePutsTheRowBackWhereItWas() async {
+        let fake = FakeHistory(items: [item("a", title: "A"), item("b", title: "B"),
+                                       item("c", title: "C")],
+                               deleteError: HistoryError.message("relay down"))
+        let store = HistoryStore(client: fake)
+        await store.load()
+
+        await store.delete(item("b", title: "B"))
+
+        XCTAssertEqual(store.items.map(\.name), ["a", "b", "c"])
+        XCTAssertEqual(store.deleteError, "relay down")
+    }
+
+    func testDismissingTheDeleteErrorClearsIt() async {
+        let fake = FakeHistory(items: [item("a", title: "A")],
+                               deleteError: HistoryError.message("relay down"))
+        let store = HistoryStore(client: fake)
+        await store.load()
+        await store.delete(item("a", title: "A"))
+        XCTAssertNotNil(store.deleteError)
+
+        store.clearDeleteError()
+
+        XCTAssertNil(store.deleteError)
     }
 }
 

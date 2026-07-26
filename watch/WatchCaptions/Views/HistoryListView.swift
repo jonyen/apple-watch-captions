@@ -24,10 +24,29 @@ struct HistoryListView: View {
                     Button { onSelect(item.name) } label: {
                         row(for: item)
                     }
+                    // No full swipe: the gesture always ends on a deliberate
+                    // tap of the trash, since there is no undo on the watch.
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            Task { await history.delete(item) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
             }
         }
         .navigationTitle("Transcripts")
+        .alert("Couldn't delete", isPresented: deleteFailed) {
+            Button("OK") { history.clearDeleteError() }
+        } message: {
+            Text(history.deleteError ?? "")
+        }
+    }
+
+    private var deleteFailed: Binding<Bool> {
+        Binding(get: { history.deleteError != nil },
+                set: { if !$0 { history.clearDeleteError() } })
     }
 
     private func row(for item: TranscriptListItem) -> some View {

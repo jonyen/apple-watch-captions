@@ -128,10 +128,11 @@ public enum HistoryError: Error, Equatable {
     }
 }
 
-/// Reads stored transcripts from the relay.
-public protocol HistoryFetching: Sendable {
+/// Reads and removes stored transcripts on the relay.
+public protocol HistoryClient: Sendable {
     func list() async throws -> [TranscriptListItem]
     func detail(name: String) async throws -> TranscriptDetail
+    func delete(name: String) async throws
 }
 
 public enum LoadState: Equatable, Sendable {
@@ -148,11 +149,31 @@ public final class HistoryStore: ObservableObject {
     @Published public private(set) var listState: LoadState = .idle
     @Published public private(set) var detail: TranscriptDetail?
     @Published public private(set) var detailState: LoadState = .idle
+    /// Set when a delete failed and its row was put back; the list alerts on it.
+    @Published public private(set) var deleteError: String?
 
-    private let client: HistoryFetching
+    private let client: HistoryClient
 
-    public init(client: HistoryFetching) {
+    public init(client: HistoryClient) {
         self.client = client
+    }
+
+    /// Forget a transcript. The row leaves the list before the relay is asked,
+    /// so it clears out from under the swipe; a failure puts it back where it
+    /// was and raises `deleteError`.
+    public func delete(_ item: TranscriptListItem) async {
+        guard let index = items.firstIndex(of: item) else { return }
+        items.remove(at: index)
+        do {
+            try await client.delete(name: item.name)
+        } catch {
+            items.insert(item, at: min(index, items.count))
+            deleteError = message(from: error)
+        }
+    }
+
+    public func clearDeleteError() {
+        deleteError = nil
     }
 
     public func load() async {

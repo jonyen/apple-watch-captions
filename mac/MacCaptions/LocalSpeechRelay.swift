@@ -17,7 +17,9 @@ final class LocalSpeechRelay: NSObject, Relay {
     private var tickTimer: DispatchSourceTimer?
     private var stopped = false
 
-    func connect() {
+    // Mac sessions always start fresh; resuming a named transcript (a watch
+    // feature) doesn't apply here, so the parameter is accepted and ignored.
+    func connect(resuming _: String?) {
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             guard let self else { return }
             self.queue.async {

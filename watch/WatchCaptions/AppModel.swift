@@ -34,13 +34,17 @@ final class AppModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let base = Self.httpBase(from: Secrets.relayURL)
+        let historyClient = RelayHistoryClient(base: base, token: Secrets.authToken)
         relay = HTTPRelayClient(base: base, token: Secrets.authToken)
-        history = HistoryStore(client: RelayHistoryClient(base: base, token: Secrets.authToken))
+        history = HistoryStore(client: historyClient)
         controller = SessionController(
             store: store,
             relay: relay,
             audio: AudioCapture(),
-            permission: MicPermission()
+            permission: MicPermission(),
+            // Resuming a session restores its transcript; this reads it. Kept
+            // off HistoryStore, whose `detail` belongs to the history screen.
+            history: historyClient
         )
         lastSession = Self.loadLastSession(from: defaults)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }

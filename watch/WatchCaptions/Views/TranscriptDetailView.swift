@@ -29,7 +29,8 @@ struct TranscriptDetailView: View {
     }
 
     private func content(for detail: TranscriptDetail) -> some View {
-        ScrollView {
+        let paragraphs = buildParagraphs(from: detail.segments)
+        return ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 if let title = detail.title {
                     Text(title).font(.system(size: 16, weight: .semibold))
@@ -46,12 +47,14 @@ struct TranscriptDetailView: View {
                 }
                 .padding(.vertical, 4)
 
-                if !detail.segments.isEmpty {
+                // Guard on paragraphs, not raw segments: empty-text segments are
+                // dropped when building paragraphs, so the header must not outlive its rows.
+                if !paragraphs.isEmpty {
                     Text("Transcript")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    ForEach(detail.segments) { segment in
-                        Text(label(for: segment)).font(.system(size: 14))
+                    ForEach(paragraphs) { paragraph in
+                        Text(label(for: paragraph)).font(.system(size: 14))
                     }
                 }
             }
@@ -59,12 +62,13 @@ struct TranscriptDetailView: View {
         }
     }
 
-    /// Mirrors how the relay labels dual-channel captures.
-    private func label(for segment: TranscriptSegment) -> String {
-        switch segment.channel {
-        case 0: return "Me: \(segment.text)"
-        case 1: return "Them: \(segment.text)"
-        default: return segment.text
+    /// Mirrors how the relay labels dual-channel captures. A change of channel
+    /// always starts a new paragraph, so one label per paragraph is right.
+    private func label(for paragraph: CaptionParagraph) -> String {
+        switch paragraph.channel {
+        case 0: return "Me: \(paragraph.text)"
+        case 1: return "Them: \(paragraph.text)"
+        default: return paragraph.text
         }
     }
 }

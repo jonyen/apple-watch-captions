@@ -124,8 +124,10 @@ private struct CaptionFlow: View {
     @ObservedObject var store: CaptionStore
     let fontSize: Double
 
+    // The panel is a single flowing line of text by design, so paragraph
+    // breaks are joined away here rather than shown.
     private var finals: String {
-        store.lines.map(\.text).joined(separator: " ")
+        store.paragraphs.map(\.text).joined(separator: " ")
     }
     private var partial: String {
         store.partials.sorted { $0.key < $1.key }

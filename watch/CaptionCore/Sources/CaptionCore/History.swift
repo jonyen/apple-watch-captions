@@ -107,13 +107,7 @@ public struct TranscriptRow: Equatable, Sendable {
 
     /// `Jul 10, 6:05 PM`, or the raw value if it will not parse.
     static func format(_ iso: String, timeZone: TimeZone) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = parser.date(from: iso) ?? {
-            parser.formatOptions = [.withInternetDateTime]
-            return parser.date(from: iso)
-        }()
-        guard let date else { return iso }
+        guard let date = parseISODate(iso) else { return iso }
 
         let out = DateFormatter()
         out.locale = Locale(identifier: "en_US_POSIX")

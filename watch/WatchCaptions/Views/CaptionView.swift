@@ -6,35 +6,36 @@ struct CaptionView: View {
     let onStop: () -> Void
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(store.paragraphs.enumerated()), id: \.element.id) { index, paragraph in
-                        text(for: paragraph, isLast: index == store.paragraphs.count - 1)
-                            .font(.system(size: 16))
-                    }
-                    // Nothing final yet: the partial is all there is to show.
-                    if store.paragraphs.isEmpty, !store.partial.isEmpty {
-                        Text(store.partial).font(.system(size: 16)).foregroundStyle(.secondary)
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(store.paragraphs.enumerated()), id: \.element.id) { index, paragraph in
+                    text(for: paragraph, isLast: index == store.paragraphs.count - 1)
+                        .font(.system(size: 16))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Nothing final yet: the partial is all there is to show.
+                if store.paragraphs.isEmpty, !store.partial.isEmpty {
+                    Text(store.partial).font(.system(size: 16)).foregroundStyle(.secondary)
+                }
             }
-            .onChange(of: store.paragraphs.count) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: store.paragraphs.last?.text) { _, _ in scrollToBottom(proxy) }
-            .onChange(of: store.partial) { _, _ in scrollToBottom(proxy) }
-            .overlay(alignment: .topTrailing) {
-                Circle().fill(.green).frame(width: 7, height: 7)
-            }
-            .toolbar {
-                // Lowering your wrist no longer ends the session, so ending it
-                // needs somewhere to live.
-                // Trailing, so it does not take the back chevron's slot.
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onStop) {
-                        Label("Stop", systemImage: "stop.fill")
-                    }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Stay with the newest caption as text arrives, but let a scroll up
+        // stick. Driving this by scrolling to a sentinel on every change fought
+        // the user instead: partials land about once a second, so each attempt
+        // to read back was yanked to the bottom within a second — and a resumed
+        // session's restored transcript, which arrives above the live captions,
+        // was scrolled past the moment it landed and could not be reached.
+        .defaultScrollAnchor(.bottom)
+        .overlay(alignment: .topTrailing) {
+            Circle().fill(.green).frame(width: 7, height: 7)
+        }
+        .toolbar {
+            // Lowering your wrist no longer ends the session, so ending it
+            // needs somewhere to live.
+            // Trailing, so it does not take the back chevron's slot.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
                 }
             }
         }
@@ -45,9 +46,5 @@ struct CaptionView: View {
     private func text(for paragraph: CaptionParagraph, isLast: Bool) -> Text {
         guard isLast, !store.partial.isEmpty else { return Text(paragraph.text) }
         return Text(paragraph.text) + Text(" " + store.partial).foregroundStyle(.secondary)
-    }
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        proxy.scrollTo("bottom", anchor: .bottom)
     }
 }

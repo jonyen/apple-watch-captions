@@ -44,9 +44,11 @@ cd watch && xcodebuild build -project WatchCaptions.xcodeproj -scheme WatchCapti
 3. Speak (or have someone speak) — captions appear live, flowing as a paragraph with the
    dimmed in-progress text at the end. A pause of a few seconds starts a new paragraph.
    The green dot means it's streaming.
-4. Lower your wrist or leave the app, then reopen within ten minutes: the session resumes
-   and its transcript so far is restored above the live captions. (Tapping **Stop** instead
-   ends the session for good — reopening lands on the menu, not a resume.)
+4. Lowering your wrist keeps recording, so the session continues and there is nothing to
+   restore. To see a restore, swipe back to the menu (which does end capture) and tap
+   **Continue** — the transcript so far reappears above the live captions, and you can
+   scroll up to read it. Browse → a transcript → "Continue this session" does the same.
+   (Tapping **Stop** ends the session for good — it is never resumed.)
 5. Error check: temporarily set a wrong `authToken` → app shows "Connection lost" / Try Again.
 
 ## Verifying in the simulator

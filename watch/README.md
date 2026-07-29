@@ -19,7 +19,16 @@ to continue that conversation.
   `SessionController`, protocols). Unit-tested with `swift test`.
 - `WatchCaptions/` — the watchOS app: `RelayClient` (WebSocket), `AudioCapture` (mic →
   16 kHz mono Int16 PCM), `MicPermission`, SwiftUI views, `@main` app.
+- `Scripts/stamp-git-commit.sh` — build phase that writes the checkout's commit into
+  the built `Info.plist`.
 - `project.yml` — XcodeGen project definition. The `.xcodeproj` is generated (gitignored).
+
+## Which build is this
+The home screen ends with a line like `1.0 (7664d60)` — the marketing version and the
+commit the build came from, so a report from your wrist can name one. A trailing `*`
+(`1.0 (7664d60*)`) means the build was made with uncommitted changes, so the commit
+alone does not describe it. Builds made outside a git checkout fall back to the build
+number.
 
 ## Setup
 1. `cp WatchCaptions/Secrets.example.swift WatchCaptions/Secrets.swift`

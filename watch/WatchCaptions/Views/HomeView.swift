@@ -7,6 +7,8 @@ struct HomeView: View {
     let onNew: () -> Void
     let onContinue: () -> Void
     let onBrowse: () -> Void
+    /// Which build this is, so a bug report can name one. Injectable for previews.
+    var versionLabel: String = AppBuild.versionLabel
 
     var body: some View {
         List {
@@ -21,6 +23,13 @@ struct HomeView: View {
             Button(action: onBrowse) {
                 Label("Transcripts", systemImage: "list.bullet")
             }
+            // Sits under the actions as a caption, not as a fourth thing to tap.
+            Text(versionLabel)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.clear)
+                .accessibilityLabel("Version \(versionLabel)")
         }
         .navigationTitle("Captions")
     }

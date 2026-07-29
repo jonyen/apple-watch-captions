@@ -17,6 +17,13 @@ targets:
           - Icon
     dependencies:
       - package: CaptionCore
+    postCompileScripts:
+      # Stamps GitCommit into the built Info.plist for the home screen's build
+      # line. After the plist is processed, before signing, and every build —
+      # it has no outputs to date-check against.
+      - name: Stamp git commit
+        script: '"$PROJECT_DIR/Scripts/stamp-git-commit.sh"'
+        basedOnDependencyAnalysis: false
     info:
       path: WatchCaptions/Info.plist
       properties:
@@ -32,6 +39,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.watchcaptions.watchkitapp
         GENERATE_INFOPLIST_FILE: NO
+        # The commit stamp reaches outside the sandbox: it runs git in the
+        # checkout and edits the built plist.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         DEVELOPMENT_TEAM: "7PZN69YDL4"

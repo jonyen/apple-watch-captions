@@ -156,9 +156,11 @@ final class AppModel: ObservableObject {
         live = false
     }
 
-    /// Backgrounding stops capture but keeps the session resumable — the relay
-    /// holds the transcript open for ten minutes. A live session is the
-    /// exception: there is nothing held open, so it simply ends.
+    /// Stops capture and records the session: a saved session as resumable —
+    /// the relay holds the transcript open for ten minutes — and a live
+    /// session as deliberately ended, via `rememberCurrentSession`'s early
+    /// return. Leaves `capturing`/`live` untouched, so this is not a
+    /// substitute for `endCapture()`. Currently uncalled.
     func pause() {
         guard capturing else { return }
         controller.stop()

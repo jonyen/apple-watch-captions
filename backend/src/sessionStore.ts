@@ -12,6 +12,12 @@ interface Session {
   events: SeqEvent[];
   seq: number;
   lastActivity: number;
+  /**
+   * Live-only: the relay keeps no transcript for this session. Fixed when the
+   * session is created, so no later request can change what a conversation
+   * already in progress does with what it hears.
+   */
+  ephemeral: boolean;
 }
 
 export interface SessionStoreOptions {
@@ -49,9 +55,12 @@ export class SessionStore {
     this.transcripts = opts.transcripts;
   }
 
-  /** Feed audio (may be empty) for a session, lazily creating it on first use. */
-  feed(id: string, pcm: Buffer): void {
-    const session = this.getOrCreate(id);
+  /**
+   * Feed audio (may be empty) for a session, lazily creating it on first use.
+   * `ephemeral` is honoured only on creation — see `Session.ephemeral`.
+   */
+  feed(id: string, pcm: Buffer, ephemeral = false): void {
+    const session = this.getOrCreate(id, ephemeral);
     session.lastActivity = this.now();
     if (pcm.length > 0) session.caption.handleAudio(pcm);
   }
@@ -77,7 +86,7 @@ export class SessionStore {
     if (!session) return;
     session.caption.close();
     this.sessions.delete(id);
-    this.transcripts?.finalize(id);
+    if (!session.ephemeral) this.transcripts?.finalize(id);
   }
 
   /** Close sessions idle longer than the configured timeout. */
@@ -87,7 +96,7 @@ export class SessionStore {
       if (session.lastActivity < cutoff) {
         session.caption.close();
         this.sessions.delete(id);
-        this.transcripts?.finalize(id);
+        if (!session.ephemeral) this.transcripts?.finalize(id);
       }
     }
   }
@@ -96,12 +105,20 @@ export class SessionStore {
   closeAll(): void {
     for (const [id, session] of this.sessions) {
       session.caption.close();
-      this.transcripts?.finalize(id);
+      if (!session.ephemeral) this.transcripts?.finalize(id);
     }
     this.sessions.clear();
   }
 
-  private getOrCreate(id: string): Session {
+  /**
+   * True when this session was created live-only. False for a session this
+   * store has never seen, so a caller can trust it over its own query string.
+   */
+  isEphemeral(id: string): boolean {
+    return this.sessions.get(id)?.ephemeral ?? false;
+  }
+
+  private getOrCreate(id: string, ephemeral: boolean): Session {
     const existing = this.sessions.get(id);
     if (existing) return existing;
 
@@ -111,13 +128,16 @@ export class SessionStore {
       events: [],
       seq: 0,
       lastActivity: this.now(),
+      ephemeral,
     };
     // CaptionSession registers provider handlers in its constructor; its outbound
     // messages are buffered here with sequence numbers.
     session.caption = new CaptionSession(provider, (payload: OutboundMessage) => {
       session.seq += 1;
       session.events.push({ seq: session.seq, payload });
-      if (payload.type === "caption" && payload.isFinal) {
+      // Skipping `append` is what keeps a live session off disk entirely:
+      // `append` is also what creates the file.
+      if (payload.type === "caption" && payload.isFinal && !session.ephemeral) {
         this.transcripts?.append(id, payload.text, payload.channel);
       }
     });

@@ -8,11 +8,27 @@ screen off — only **Stop** ends a session.
 Opening the app picks up where you left off: if the last session ended less than
 ten minutes ago it resumes that transcript silently, so glancing away mid-conversation
 costs nothing. After a longer gap — or after you tap Stop, which is a decision rather
-than a pause — you land on a menu: **New session**, **Continue last**, **Transcripts**.
+than a pause — you land on a menu: **New session**, **Live caption**, **Continue last**,
+**Transcripts**.
 
 Transcripts lists past sessions newest first, each row leading with what the recording
 was about and the date beneath. Opening one shows its summary and captions, and offers
 to continue that conversation.
+
+### Live caption
+
+**Live caption** — the narrow waveform button beside **New session** — captions
+without keeping anything. The relay streams the text to your wrist and writes no
+transcript, so there is no summary, no Notion page, and nothing in
+**Transcripts** afterwards. The indicator on the captions screen is a hollow ring
+rather than a filled dot to say so.
+
+Because nothing is stored, a live session cannot be resumed: Stop or a back-swipe
+out of the captions screen ends it for good. Lowering your wrist does not — the
+mic stays live and captions keep arriving, the same as a recorded session. Your
+last *saved* session is left alone and still waiting under **Continue last**,
+though a launch after a live session lands on the menu rather than resuming
+anything on its own.
 
 ## Layout
 - `CaptionCore/` — Swift package with the pure logic (`ServerMessage`, `CaptionStore`,

@@ -3,6 +3,8 @@ import CaptionCore
 
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
+    /// True when nothing is being written down, which the indicator reflects.
+    let isLive: Bool
     let onStop: () -> Void
 
     var body: some View {
@@ -26,8 +28,22 @@ struct CaptionView: View {
         // session's restored transcript, which arrives above the live captions,
         // was scrolled past the moment it landed and could not be reached.
         .defaultScrollAnchor(.bottom)
+        // Filled means this is being recorded; a hollow ring means the captions
+        // are all there is. Same spot and size either way — there is no room on
+        // this screen for a second piece of chrome.
         .overlay(alignment: .topTrailing) {
-            Circle().fill(.green).frame(width: 7, height: 7)
+            Group {
+                if isLive {
+                    Circle().strokeBorder(.green, lineWidth: 1.5)
+                } else {
+                    Circle().fill(.green)
+                }
+            }
+            .frame(width: 7, height: 7)
+            // A bare shape is not an accessibility element, so VoiceOver would
+            // skip the indicator entirely and a label alone would do nothing.
+            .accessibilityElement()
+            .accessibilityLabel(isLive ? "Live only, not saved" : "Recording")
         }
         .toolbar {
             // Lowering your wrist no longer ends the session, so ending it

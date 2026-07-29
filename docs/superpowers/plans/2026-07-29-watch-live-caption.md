@@ -1086,10 +1086,12 @@ transcript, so there is no summary, no Notion page, and nothing in
 **Transcripts** afterwards. The indicator on the captions screen is a hollow ring
 rather than a filled dot to say so.
 
-Because nothing is stored, a live session cannot be resumed: leaving it — Stop, a
-back-swipe, or the app going to the background — ends it. Your last *saved*
-session is left alone and still waiting under **Continue last**, though a launch
-after a live session lands on the menu rather than resuming anything on its own.
+Because nothing is stored, a live session cannot be resumed: Stop or a back-swipe
+out of the captions screen ends it for good. Lowering your wrist does not — the
+mic stays live and captions keep arriving, the same as a recorded session. Your
+last *saved* session is left alone and still waiting under **Continue last**,
+though a launch after a live session lands on the menu rather than resuming
+anything on its own.
 ```
 
 - [ ] **Step 7: Commit**

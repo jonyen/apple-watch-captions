@@ -100,9 +100,15 @@ screen calls that instead.
 
 ### Leaving a live session ends it
 
-A live session has nothing to resume into, so leaving it — back-swipe, screen
-sleep, app background — ends it. `lastSession` is left pointing at your last *saved*
+A live session has nothing to resume into, so leaving it — Stop, or a back-swipe out
+of the captions screen — ends it. `lastSession` is left pointing at your last *saved*
 session, and relaunching lands on the menu.
+
+Backgrounding is deliberately *not* on that list. The app declares the `audio`
+background mode so that lowering your wrist mid-conversation does not cut the
+session in half, and `scenePhase` explicitly no-ops on `.background`. A live session
+inherits that: the mic stays live and captions keep arriving, exactly as a saved one
+does. Nothing is being written down either way, so there is nothing to end early.
 
 That last part requires setting `stoppedExplicitly = true` when a live session ends.
 Otherwise `launchAction` could auto-resume whatever saved session you had been in

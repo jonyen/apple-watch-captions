@@ -19,6 +19,13 @@ Spec: `docs/superpowers/specs/2026-07-29-watch-live-caption-design.md`
 - The `WatchCaptions` app target has **no test target** — only `CaptionCore` has tests. Changes in `watch/WatchCaptions/` are verified by a build plus a run, not by unit tests.
 - Icons: `New session` uses `record.circle`, `Live caption` uses `waveform`.
 - Copy: the menu row reads exactly `New session` and the live button's accessibility label is exactly `Live caption`.
+- **Every task's commit must build.** Task 3 is deliberately one atomic commit for
+  this reason: changing a protocol `CaptionCore` exports breaks all four conformers
+  at once. No task may leave the tree uncompilable "for the next task to fix".
+- **This tree has unrelated work in progress** (a build-version stamp touching
+  `HomeView.swift`, `AppBuild.swift`, `BuildInfo.swift`, `Scripts/`, `project.yml`,
+  and `watch/README.md`). Stage explicit file paths — never `git add -A` or
+  `git add .` — and never revert or commit changes your task did not make.
 
 ---
 
@@ -31,6 +38,10 @@ Spec: `docs/superpowers/specs/2026-07-29-watch-live-caption-design.md`
 - `backend/src/server.http.test.ts` — modify. End-to-end ephemeral cases.
 - `backend/README.md` — modify. Document the flag.
 
+Task 3 spans `CaptionCore`, both mac relays, and two watch-app files as **one
+commit**. That is not a decomposition failure — it is the smallest change that
+compiles, because the protocol and its four conformers move together.
+
 **CaptionCore (shared)**
 - `watch/CaptionCore/Sources/CaptionCore/SessionMode.swift` — **create**. The enum, alone in its own file: it is the vocabulary both the transport and the controller speak.
 - `watch/CaptionCore/Sources/CaptionCore/Protocols.swift` — modify. `Relay.connect(mode:)`.
@@ -42,8 +53,8 @@ Spec: `docs/superpowers/specs/2026-07-29-watch-live-caption-design.md`
 - `mac/MacCaptions/LocalSpeechRelay.swift:22` — modify. Signature only.
 
 **Watch app**
-- `watch/WatchCaptions/HTTPRelayClient.swift` — modify. Derives `resumeName` and the `ephemeral` query item from the mode.
-- `watch/WatchCaptions/AppModel.swift` — modify. `startLive()`, a published `live` flag, mode-preserving `retry()`.
+- `watch/WatchCaptions/HTTPRelayClient.swift` — modify (in Task 3). Derives `resumeName` and the `ephemeral` query item from the mode.
+- `watch/WatchCaptions/AppModel.swift` — modify (call sites in Task 3, behavior in Task 4). `startLive()`, a published `live` flag, mode-preserving `retry()`.
 - `watch/WatchCaptions/Views/HomeView.swift` — modify. Split first row.
 - `watch/WatchCaptions/Views/CaptionView.swift` — modify. Hollow-ring indicator.
 - `watch/WatchCaptions/WatchCaptionsApp.swift` — modify. Wires `onLive`, `isLive`, and `retry`.
@@ -488,22 +499,31 @@ git commit -m "feat(relay): accept ephemeral=1 on /v1/audio"
 
 ---
 
-## Task 3: `SessionMode` in CaptionCore
+## Task 3: A session has a mode
 
 **Files:**
 - Create: `watch/CaptionCore/Sources/CaptionCore/SessionMode.swift`
 - Modify: `watch/CaptionCore/Sources/CaptionCore/Protocols.swift:7-8`
-- Modify: `watch/CaptionCore/Sources/CaptionCore/SessionController.swift:37-58`, `105-113`
+- Modify: `watch/CaptionCore/Sources/CaptionCore/SessionController.swift:37-58`
 - Modify: `mac/MacCaptions/WebSocketRelay.swift:50-52`
 - Modify: `mac/MacCaptions/LocalSpeechRelay.swift:22`
+- Modify: `watch/WatchCaptions/HTTPRelayClient.swift:10-12`, `20`, `40-58`, `113-125`
+- Modify: `watch/WatchCaptions/AppModel.swift:88-107` (call sites only)
 - Test: `watch/CaptionCore/Tests/CaptionCoreTests/SessionControllerTests.swift`
 
 **Interfaces:**
-- Consumes: nothing from earlier tasks. (Task 1 and 2 are the relay; this is the client.)
+- Consumes: the `ephemeral=1` wire contract from Task 2. Nothing else from earlier tasks — those are the relay, this is the client.
 - Produces:
   - `public enum SessionMode: Equatable, Sendable { case saved(resuming: String?); case live }`
   - `Relay.connect(mode: SessionMode)` replacing `connect(resuming: String?)`
   - `SessionController.start(mode: SessionMode = .saved(resuming: nil)) async`
+  - `HTTPRelayClient` sending `&ephemeral=1` for `.live`
+
+**This task is one atomic refactor and must be committed as one commit.** Changing
+a protocol `CaptionCore` exports breaks every conformer at once: the two mac relays,
+`HTTPRelayClient`, and `AppModel`'s call sites. Splitting it would leave the branch
+with commits that do not compile. Behavior does not change yet — no caller passes
+`.live` until Task 4 — so this lands as a pure refactor whose existing tests all pass.
 
 `CaptionCore` uses XCTest, not swift-testing — follow the existing file.
 
@@ -522,7 +542,7 @@ First, replace `FakeRelay`'s connect tracking (lines 11–15) so it records the 
         func connect(mode: SessionMode) { connected = true; connectCount += 1; self.mode = mode }
 ```
 
-Note `resumedName` is gone — Step 4 updates the assertions that used it.
+Note `resumedName` is gone — Step 5 updates the assertions that used it.
 
 Second, append these cases inside the `SessionControllerTests` class:
 
@@ -631,9 +651,9 @@ In `SessionController.swift`, replace `start` (lines 37–58). Only the signatur
 
 - [ ] **Step 5: Update the existing test call sites**
 
-In `SessionControllerTests.swift`, the bare `await c.start()` and `await controller.start()` calls need no change — the default parameter covers them. Update every call that passes a name, and the three assertions that used `resumedName`:
+In `SessionControllerTests.swift`, the bare `await c.start()` and `await controller.start()` calls need no change — the default parameter covers them. Update every call that passes a name, and the assertions that used `resumedName`:
 
-- `await controller.start(resuming: "X")` → `await controller.start(mode: .saved(resuming: "X"))` (lines ~229, 247, 256 area, 268, 280, 290, 307, 309, and the two inside `Task { }` at ~333 and ~337)
+- `await controller.start(resuming: "X")` → `await controller.start(mode: .saved(resuming: "X"))` (lines ~229, 247, 268, 280, 290, 307, 309, and the two inside `Task { }` at ~333 and ~337)
 - `XCTAssertEqual(relay.resumedName, "2026-07-25T09-00-00Z_abc")` → `XCTAssertEqual(relay.mode, .saved(resuming: "2026-07-25T09-00-00Z_abc"))`
 - `XCTAssertEqual(relay.resumedName, String?.none)` → `XCTAssertEqual(relay.mode, .saved(resuming: nil))`
 - `XCTAssertEqual(relay.resumedName, "2026-07-10T18-00-00Z_abc")` → `XCTAssertEqual(relay.mode, .saved(resuming: "2026-07-10T18-00-00Z_abc"))`
@@ -641,7 +661,12 @@ In `SessionControllerTests.swift`, the bare `await c.start()` and `await control
 
 Let the compiler find any you missed; do not add a `resumedName` shim to avoid the edits.
 
-- [ ] **Step 6: Keep the mac app compiling**
+- [ ] **Step 6: Run the CaptionCore tests to verify they pass**
+
+Run: `swift test --package-path watch/CaptionCore`
+Expected: PASS, all cases including the three new ones.
+
+- [ ] **Step 7: Keep the mac app compiling**
 
 `CaptionCore` is shared, and both mac relays conform to `Relay`. Neither uses the parameter, so this is a signature change only.
 
@@ -660,32 +685,7 @@ Let the compiler find any you missed; do not add a `resumedName` shim to avoid t
     func connect(mode _: SessionMode) {
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
-
-Run: `swift test --package-path watch/CaptionCore`
-Expected: PASS, all cases including the three new ones.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add watch/CaptionCore mac/MacCaptions/WebSocketRelay.swift mac/MacCaptions/LocalSpeechRelay.swift
-git commit -m "feat(core): give a session a mode instead of a resume name"
-```
-
----
-
-## Task 4: The watch asks for a live session
-
-**Files:**
-- Modify: `watch/WatchCaptions/HTTPRelayClient.swift:12`, `40-58`, `113-125`
-
-**Interfaces:**
-- Consumes: `SessionMode` and `Relay.connect(mode:)` from Task 3; the `ephemeral=1` wire contract from Task 2.
-- Produces: `HTTPRelayClient` conforming to the new protocol. `onTranscript` never fires for a live session, because the relay sends no name.
-
-There is no test target for the `WatchCaptions` app, so this task is verified by a build. Its behavior is covered end-to-end by Task 2's server tests and by the manual pass in Task 6.
-
-- [ ] **Step 1: Store the mode's two consequences**
+- [ ] **Step 8: Teach `HTTPRelayClient` the mode's two consequences**
 
 In `watch/WatchCaptions/HTTPRelayClient.swift`, add a stored property next to `resumeName` (near line 20):
 
@@ -697,7 +697,7 @@ In `watch/WatchCaptions/HTTPRelayClient.swift`, add a stored property next to `r
     private var ephemeral = false
 ```
 
-Also update the `onTranscript` doc comment (line 10–12) to say it never fires for a live session:
+Update the `onTranscript` doc comment (lines 10–12) to say it never fires for a live session:
 
 ```swift
     /// Fires once with the transcript this session is writing to, so the app
@@ -706,9 +706,7 @@ Also update the `onTranscript` doc comment (line 10–12) to say it never fires 
     var onTranscript: (@MainActor (String) -> Void)?
 ```
 
-- [ ] **Step 2: Derive both from the mode in `connect`**
-
-Replace the `connect` signature and the two lines that set up resume state:
+Replace the `connect` signature and the line that set up resume state:
 
 ```swift
     func connect(mode: SessionMode) {
@@ -739,8 +737,6 @@ Replace the `connect` signature and the two lines that set up resume state:
     }
 ```
 
-- [ ] **Step 3: Send the flag**
-
 In `url(path:since:)`, add the query item after the `resumeName` line:
 
 ```swift
@@ -748,32 +744,77 @@ In `url(path:since:)`, add the query item after the `resumeName` line:
         if ephemeral { items.append(URLQueryItem(name: "ephemeral", value: "1")) }
 ```
 
-- [ ] **Step 4: Build to verify it compiles**
+- [ ] **Step 9: Migrate `AppModel`'s call sites**
+
+`AppModel` calls the controller in three places. This step is a mechanical migration
+to the new signature with **no behavior change** — live mode arrives in Task 4.
+
+In `watch/WatchCaptions/AppModel.swift`, replace lines 88–108:
+
+```swift
+    func startNew() async {
+        currentTranscript = nil
+        await startCaptions(mode: .saved(resuming: nil))
+    }
+
+    func continueLast() async {
+        guard let name = lastSession?.transcriptName else { return }
+        await startCaptions(mode: .saved(resuming: name))
+    }
+
+    func resume(name: String) async {
+        await startCaptions(mode: .saved(resuming: name))
+    }
+
+    private func startCaptions(mode: SessionMode) async {
+        stoppedExplicitly = false
+        if case .saved(let name) = mode { currentTranscript = name }
+        path = [.captions]   // pushed, so it gets a back chevron like any screen
+        capturing = true
+        await controller.start(mode: mode)
+    }
+```
+
+- [ ] **Step 10: Build both apps**
 
 Run: `cd watch && xcodegen generate && xcodebuild -project WatchCaptions.xcodeproj -scheme WatchCaptions -destination 'platform=watchOS Simulator,name=Apple Watch Series 10 (46mm)' build`
 
-Expected: BUILD SUCCEEDED. If that simulator name does not exist, run `xcrun simctl list devices available | grep Watch` and substitute one that does. `AppModel` still calls `controller.start(resuming:)` at this point, which no longer exists — if the build fails only on those call sites in `AppModel.swift`, that is expected and Task 5 fixes it; confirm `HTTPRelayClient.swift` itself reports no errors before moving on.
+Expected: **BUILD SUCCEEDED, with no errors.** Unlike a partial refactor, this task leaves the tree compiling. If that simulator name does not exist, run `xcrun simctl list devices available | grep Watch` and substitute one that does.
 
-- [ ] **Step 5: Commit**
+Then the mac app, which shares `CaptionCore`:
+
+Run: `cd mac && xcodebuild -project Captions.xcodeproj -scheme MacCaptions build`
+
+Expected: BUILD SUCCEEDED. If the scheme name differs, run `xcodebuild -project Captions.xcodeproj -list` and use the scheme it reports. If the mac app cannot be built in this environment at all (missing signing identity, for instance), say so in your report rather than skipping silently — `swift build --package-path watch/CaptionCore` at minimum must pass.
+
+- [ ] **Step 11: Commit**
+
+One commit for the whole refactor:
 
 ```bash
-git add watch/WatchCaptions/HTTPRelayClient.swift
-git commit -m "feat(watch): ask the relay to keep nothing for a live session"
+git add watch/CaptionCore mac/MacCaptions/WebSocketRelay.swift mac/MacCaptions/LocalSpeechRelay.swift watch/WatchCaptions/HTTPRelayClient.swift watch/WatchCaptions/AppModel.swift
+git commit -m "feat(core): give a session a mode instead of a resume name"
 ```
 
----
+Note the `git add` paths are explicit files, not `git add -A`. There is unrelated
+work in progress in this tree; do not sweep it in.
 
-## Task 5: Live mode in AppModel
+---
+## Task 4: Live mode in AppModel
 
 **Files:**
-- Modify: `watch/WatchCaptions/AppModel.swift:22-31`, `88-146`
+- Modify: `watch/WatchCaptions/AppModel.swift:16-17`, `88-146`
 
 **Interfaces:**
-- Consumes: `SessionMode`, `SessionController.start(mode:)` from Task 3; `HTTPRelayClient` from Task 4.
-- Produces, for Task 6 to wire up:
+- Consumes: `SessionMode`, `SessionController.start(mode:)`, and the migrated
+  `startCaptions(mode:)` from Task 3.
+- Produces, for Task 5 to wire up:
   - `AppModel.live: Bool` — published, `private(set)`. True while a live session is on screen.
   - `AppModel.startLive() async`
   - `AppModel.retry() async` — restarts in whichever mode the failed session was.
+
+`startLive()` and `retry()` have no callers until Task 5. That is expected: they are
+internal methods on an `ObservableObject`, so the target still compiles cleanly.
 
 - [ ] **Step 1: Publish the live flag**
 
@@ -787,9 +828,9 @@ In `watch/WatchCaptions/AppModel.swift`, add below `capturing` (line 16–17):
     @Published private(set) var live = false
 ```
 
-- [ ] **Step 2: Add `startLive` and route the existing starts through the mode**
+- [ ] **Step 2: Add `startLive` and `retry`, and set the flag when a session starts**
 
-Replace the session-starting block (lines 88–108):
+Replace the session-starting block Task 3 left at lines 88–107:
 
 ```swift
     func startNew() async {
@@ -840,7 +881,9 @@ Replace the session-starting block (lines 88–108):
 
 - [ ] **Step 3: Make leaving a live session end it**
 
-Replace `endCapture` and `rememberCurrentSession` (lines 126–146). A live session is never offered under "Continue last", and leaving one must not drop you back into an *older* saved session on relaunch:
+Replace `endCapture`, `pause`, and `rememberCurrentSession` (lines ~126–146). A live
+session is never offered under "Continue last", and leaving one must not drop you
+back into an *older* saved session on relaunch:
 
 ```swift
     private func endCapture() {
@@ -879,11 +922,15 @@ Replace `endCapture` and `rememberCurrentSession` (lines 126–146). A live sess
 
 `stop()` already sets `stoppedExplicitly = true` before calling `endCapture()`, so the two paths agree.
 
+Note the ordering in `endCapture`: `rememberCurrentSession()` reads `live`, so the
+`live = false` reset must stay *after* it. Reversing those two lines would silently
+save a live session's name.
+
 - [ ] **Step 4: Build to verify it compiles**
 
 Run: `cd watch && xcodebuild -project WatchCaptions.xcodeproj -scheme WatchCaptions -destination 'platform=watchOS Simulator,name=Apple Watch Series 10 (46mm)' build`
 
-Expected: build fails only in `WatchCaptionsApp.swift` (it still calls `HomeView` without `onLive`, `CaptionView` without `isLive`, and `startNew` for retry). Task 6 fixes those. Confirm `AppModel.swift` reports no errors.
+Expected: BUILD SUCCEEDED, no errors. `startLive()` and `retry()` are unused so far — Task 5 calls them — which is not a warning for methods on a type.
 
 - [ ] **Step 5: Commit**
 
@@ -893,8 +940,7 @@ git commit -m "feat(watch): add a live session that is never remembered"
 ```
 
 ---
-
-## Task 6: The button, the indicator, and the docs
+## Task 5: The button, the indicator, and the docs
 
 **Files:**
 - Modify: `watch/WatchCaptions/Views/HomeView.swift`
@@ -903,7 +949,7 @@ git commit -m "feat(watch): add a live session that is never remembered"
 - Modify: `watch/README.md`
 
 **Interfaces:**
-- Consumes: `AppModel.live`, `AppModel.startLive()`, `AppModel.retry()` from Task 5.
+- Consumes: `AppModel.live`, `AppModel.startLive()`, `AppModel.retry()` from Task 4.
 - Produces: `HomeView(lastSession:onNew:onLive:onContinue:onBrowse:versionLabel:)` and `CaptionView(store:isLive:onStop:)`.
 
 - [ ] **Step 1: Split the first row of the menu**
@@ -1059,8 +1105,8 @@ git commit -m "feat(watch): add a live caption button that keeps nothing"
 
 - `cd backend && npm test && npm run build` passes.
 - `swift test --package-path watch/CaptionCore` passes.
-- The watch app builds, and the mac app still builds (`CaptionCore` is shared).
-- The manual pass in Task 6 Step 5 is complete, including the "no transcript was created" check.
+- Every task's commit builds: the watch app and the mac app both compile at each one, not only at the end.
+- The manual pass in Task 5 Step 5 is complete, including the "no transcript was created" check.
 
 Deploying the relay is a separate step and deliberately out of this plan — the
 watch change is useless until it ships, so `backend/DEPLOY.md` gets followed once

@@ -74,6 +74,11 @@ public enum SessionMode: Equatable {
 `Relay.connect(resuming:)` becomes `connect(mode:)`. `HTTPRelayClient` derives both
 `resumeName` and the `ephemeral=1` query item from the mode.
 
+`CaptionCore` is shared with the mac app, whose `WebSocketRelay` and
+`LocalSpeechRelay` both conform to `Relay`. Neither reads the parameter — a mac
+session always starts fresh — so keeping that target compiling is a two-line
+signature change, but it is not zero.
+
 `SessionController.start(resuming:)` becomes `start(mode:)`. `restorePreviousTranscript`
 is reachable only from `.saved(resuming: name)`, which makes the exclusion structural
 rather than a guard someone can forget.
@@ -86,6 +91,12 @@ A published `live` flag drives the on-screen cue and resets in `endCapture()`.
 Because the relay never names a transcript for an ephemeral session,
 `currentTranscript` stays nil and `rememberCurrentSession()` is already a no-op —
 but it gets an explicit `live` guard rather than leaning on that coincidence.
+
+**Retry has to preserve the mode.** `ErrorView`'s retry currently calls
+`startNew()`, so a live session that lost its connection would quietly start
+recording when you tapped Try Again — the one outcome live mode exists to prevent.
+`AppModel` gains a `retry()` that re-enters whichever mode failed, and the error
+screen calls that instead.
 
 ### Leaving a live session ends it
 
@@ -155,13 +166,15 @@ accessibility label: "Live only, not saved" against "Recording".
 A saved session is unchanged. The flag is sticky: a second post *without*
 `ephemeral=1` still does not save. The `/v1/audio` response omits `transcript`.
 
-**CaptionCore (swift-testing).** `.live` never calls `history.detail`. The fake relay
-records the mode it was handed, so `startLive` reaching the transport is asserted
-rather than assumed.
+**CaptionCore (XCTest).** `.live` never calls `history.detail`, and still starts
+audio capture on `ready`. The fake relay records the mode it was handed, so
+`startLive` reaching the transport is asserted rather than assumed.
 
-**By hand.** The views have no test target in this repo, so the split row and the
-hollow dot are checked on the watch. Per prior experience, gesture automation does
-not work on the watchOS simulator, so the taps are manual.
+**By hand.** The `WatchCaptions` app target has no test target — only `CaptionCore`
+has tests — so everything in `watch/WatchCaptions/` is verified by a build plus a
+run on the watch: the split row, the hollow dot, and the end-to-end check that a
+live session leaves nothing in **Transcripts**. Per prior experience, gesture
+automation does not work on the watchOS simulator, so the taps are manual.
 
 ## Out of scope
 

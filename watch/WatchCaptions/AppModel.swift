@@ -77,7 +77,7 @@ final class AppModel: ObservableObject {
         switch launchAction(last: lastSession, now: Date(),
                             stoppedExplicitly: stoppedExplicitly) {
         case .resume(let name):
-            await startCaptions(resuming: name)
+            await startCaptions(mode: .saved(resuming: name))
         case .menu:
             break   // already on the menu
         }
@@ -87,24 +87,24 @@ final class AppModel: ObservableObject {
 
     func startNew() async {
         currentTranscript = nil
-        await startCaptions(resuming: nil)
+        await startCaptions(mode: .saved(resuming: nil))
     }
 
     func continueLast() async {
         guard let name = lastSession?.transcriptName else { return }
-        await startCaptions(resuming: name)
+        await startCaptions(mode: .saved(resuming: name))
     }
 
     func resume(name: String) async {
-        await startCaptions(resuming: name)
+        await startCaptions(mode: .saved(resuming: name))
     }
 
-    private func startCaptions(resuming name: String?) async {
+    private func startCaptions(mode: SessionMode) async {
         stoppedExplicitly = false
-        currentTranscript = name
+        if case .saved(let name) = mode { currentTranscript = name }
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
-        await controller.start(resuming: name)
+        await controller.start(mode: mode)
     }
 
     /// End the session and remember it, so reopening can offer to continue.

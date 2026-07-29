@@ -4,8 +4,9 @@ import Foundation
 public protocol Relay: AnyObject {
     var onMessage: (@MainActor (ServerMessage) -> Void)? { get set }
     var onClose: (@MainActor () -> Void)? { get set }
-    /// `resuming` names an existing transcript to append to; nil starts a new one.
-    func connect(resuming name: String?)
+    /// `mode` decides what the relay does with this session's captions —
+    /// whether it persists them, and which transcript it appends to.
+    func connect(mode: SessionMode)
     func send(_ audio: Data)
     func close()
 }

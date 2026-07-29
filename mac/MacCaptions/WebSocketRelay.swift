@@ -47,9 +47,10 @@ final class WebSocketRelay: NSObject, Relay {
         session = URLSession(configuration: .default, delegate: nil, delegateQueue: nil)
     }
 
-    // Mac sessions always start fresh and the relay names the transcript itself,
-    // so resuming an existing one (a watch feature) doesn't apply here.
-    func connect(resuming _: String?) {
+    // Mac sessions always start fresh, the relay names the transcript itself,
+    // and there is no live-only mode here — so the mode carries nothing this
+    // transport can act on.
+    func connect(mode _: SessionMode) {
         queue.async { [weak self] in
             guard let self else { return }
             // Cancel any existing task so repeated connect() calls (e.g. from the

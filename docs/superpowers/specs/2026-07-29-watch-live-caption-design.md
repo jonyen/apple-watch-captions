@@ -103,12 +103,24 @@ reading of "ends for good."
 ### Views
 
 **`HomeView`.** The first list row holds an `HStack` of two buttons rather than one:
-`New session` keeps its `mic.fill` label and expands to fill, and `Live caption` is
-a fixed-width `waveform` icon button beside it.
+`New session` expands to fill, and `Live caption` is a fixed-width icon button
+beside it.
+
+The two icons have to work as a pair, one saying "recorded" and the other saying
+"not." So `New session` trades its `mic.fill` for `record.circle` — unmistakably
+"this is being captured," and the same shape that marks a recording session on the
+captions screen — and `Live caption` gets `waveform`: sound going past, leaving
+nothing behind. Both are simple silhouettes, which matters because the narrow button
+is icon-only at 40pt.
+
+A mic on the live button was considered and dropped: a microphone is what most apps
+use for *start recording*, so it would read as the more permanent of the two —
+backwards. A bolt was considered and dropped too; in Apple's vocabulary a bolt means
+fast or charging, and this button is not about speed.
 
 ```
 +--------------------------+-----+
-|  (mic)  New session      | ~~~ |
+|  (o)   New session       | ~~~ |
 +--------------------------+-----+
 +--------------------------------+
 |  (arrow) Continue last         |
@@ -123,10 +135,10 @@ Both buttons need an explicit `.buttonStyle(.bordered)`: a bare `Button` in a
 watchOS list row expands to the full width, and two of them would fight over it.
 
 Width is the risk. A 41mm row leaves roughly 130pt usable, so a 40pt live button
-leaves about 85pt for "New session" plus its mic glyph — tight enough that the label
-will probably truncate. The wide button gets `minimumScaleFactor(0.8)`, and this is
-verified on the 41mm simulator before it ships. If it still truncates, the mic glyph
-goes rather than the words.
+leaves about 85pt for "New session" plus its `record.circle` glyph — tight enough
+that the label will probably truncate. The wide button gets
+`minimumScaleFactor(0.8)`, and this is verified on the 41mm simulator before it
+ships. If it still truncates, the glyph goes rather than the words.
 
 The icon-only button carries `accessibilityLabel("Live caption")` and a hint that
 nothing is saved.

@@ -9,10 +9,11 @@ final class SessionControllerTests: XCTestCase {
         var onClose: (@MainActor () -> Void)?
         var connected = false
         var connectCount = 0
-        var resumedName: String??
+        /// The mode the last `connect` was handed, or nil if never connected.
+        var mode: SessionMode?
         var closed = false
         var sent: [Data] = []
-        func connect(resuming name: String?) { connected = true; connectCount += 1; resumedName = name }
+        func connect(mode: SessionMode) { connected = true; connectCount += 1; self.mode = mode }
         func send(_ audio: Data) { sent.append(audio) }
         func close() { closed = true }
         @MainActor func deliver(_ m: ServerMessage) { onMessage?(m) }
@@ -224,17 +225,49 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(store.state, .connecting)
     }
 
+    func testLiveModeReachesTheRelay() async {
+        let relay = FakeRelay()
+        let c = SessionController(store: CaptionStore(), relay: relay,
+                                  audio: FakeAudio(), permission: FakePermission(granted: true))
+        await c.start(mode: .live)
+        XCTAssertEqual(relay.mode, .live)
+    }
+
+    func testLiveModeRestoresNoTranscript() async {
+        let relay = FakeRelay()
+        let store = CaptionStore()
+        let history = FakeHistory(segments: [
+            TranscriptSegment(text: "earlier talk", channel: nil, at: "2026-07-10T18:00:00Z")
+        ])
+        let c = SessionController(store: store, relay: relay,
+                                  audio: FakeAudio(), permission: FakePermission(granted: true),
+                                  history: history)
+        await c.start(mode: .live)
+        await c.waitForPrefill()
+        XCTAssertTrue(store.paragraphs.isEmpty)
+    }
+
+    func testLiveModeStillCapturesAudio() async {
+        let relay = FakeRelay()
+        let audio = FakeAudio()
+        let c = SessionController(store: CaptionStore(), relay: relay,
+                                  audio: audio, permission: FakePermission(granted: true))
+        await c.start(mode: .live)
+        relay.deliver(.ready)
+        XCTAssertTrue(audio.started)
+    }
+
     func testStartPassesTheTranscriptToResumeToTheRelay() async {
         let (controller, store, relay, _) = make()
-        await controller.start(resuming: "2026-07-25T09-00-00Z_abc")
-        XCTAssertEqual(relay.resumedName, "2026-07-25T09-00-00Z_abc")
+        await controller.start(mode: .saved(resuming: "2026-07-25T09-00-00Z_abc"))
+        XCTAssertEqual(relay.mode, .saved(resuming: "2026-07-25T09-00-00Z_abc"))
         XCTAssertEqual(store.state, .connecting)
     }
 
     func testStartWithoutResumeAsksForAFreshTranscript() async {
         let (controller, _, relay, _) = make()
         await controller.start()
-        XCTAssertEqual(relay.resumedName, String?.none)
+        XCTAssertEqual(relay.mode, .saved(resuming: nil))
     }
 
     private static let earlier = [
@@ -244,7 +277,7 @@ final class SessionControllerTests: XCTestCase {
     func testResumingRestoresThePreviousTranscript() async {
         let (controller, store, _, _) = make(history: FakeHistory(segments: Self.earlier))
 
-        await controller.start(resuming: "2026-07-10T18-00-00Z_abc")
+        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))
         await controller.waitForPrefill()
 
         XCTAssertEqual(store.paragraphs.map(\.text), ["earlier talk"])
@@ -265,7 +298,7 @@ final class SessionControllerTests: XCTestCase {
         let failing = FakeHistory(error: HistoryError.message("offline"))
         let (controller, store, relay, audio) = make(history: failing)
 
-        await controller.start(resuming: "2026-07-10T18-00-00Z_abc")
+        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))
         await controller.waitForPrefill()
         relay.deliver(.ready)
 
@@ -277,7 +310,7 @@ final class SessionControllerTests: XCTestCase {
     func testASessionStoppedDuringTheRestoreIsNotPrefilled() async {
         let (controller, store, _, _) = make(history: FakeHistory(segments: Self.earlier))
 
-        await controller.start(resuming: "2026-07-10T18-00-00Z_abc")
+        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))
         controller.stop()
         await controller.waitForPrefill()
 
@@ -287,10 +320,10 @@ final class SessionControllerTests: XCTestCase {
     func testResumingWithoutAHistoryClientStillRuns() async {
         let (controller, store, relay, _) = make()
 
-        await controller.start(resuming: "2026-07-10T18-00-00Z_abc")
+        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))
         await controller.waitForPrefill()
 
-        XCTAssertEqual(relay.resumedName, "2026-07-10T18-00-00Z_abc")
+        XCTAssertEqual(relay.mode, .saved(resuming: "2026-07-10T18-00-00Z_abc"))
         XCTAssertTrue(store.paragraphs.isEmpty)
     }
 
@@ -304,9 +337,9 @@ final class SessionControllerTests: XCTestCase {
         let history = GatedHistory(segments: Self.earlier)
         let (controller, store, _, _) = make(history: history)
 
-        await controller.start(resuming: "2026-07-10T18-00-00Z_abc")   // fetch 1: blocked
+        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))   // fetch 1: blocked
         controller.stop()
-        await controller.start(resuming: "2026-07-10T18-00-00Z_abc")   // fetch 2: blocked
+        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))   // fetch 2: blocked
 
         // Release both fetches together; order between them no longer matters
         // because the guard, not sequencing, is what must keep the stale one out.
@@ -330,11 +363,11 @@ final class SessionControllerTests: XCTestCase {
         let controller = SessionController(store: store, relay: relay, audio: audio,
                                             permission: permission)
 
-        let staleStart = Task { await controller.start(resuming: "stale") }
+        let staleStart = Task { await controller.start(mode: .saved(resuming: "stale")) }
         await permission.waitForArrival(1)
 
         controller.stop()
-        let currentStart = Task { await controller.start(resuming: "current") }
+        let currentStart = Task { await controller.start(mode: .saved(resuming: "current")) }
         await permission.waitForArrival(2)
 
         // Release both permission checks together; order between them no
@@ -345,6 +378,6 @@ final class SessionControllerTests: XCTestCase {
         await currentStart.value
 
         XCTAssertEqual(relay.connectCount, 1)
-        XCTAssertEqual(relay.resumedName, "current")
+        XCTAssertEqual(relay.mode, .saved(resuming: "current"))
     }
 }

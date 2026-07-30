@@ -35,9 +35,10 @@ public final class SessionController {
     }
 
     /// Begin a session. Safe to call repeatedly; no-op if already running.
-    /// Pass `resuming` to append to an existing transcript instead of opening a
-    /// new one — what the app does when you glance back mid-conversation.
-    public func start(resuming name: String? = nil) async {
+    /// `.saved(resuming:)` appends to an existing transcript instead of opening
+    /// a new one — what the app does when you glance back mid-conversation.
+    /// `.live` keeps nothing, so it never restores anything either.
+    public func start(mode: SessionMode = .saved(resuming: nil)) async {
         guard !running else { return }
         running = true
         generation += 1
@@ -53,8 +54,10 @@ public final class SessionController {
         // `running` alone can't tell this session apart from a stop+start that
         // reused the flag while we were suspended; compare generation too.
         guard running, self.generation == generation else { return }
-        relay.connect(resuming: name)
-        if let name { restorePreviousTranscript(named: name) }
+        relay.connect(mode: mode)
+        // Only a resumed saved session has scrollback to put back. The pattern
+        // match is why `.live` needs no guard of its own.
+        if case .saved(let name?) = mode { restorePreviousTranscript(named: name) }
     }
 
     /// End the session and tear down audio + transport.
@@ -112,7 +115,7 @@ public final class SessionController {
         }
     }
 
-    /// Awaits the restore started by `start(resuming:)`, including one that a
+    /// Awaits the restore started by `start(mode:)`, including one that a
     /// later `start` superseded before it finished. Tests only — production
     /// never waits on either.
     func waitForPrefill() async {

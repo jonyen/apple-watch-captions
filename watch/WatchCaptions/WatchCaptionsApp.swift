@@ -40,6 +40,7 @@ private struct RootView: View {
                 HomeView(
                     lastSession: model.lastSession,
                     onNew: { Task { await model.startNew() } },
+                    onLive: { Task { await model.startLive() } },
                     onContinue: { Task { await model.continueLast() } },
                     onBrowse: { Task { await model.showHistory() } })
                 .navigationDestination(for: AppModel.Route.self) { route in
@@ -67,9 +68,9 @@ private struct RootView: View {
         case .connecting:
             ConnectingView()
         case .listening:
-            CaptionView(store: store, onStop: { model.stop() })
+            CaptionView(store: store, isLive: model.live, onStop: { model.stop() })
         case .error(let message):
-            ErrorView(message: message, onRetry: { Task { await model.startNew() } })
+            ErrorView(message: message, onRetry: { Task { await model.retry() } })
         }
     }
 }

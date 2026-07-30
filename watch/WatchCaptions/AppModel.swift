@@ -15,6 +15,9 @@ final class AppModel: ObservableObject {
     @Published var path: [Route] = []
     /// True while a session is capturing, which takes over the whole screen.
     @Published private(set) var capturing = false
+    /// True when the session on screen is live-only. Drives the captions
+    /// screen's indicator, and keeps the session out of "Continue last".
+    @Published private(set) var live = false
     let store = CaptionStore()
     let history: HistoryStore
 
@@ -25,7 +28,13 @@ final class AppModel: ObservableObject {
 
     /// True when the last session ended by tapping Stop rather than by
     /// backgrounding. Stop is a decision, so it is never auto-resumed.
-    private var stoppedExplicitly = false
+    /// Persisted (see `Keys.stoppedExplicitly`) so a cold launch — watchOS can
+    /// terminate a suspended app between Stop and reopening — still sees it;
+    /// otherwise a fresh `AppModel` would default to `false` and could
+    /// auto-resume into a session the user just deliberately ended.
+    private var stoppedExplicitly = false {
+        didSet { defaults.set(stoppedExplicitly, forKey: Keys.stoppedExplicitly) }
+    }
 
     private let controller: SessionController
     private let relay: HTTPRelayClient
@@ -47,6 +56,7 @@ final class AppModel: ObservableObject {
             history: historyClient
         )
         lastSession = Self.loadLastSession(from: defaults)
+        stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
     }
 
@@ -77,7 +87,7 @@ final class AppModel: ObservableObject {
         switch launchAction(last: lastSession, now: Date(),
                             stoppedExplicitly: stoppedExplicitly) {
         case .resume(let name):
-            await startCaptions(resuming: name)
+            await startCaptions(mode: .saved(resuming: name))
         case .menu:
             break   // already on the menu
         }
@@ -87,24 +97,47 @@ final class AppModel: ObservableObject {
 
     func startNew() async {
         currentTranscript = nil
-        await startCaptions(resuming: nil)
+        await startCaptions(mode: .saved(resuming: nil))
+    }
+
+    /// Caption without keeping anything: the relay writes no transcript, so
+    /// there is nothing to resume, browse, or delete afterwards.
+    func startLive() async {
+        currentTranscript = nil
+        await startCaptions(mode: .live)
     }
 
     func continueLast() async {
         guard let name = lastSession?.transcriptName else { return }
-        await startCaptions(resuming: name)
+        await startCaptions(mode: .saved(resuming: name))
     }
 
     func resume(name: String) async {
-        await startCaptions(resuming: name)
+        await startCaptions(mode: .saved(resuming: name))
     }
 
-    private func startCaptions(resuming name: String?) async {
+    /// Restart after a connection error, in the mode that failed. Retrying a
+    /// live session must not quietly start recording one.
+    func retry() async {
+        if live {
+            await startLive()
+        } else {
+            await startNew()
+        }
+    }
+
+    private func startCaptions(mode: SessionMode) async {
         stoppedExplicitly = false
-        currentTranscript = name
+        if case .saved(let name) = mode {
+            currentTranscript = name
+            live = false
+        } else {
+            currentTranscript = nil
+            live = true
+        }
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
-        await controller.start(resuming: name)
+        await controller.start(mode: mode)
     }
 
     /// End the session and remember it, so reopening can offer to continue.
@@ -127,10 +160,14 @@ final class AppModel: ObservableObject {
         controller.stop()
         rememberCurrentSession()
         capturing = false
+        live = false
     }
 
-    /// Backgrounding stops capture but keeps the session resumable — the relay
-    /// holds the transcript open for ten minutes.
+    /// Stops capture and records the session: a saved session as resumable —
+    /// the relay holds the transcript open for ten minutes — and a live
+    /// session as deliberately ended, via `rememberCurrentSession`'s early
+    /// return. Leaves `capturing`/`live` untouched, so this is not a
+    /// substitute for `endCapture()`. Currently uncalled.
     func pause() {
         guard capturing else { return }
         controller.stop()
@@ -138,6 +175,15 @@ final class AppModel: ObservableObject {
     }
 
     private func rememberCurrentSession() {
+        // A live session leaves no transcript, so there is nothing to offer
+        // under "Continue last" — and nothing to auto-resume into either.
+        // Marking it as deliberately stopped keeps the next launch on the menu
+        // rather than reviving whichever saved session preceded it, which would
+        // read as the app ignoring the choice you just made.
+        if live {
+            stoppedExplicitly = true
+            return
+        }
         guard let name = currentTranscript else { return }
         let session = LastSession(transcriptName: name, endedAt: Date())
         lastSession = session
@@ -162,6 +208,7 @@ final class AppModel: ObservableObject {
     private enum Keys {
         static let transcriptName = "lastTranscriptName"
         static let endedAt = "lastSessionEndedAt"
+        static let stoppedExplicitly = "stoppedExplicitly"
     }
 
     private static func loadLastSession(from defaults: UserDefaults) -> LastSession? {

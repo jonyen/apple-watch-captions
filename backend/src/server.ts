@@ -201,11 +201,15 @@ async function handleRequest(
     const since = Number(url.searchParams.get("since") ?? "0") || 0;
 
     if (url.pathname === "/v1/audio") {
+      // Live sessions are never written down, so there is nothing to resume
+      // into and nothing to bind. Read before the session exists, because
+      // `reopen` has to happen at creation time.
+      const ephemeral = url.searchParams.get("ephemeral") === "1";
       // A resumed session appends to an existing transcript instead of opening
       // a new one. Only meaningful before the session exists; later posts for
       // the same session carry the param but must not re-bind it.
       const resume = url.searchParams.get("resume");
-      if (resume && !store.has(session)) {
+      if (resume && !ephemeral && !store.has(session)) {
         opts.transcripts?.reopen(session, resume);
       }
 
@@ -216,14 +220,19 @@ async function handleRequest(
         sendJSON(res, 413, { error: "body too large" });
         return;
       }
-      store.feed(session, body);
+      store.feed(session, body, ephemeral);
       const { events, seq } = store.drain(session, since);
       sendJSON(res, 200, {
         events: flatten(events),
         seq,
         // Names the transcript this session is writing to, so the client can
-        // resume it later. Absent until the first caption creates the file.
-        transcript: opts.transcripts?.activeName(session),
+        // resume it later. Absent until the first caption creates the file —
+        // and always absent for a live session, which creates none. Asking the
+        // store rather than the query string keeps the answer stable for the
+        // whole session, even if a later post drops the flag.
+        transcript: store.isEphemeral(session)
+          ? undefined
+          : opts.transcripts?.activeName(session),
       });
       return;
     }

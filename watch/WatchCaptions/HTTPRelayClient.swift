@@ -8,7 +8,8 @@ final class HTTPRelayClient: Relay {
     var onMessage: (@MainActor (ServerMessage) -> Void)?
     var onClose: (@MainActor () -> Void)?
     /// Fires once with the transcript this session is writing to, so the app
-    /// can offer to resume it later. The relay assigns the name.
+    /// can offer to resume it later. The relay assigns the name — and sends
+    /// none for a live session, so this never fires for one.
     var onTranscript: (@MainActor (String) -> Void)?
 
     private let base: URL
@@ -18,6 +19,10 @@ final class HTTPRelayClient: Relay {
 
     private var sessionID = UUID().uuidString
     private var resumeName: String?
+    /// Live-only session: ask the relay to keep nothing. Set per connect, and
+    /// sent on every request so a session the relay reaped and recreated comes
+    /// back live rather than silently starting to save.
+    private var ephemeral = false
     private var transcriptDelivered = false
     private var pending = Data()        // accumulated PCM awaiting the next flush
     private var lastSeq = 0
@@ -37,7 +42,7 @@ final class HTTPRelayClient: Relay {
         session = URLSession(configuration: config)
     }
 
-    func connect(resuming name: String?) {
+    func connect(mode: SessionMode) {
         queue.async { [weak self] in
             guard let self else { return }
             // Start a fresh session each connect so reconnects (Try Again, returning
@@ -45,7 +50,14 @@ final class HTTPRelayClient: Relay {
             // resuming, the relay binds that new session to an existing transcript.
             self.timer?.cancel()
             self.sessionID = UUID().uuidString
-            self.resumeName = name
+            switch mode {
+            case .saved(let name):
+                self.resumeName = name
+                self.ephemeral = false
+            case .live:
+                self.resumeName = nil
+                self.ephemeral = true
+            }
             self.transcriptDelivered = false
             self.pending = Data()
             self.lastSeq = 0
@@ -120,6 +132,7 @@ final class HTTPRelayClient: Relay {
         ]
         if let since { items.append(URLQueryItem(name: "since", value: String(since))) }
         if let resumeName { items.append(URLQueryItem(name: "resume", value: resumeName)) }
+        if ephemeral { items.append(URLQueryItem(name: "ephemeral", value: "1")) }
         c.queryItems = items
         return c.url!
     }
@@ -135,6 +148,19 @@ final class HTTPRelayClient: Relay {
         else { return }
         if let seq = obj["seq"] as? Int { lastSeq = max(lastSeq, seq) }
         if let name = obj["transcript"] as? String {
+            if ephemeral {
+                // A relay without ephemeral support treats `ephemeral=1` as an
+                // unrecognized query parameter: it saves the session, summarizes
+                // it, and exports it to Notion — exactly what live caption
+                // promises never to do — and still hands back a `transcript`
+                // name, same as a saved session's response. Latching onto it
+                // here would leave the app showing the hollow "Live only, not
+                // saved" indicator while the relay quietly keeps everything, so
+                // fail loudly instead, the same as a transport failure, rather
+                // than let the user discover a saved transcript afterwards.
+                failEphemeralMismatch()
+                return
+            }
             // Bind to this transcript from now on, so a session the relay has
             // since reaped resumes into it rather than opening a new one.
             resumeName = name
@@ -166,6 +192,17 @@ final class HTTPRelayClient: Relay {
         timer?.cancel()
         timer = nil
         if let onClose { Task { @MainActor in onClose() } }
+    }
+
+    /// Torn down the same way `fail()` handles a transport failure, but via
+    /// `onMessage(.error)` rather than `onClose` so the app can show a message
+    /// specific to this cause instead of the generic "Connection lost".
+    private func failEphemeralMismatch() {
+        guard !stopped else { return }
+        stopped = true
+        timer?.cancel()
+        timer = nil
+        emit(.error(message: "This relay can't do live captions"))
     }
 
     private func emit(_ message: ServerMessage) {

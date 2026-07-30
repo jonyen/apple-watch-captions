@@ -4,6 +4,15 @@ import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
 
 function makeStore(opts?: { idleTimeoutMs?: number; now?: () => number }) {
   const providers: FakeTranscriptionProvider[] = [];
+  const appended: string[] = [];
+  const finalized: string[] = [];
+  const transcripts = {
+    append: (_id: string, text: string) => appended.push(text),
+    finalize: (id: string) => finalized.push(id),
+    reopen: () => {},
+    finalizeAll: () => {},
+    activeName: () => undefined,
+  } as any;
   const store = new SessionStore({
     createProvider: () => {
       const p = new FakeTranscriptionProvider();
@@ -12,8 +21,9 @@ function makeStore(opts?: { idleTimeoutMs?: number; now?: () => number }) {
     },
     idleTimeoutMs: opts?.idleTimeoutMs,
     now: opts?.now,
+    transcripts,
   });
-  return { store, providers };
+  return { store, providers, appended, finalized };
 }
 
 describe("SessionStore", () => {
@@ -87,5 +97,76 @@ describe("SessionStore", () => {
     t = 1150;
     store.reapIdle();
     expect(store.has("s1")).toBe(true);
+  });
+});
+
+describe("SessionStore ephemeral sessions", () => {
+  it("appends nothing and finalizes nothing for an ephemeral session", () => {
+    const { store, providers, appended, finalized } = makeStore();
+    store.feed("s1", Buffer.alloc(0), true);
+    providers[0].emitTranscript({ text: "off the record", isFinal: true });
+    store.stop("s1");
+    expect(appended).toEqual([]);
+    expect(finalized).toEqual([]);
+  });
+
+  it("still persists a normal session", () => {
+    const { store, providers, appended, finalized } = makeStore();
+    store.feed("s1", Buffer.alloc(0));
+    providers[0].emitTranscript({ text: "on the record", isFinal: true });
+    store.stop("s1");
+    expect(appended).toEqual(["on the record"]);
+    expect(finalized).toEqual(["s1"]);
+  });
+
+  it("stays ephemeral when a later feed omits the flag", () => {
+    const { store, providers, appended, finalized } = makeStore();
+    store.feed("s1", Buffer.alloc(0), true);
+    store.feed("s1", Buffer.from("more audio"));   // flag absent
+    providers[0].emitTranscript({ text: "still off", isFinal: true });
+    store.stop("s1");
+    expect(appended).toEqual([]);
+    expect(finalized).toEqual([]);
+  });
+
+  it("stays saved when a later feed sets the flag", () => {
+    const { store, providers, appended } = makeStore();
+    store.feed("s1", Buffer.alloc(0));
+    store.feed("s1", Buffer.from("more audio"), true);   // must not take effect
+    providers[0].emitTranscript({ text: "on the record", isFinal: true });
+    expect(appended).toEqual(["on the record"]);
+  });
+
+  it("does not finalize an ephemeral session that is reaped for idleness", () => {
+    let clock = 0;
+    const { store, providers, finalized } = makeStore({
+      idleTimeoutMs: 100,
+      now: () => clock,
+    });
+    store.feed("s1", Buffer.alloc(0), true);
+    providers[0].emitTranscript({ text: "off the record", isFinal: true });
+    clock = 1000;
+    store.reapIdle();
+    expect(store.has("s1")).toBe(false);
+    expect(finalized).toEqual([]);
+  });
+
+  it("does not finalize an ephemeral session on closeAll", () => {
+    const { store, providers, finalized } = makeStore();
+    store.feed("s1", Buffer.alloc(0), true);
+    store.feed("s2", Buffer.alloc(0));
+    providers[0].emitTranscript({ text: "off", isFinal: true });
+    providers[1].emitTranscript({ text: "on", isFinal: true });
+    store.closeAll();
+    expect(finalized).toEqual(["s2"]);
+  });
+
+  it("reports whether a session is ephemeral", () => {
+    const { store } = makeStore();
+    store.feed("live", Buffer.alloc(0), true);
+    store.feed("saved", Buffer.alloc(0));
+    expect(store.isEphemeral("live")).toBe(true);
+    expect(store.isEphemeral("saved")).toBe(false);
+    expect(store.isEphemeral("unknown")).toBe(false);
   });
 });

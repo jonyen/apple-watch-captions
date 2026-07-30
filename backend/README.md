@@ -90,6 +90,17 @@ one-time duplication on already-exported pages, not an ongoing one.
 Sessions are finalized after **10 minutes** without audio (was 15 seconds), so
 lowering your wrist mid-conversation no longer ends the session.
 
+### Live sessions
+
+`POST /v1/audio?session=<id>&ephemeral=1` streams captions back as usual but
+persists nothing: no transcript file, so no summary and no Notion page. The
+response carries no `transcript` name, because there is none to resume into, and
+`resume=` is ignored.
+
+The flag is fixed when the session is created. A later post that drops it does
+not start saving, and one that adds it does not stop — a conversation cannot
+change what it does with what it hears half way through.
+
 Behavior worth knowing:
 
 - **Exports are recorded.** A successful export writes `<name>.notion.json` next

@@ -141,3 +141,75 @@ describe("HTTP transport", () => {
     expect(providers[0].closed).toBe(true);
   });
 });
+
+describe("ephemeral sessions", () => {
+  function startWithTranscriptSpy(authToken: string) {
+    const appended: string[] = [];
+    const finalized: string[] = [];
+    const reopened: Array<[string, string]> = [];
+    const server = startServer({
+      port: 0,
+      authToken,
+      createProvider: () => new FakeTranscriptionProvider(),
+      transcripts: {
+        append: (_id: string, text: string) => appended.push(text),
+        finalize: (id: string) => finalized.push(id),
+        reopen: (id: string, name: string) => reopened.push([id, name]),
+        finalizeAll: () => {},
+        activeName: () => "2026-07-29T10-00-00Z_s1",
+      } as any,
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
+    return { port, appended, finalized, reopened };
+  }
+
+  it("omits the transcript name for a live session", async () => {
+    const { port } = startWithTranscriptSpy("t");
+    const res = await fetch(
+      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&ephemeral=1`,
+      { method: "POST", body: new Uint8Array(0) },
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).not.toHaveProperty("transcript");
+  });
+
+  it("still names the transcript for a saved session", async () => {
+    const { port } = startWithTranscriptSpy("t");
+    const res = await fetch(
+      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t`,
+      { method: "POST", body: new Uint8Array(0) },
+    );
+    const body = await res.json();
+    expect(body.transcript).toBe("2026-07-29T10-00-00Z_s1");
+  });
+
+  it("ignores resume= for a live session", async () => {
+    const { port, reopened } = startWithTranscriptSpy("t");
+    await fetch(
+      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&ephemeral=1&resume=2026-07-06T01-02-03Z_abc`,
+      { method: "POST", body: new Uint8Array(0) },
+    );
+    expect(reopened).toEqual([]);
+  });
+
+  it("keeps a live session live across posts and on stop", async () => {
+    const { port, appended, finalized } = startWithTranscriptSpy("t");
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&token=t&ephemeral=1`, {
+      method: "POST",
+      body: new Uint8Array(0),
+    });
+    // A second post without the flag must not start saving.
+    const res = await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&token=t`, {
+      method: "POST",
+      body: new Uint8Array(0),
+    });
+    expect(await res.json()).not.toHaveProperty("transcript");
+    await fetch(`http://127.0.0.1:${port}/v1/stop?session=s1&token=t`, {
+      method: "POST",
+    });
+    expect(appended).toEqual([]);
+    expect(finalized).toEqual([]);
+  });
+});

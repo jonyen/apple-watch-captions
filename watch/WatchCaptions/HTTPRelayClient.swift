@@ -148,6 +148,19 @@ final class HTTPRelayClient: Relay {
         else { return }
         if let seq = obj["seq"] as? Int { lastSeq = max(lastSeq, seq) }
         if let name = obj["transcript"] as? String {
+            if ephemeral {
+                // A relay without ephemeral support treats `ephemeral=1` as an
+                // unrecognized query parameter: it saves the session, summarizes
+                // it, and exports it to Notion — exactly what live caption
+                // promises never to do — and still hands back a `transcript`
+                // name, same as a saved session's response. Latching onto it
+                // here would leave the app showing the hollow "Live only, not
+                // saved" indicator while the relay quietly keeps everything, so
+                // fail loudly instead, the same as a transport failure, rather
+                // than let the user discover a saved transcript afterwards.
+                failEphemeralMismatch()
+                return
+            }
             // Bind to this transcript from now on, so a session the relay has
             // since reaped resumes into it rather than opening a new one.
             resumeName = name
@@ -179,6 +192,17 @@ final class HTTPRelayClient: Relay {
         timer?.cancel()
         timer = nil
         if let onClose { Task { @MainActor in onClose() } }
+    }
+
+    /// Torn down the same way `fail()` handles a transport failure, but via
+    /// `onMessage(.error)` rather than `onClose` so the app can show a message
+    /// specific to this cause instead of the generic "Connection lost".
+    private func failEphemeralMismatch() {
+        guard !stopped else { return }
+        stopped = true
+        timer?.cancel()
+        timer = nil
+        emit(.error(message: "This relay can't do live captions"))
     }
 
     private func emit(_ message: ServerMessage) {

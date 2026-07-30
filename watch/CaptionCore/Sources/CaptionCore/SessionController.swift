@@ -115,7 +115,7 @@ public final class SessionController {
         }
     }
 
-    /// Awaits the restore started by `start(resuming:)`, including one that a
+    /// Awaits the restore started by `start(mode:)`, including one that a
     /// later `start` superseded before it finished. Tests only — production
     /// never waits on either.
     func waitForPrefill() async {

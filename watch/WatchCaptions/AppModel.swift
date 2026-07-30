@@ -28,7 +28,13 @@ final class AppModel: ObservableObject {
 
     /// True when the last session ended by tapping Stop rather than by
     /// backgrounding. Stop is a decision, so it is never auto-resumed.
-    private var stoppedExplicitly = false
+    /// Persisted (see `Keys.stoppedExplicitly`) so a cold launch — watchOS can
+    /// terminate a suspended app between Stop and reopening — still sees it;
+    /// otherwise a fresh `AppModel` would default to `false` and could
+    /// auto-resume into a session the user just deliberately ended.
+    private var stoppedExplicitly = false {
+        didSet { defaults.set(stoppedExplicitly, forKey: Keys.stoppedExplicitly) }
+    }
 
     private let controller: SessionController
     private let relay: HTTPRelayClient
@@ -50,6 +56,7 @@ final class AppModel: ObservableObject {
             history: historyClient
         )
         lastSession = Self.loadLastSession(from: defaults)
+        stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
     }
 
@@ -201,6 +208,7 @@ final class AppModel: ObservableObject {
     private enum Keys {
         static let transcriptName = "lastTranscriptName"
         static let endedAt = "lastSessionEndedAt"
+        static let stoppedExplicitly = "stoppedExplicitly"
     }
 
     private static func loadLastSession(from defaults: UserDefaults) -> LastSession? {

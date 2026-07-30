@@ -14,25 +14,45 @@ struct HomeView: View {
 
     var body: some View {
         List {
-            // One row, two buttons: the wide one records, the narrow one does
-            // not. `.bordered` on both is load-bearing — a bare Button in a
-            // watchOS list row expands to the full width, and two of them
-            // would fight over it.
-            HStack(spacing: 6) {
+            // One row, two halves split by a divider: the wide one records,
+            // the narrow one does not. The row itself is an ordinary list
+            // row, so the system supplies the fill, insets, height and
+            // corner radius that make it a sibling of "Transcripts" below.
+            // The halves are nested plain buttons purely so each stays
+            // independently tappable inside that one row.
+            HStack(spacing: 0) {
                 Button(action: onNew) {
-                    Label("New session", systemImage: "record.circle")
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity)
+                    // A `Label` scales its icon and text as one unit, and on
+                    // the 40mm case that unit never shrinks enough before
+                    // hitting the truncating edge — the words lose out to the
+                    // dot. Composing the pieces by hand lets the scale floor
+                    // apply to the text alone; the glyph stays full size.
+                    HStack(spacing: 4) {
+                        Image(systemName: "record.circle")
+                        Text("New session")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                    // Keeps the glyph off the row's leading edge. Modest on
+                    // purpose: this content already competes with that scale
+                    // floor for space on the 40mm case, the tightest there is.
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity)
+                    // Without this only the glyph and letters take the tap,
+                    // not the empty width between them and the divider.
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                Divider()
                 Button(action: onLive) {
                     Image(systemName: "waveform")
+                        .frame(width: 40)
+                        .contentShape(Rectangle())
                 }
-                .frame(width: 40)
+                .buttonStyle(.plain)
                 .accessibilityLabel("Live caption")
                 .accessibilityHint("Captions on screen only. Nothing is saved.")
             }
-            .buttonStyle(.bordered)
             if lastSession != nil {
                 Button(action: onContinue) {
                     Label("Continue last", systemImage: "arrow.clockwise")

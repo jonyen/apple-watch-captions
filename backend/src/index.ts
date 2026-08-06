@@ -1,7 +1,7 @@
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
 import { startServer, ProviderOptions } from "./server";
-import { DeepgramProvider, DeepgramLike } from "./deepgramProvider";
+import { DeepgramProvider, DeepgramLike, telephonyOptions } from "./deepgramProvider";
 import { OpenAIProvider } from "./openaiProvider";
 import { AssemblyAIProvider } from "./assemblyaiProvider";
 import { ChannelSplitProvider } from "./channelSplitProvider";
@@ -85,6 +85,11 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
     case "assemblyai":
       return monoOnly("AssemblyAI", config.assemblyaiApiKey, (key) => new AssemblyAIProvider(key));
     default:
+      // Telephony is mono by definition — one caller, one track — so it never
+      // combines with the dual-channel path.
+      if (opts?.telephony) {
+        return new DeepgramProvider(deepgram, telephonyOptions(config.deepgramPhoneModel));
+      }
       return new DeepgramProvider(
         deepgram,
         dual ? { channels: 2, multichannel: true } : undefined,

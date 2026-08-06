@@ -8,6 +8,7 @@ import {
   KEEPALIVE_INTERVAL_MS,
   KEEPALIVE_MESSAGE,
   MAX_RECONNECT_ATTEMPTS,
+  telephonyOptions,
 } from "./deepgramProvider";
 import { Transcript } from "./transcriptionProvider";
 
@@ -267,5 +268,17 @@ describe("DeepgramProvider", () => {
       channel: { alternatives: [{ transcript: "hi" }] },
     });
     expect(got[0].channel).toBe(1);
+  });
+});
+
+describe("telephonyOptions", () => {
+  // Twilio media payloads are audio/x-mulaw at 8000 Hz. Deepgram takes those
+  // directly, which is why the relay never transcodes.
+  it("describes mu-law 8 kHz phone audio", () => {
+    expect(telephonyOptions("flux-general-en")).toEqual({
+      encoding: "mulaw",
+      sample_rate: 8000,
+      model: "flux-general-en",
+    });
   });
 });

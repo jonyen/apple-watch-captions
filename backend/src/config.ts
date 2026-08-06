@@ -17,6 +17,10 @@ export interface Config {
   assemblyaiApiKey?: string;
   /** Optional; when set, finished transcripts are exported to Notion. */
   notion?: NotionConfig;
+  /** Deepgram model for phone audio. Overridable — the right one is an open question. */
+  deepgramPhoneModel: string;
+  /** Optional; the number Twilio bridges an inbound captioned call to. */
+  twilioForwardTo?: string;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -47,6 +51,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     openaiApiKey: env.OPENAI_API_KEY || undefined,
     assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
     notion: loadNotion(env),
+    deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "flux-general-en",
+    twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
   };
 }
 

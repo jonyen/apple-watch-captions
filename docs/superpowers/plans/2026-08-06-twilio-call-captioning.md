@@ -18,7 +18,7 @@
 - Call sessions are **always ephemeral**. Every `SessionStore.feed` call from the Twilio path passes `ephemeral = true`. No transcript file, no summary, no Notion export.
 - Audio is **never transcoded**. Twilio's base64 μ-law 8 kHz bytes go to Deepgram unchanged.
 - The stream forks `track="inbound_track"` only — the caller's audio, never the user's.
-- Neither Twilio nor Deepgram may appear in the test suite. Use `FakeTranscriptionProvider` and fake sockets.
+- **No test may contact Twilio or Deepgram.** Transcription is always `FakeTranscriptionProvider`; Twilio is always fake frames. A real WebSocket to the test's own `startServer` instance is fine and expected — it is this relay, not a vendor.
 - Commit after every task. Work on branch `feat/call-captioning`.
 
 ---

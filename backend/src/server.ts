@@ -15,15 +15,9 @@ import {
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
+import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
 
-export const PROVIDER_NAMES = ["deepgram", "openai", "assemblyai"] as const;
-export type ProviderName = (typeof PROVIDER_NAMES)[number];
-
-export interface ProviderOptions {
-  channels?: number;
-  /** Requested transcription backend; absent = deepgram. */
-  provider?: ProviderName;
-}
+export * from "./providerOptions";
 
 export interface StartServerOptions {
   port: number;

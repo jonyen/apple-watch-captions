@@ -1,4 +1,5 @@
 import { CaptionSession, OutboundMessage } from "./captionSession";
+import { ProviderOptions } from "./providerOptions";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
 
@@ -22,7 +23,7 @@ interface Session {
 
 export interface SessionStoreOptions {
   /** Factory for a fresh provider per session (Deepgram in prod, fake in tests). */
-  createProvider: () => TranscriptionProvider;
+  createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Close sessions with no activity for this long. Defaults to 15s. */
   /**
    * How long a session may go without audio before it is finalized. Long
@@ -43,7 +44,7 @@ export interface SessionStoreOptions {
  */
 export class SessionStore {
   private sessions = new Map<string, Session>();
-  private readonly createProvider: () => TranscriptionProvider;
+  private readonly createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
   private readonly transcripts?: TranscriptStore;
@@ -59,8 +60,8 @@ export class SessionStore {
    * Feed audio (may be empty) for a session, lazily creating it on first use.
    * `ephemeral` is honoured only on creation — see `Session.ephemeral`.
    */
-  feed(id: string, pcm: Buffer, ephemeral = false): void {
-    const session = this.getOrCreate(id, ephemeral);
+  feed(id: string, pcm: Buffer, ephemeral = false, providerOpts?: ProviderOptions): void {
+    const session = this.getOrCreate(id, ephemeral, providerOpts);
     session.lastActivity = this.now();
     if (pcm.length > 0) session.caption.handleAudio(pcm);
   }
@@ -118,11 +119,15 @@ export class SessionStore {
     return this.sessions.get(id)?.ephemeral ?? false;
   }
 
-  private getOrCreate(id: string, ephemeral: boolean): Session {
+  private getOrCreate(
+    id: string,
+    ephemeral: boolean,
+    providerOpts?: ProviderOptions,
+  ): Session {
     const existing = this.sessions.get(id);
     if (existing) return existing;
 
-    const provider = this.createProvider();
+    const provider = this.createProvider(providerOpts);
     const session: Session = {
       caption: undefined as unknown as CaptionSession,
       events: [],

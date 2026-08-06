@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { SessionStore } from "./sessionStore";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { ProviderOptions } from "./providerOptions";
 
 function makeStore(opts?: { idleTimeoutMs?: number; now?: () => number }) {
   const providers: FakeTranscriptionProvider[] = [];
@@ -168,5 +169,38 @@ describe("SessionStore ephemeral sessions", () => {
     expect(store.isEphemeral("live")).toBe(true);
     expect(store.isEphemeral("saved")).toBe(false);
     expect(store.isEphemeral("unknown")).toBe(false);
+  });
+});
+
+describe("provider options", () => {
+  it("passes them to the factory when the session is created", () => {
+    const seen: (ProviderOptions | undefined)[] = [];
+    const store = new SessionStore({
+      createProvider: (opts) => {
+        seen.push(opts);
+        return new FakeTranscriptionProvider();
+      },
+    });
+
+    store.feed("s1", Buffer.alloc(0), true, { telephony: true });
+
+    expect(seen).toEqual([{ telephony: true }]);
+  });
+
+  // The provider is built once, at creation. A later post cannot change what
+  // a conversation already in progress is being transcribed as.
+  it("ignores them for a session that already exists", () => {
+    const seen: (ProviderOptions | undefined)[] = [];
+    const store = new SessionStore({
+      createProvider: (opts) => {
+        seen.push(opts);
+        return new FakeTranscriptionProvider();
+      },
+    });
+
+    store.feed("s1", Buffer.alloc(0), true, { telephony: true });
+    store.feed("s1", Buffer.alloc(0), true, { telephony: false });
+
+    expect(seen).toHaveLength(1);
   });
 });

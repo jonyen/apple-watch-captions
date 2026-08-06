@@ -5,7 +5,12 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { startServer, CaptionServer } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
-import { TranscriptStore, writeSummary, listTranscripts } from "./transcriptStore";
+import {
+  TranscriptStore,
+  writeSummary,
+  writeExportMarker,
+  listTranscripts,
+} from "./transcriptStore";
 
 let running: CaptionServer | null = null;
 let dir: string;
@@ -125,6 +130,81 @@ describe("transcript persistence + endpoints", () => {
     expect((await fetch(`${url}?token=bad`, { method: "DELETE" })).status).toBe(401);
 
     expect(listTranscripts(dir)).toHaveLength(1);
+  });
+
+  // The watch polls this after a session ends so it can notify once the
+  // transcript is in Notion. Deliberately not the detail endpoint: polling that
+  // ships every caption back over a cellular watch link each time.
+  describe("export status", () => {
+    /** Comfortably past the content floor below which nothing is exported. */
+    const SUBSTANTIAL = "we talked for a while about the release schedule";
+
+    async function storedTranscript(
+      port: number,
+      providers: FakeTranscriptionProvider[],
+      text = SUBSTANTIAL,
+    ) {
+      await fetch(`${base(port)}/v1/audio?session=s1&token=good`, { method: "POST" });
+      providers[0].emitTranscript({ text, isFinal: true });
+      return listTranscripts(dir)[0].name;
+    }
+
+    it("reports a transcript that has not reached Notion", async () => {
+      const { providers, port } = start("good");
+      const name = await storedTranscript(port, providers);
+
+      const res = await fetch(`${base(port)}/v1/transcripts/${name}/export?token=good`);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ exported: false, eligible: true });
+    });
+
+    // Without this a client cannot tell "not yet" from "never", and waits out
+    // its whole window on a transcript the relay already decided to skip.
+    it("reports a transcript below the content floor as ineligible", async () => {
+      const { providers, port } = start("good");
+      const name = await storedTranscript(port, providers, "hello");
+
+      const res = await fetch(`${base(port)}/v1/transcripts/${name}/export?token=good`);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ exported: false, eligible: false });
+    });
+
+    it("reports the page once the transcript has been exported", async () => {
+      const { providers, port } = start("good");
+      const name = await storedTranscript(port, providers);
+      writeSummary(dir, name, "Title: Sprint planning\n\nWe planned the sprint.");
+      writeExportMarker(dir, name, { pageId: "p1", url: "https://notion.so/p1" });
+
+      const res = await fetch(`${base(port)}/v1/transcripts/${name}/export?token=good`);
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.exported).toBe(true);
+      expect(body.eligible).toBe(true);
+      expect(body.url).toBe("https://notion.so/p1");
+      // Carries the title so the watch's notification can say what it was
+      // about without a second round trip.
+      expect(body.title).toBe("Sprint planning");
+      expect(body.exportedAt).toEqual(expect.any(String));
+    });
+
+    it("404s export status for an unknown transcript", async () => {
+      const { port } = start("good");
+      const res = await fetch(`${base(port)}/v1/transcripts/nope/export?token=good`);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "not found" });
+    });
+
+    it("rejects export status without a valid token", async () => {
+      const { providers, port } = start("good");
+      const name = await storedTranscript(port, providers);
+      const url = `${base(port)}/v1/transcripts/${name}/export`;
+
+      expect((await fetch(url)).status).toBe(401);
+      expect((await fetch(`${url}?token=bad`)).status).toBe(401);
+    });
   });
 
   it("serves the viewer page without a token", async () => {

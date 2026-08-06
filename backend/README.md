@@ -74,6 +74,17 @@ Setup:
    fly secrets set NOTION_TOKEN="ntn_…" NOTION_DATABASE_ID="<database-id>"
    ```
 
+### Knowing when an export lands
+
+`GET /v1/transcripts/<name>/export` answers `{"exported": false}` while the page
+is still being written, then `{"exported": true, "url": …, "title": …,
+"exportedAt": …}`. The watch polls it after a session ends so it can notify you
+once the transcript is in Notion — nothing exists to link to at the moment you
+tap Stop, since the summary and the export both run after the session closes.
+
+Separate from the transcript detail endpoint on purpose: polling that would ship
+every caption back over a cellular watch link on each attempt.
+
 ### Resuming a session
 
 `POST /v1/audio?session=<id>&resume=<transcriptName>` binds a new session to an

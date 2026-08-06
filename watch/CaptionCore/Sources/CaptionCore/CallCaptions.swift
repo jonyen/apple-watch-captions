@@ -77,6 +77,16 @@ public final class CallCaptions: ObservableObject {
     /// has not noticed the call yet, not that it is over.
     private var wasActive = false
     private var task: Task<Void, Never>?
+    /// The loop a later `start()`/`stop()` superseded. Retained only so tests
+    /// can await it; production never waits on either slot.
+    private var supersededTask: Task<Void, Never>?
+    /// Identifies the current loop, mirroring `SessionController.generation`.
+    /// `client.poll` has no cancellation hook, so a poll already in flight when
+    /// `start()`/`stop()` runs can still resume afterward and try to write into
+    /// the fields that reset just cleared — `task?.cancel()` alone is only a
+    /// request, not a guarantee. Comparing generation after every await is what
+    /// keeps that stale answer from landing in a session it does not belong to.
+    private var generation = 0
 
     public init(client: CallClient, store: CaptionStore) {
         self.client = client
@@ -85,11 +95,13 @@ public final class CallCaptions: ObservableObject {
 
     /// Begin reading. Safe to call again; the previous loop is replaced.
     public func start() {
+        generation += 1
         store.reset()
         seq = 0
         wasActive = false
         ended = nil
         task?.cancel()
+        supersededTask = task
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -101,15 +113,23 @@ public final class CallCaptions: ObservableObject {
     }
 
     public func stop() {
+        generation += 1
         task?.cancel()
+        supersededTask = task
         task = nil
     }
 
     /// One poll. False when the call is over and polling should stop. A failed
     /// request keeps the loop alive — a watch out of range is not an answer.
+    /// An answer that comes back after a later `start()`/`stop()` has moved the
+    /// loop to a new generation is handled the same way — keep going — but its
+    /// data is dropped rather than written into a session it is not part of.
     @discardableResult
     public func poll() async -> Bool {
-        guard let update = try? await client.poll(since: seq) else { return true }
+        let generation = self.generation
+        let update = try? await client.poll(since: seq)
+        guard self.generation == generation else { return true }
+        guard let update else { return true }
         seq = max(seq, update.seq)
         for event in update.events { store.apply(event) }
         if update.active {
@@ -119,5 +139,11 @@ public final class CallCaptions: ObservableObject {
         guard wasActive else { return true }
         ended = update.reason ?? .ended
         return false
+    }
+
+    /// Awaits the loop a `start()`/`stop()` superseded. Tests only —
+    /// production never waits on it.
+    func waitForSupersededLoop() async {
+        await supersededTask?.value
     }
 }

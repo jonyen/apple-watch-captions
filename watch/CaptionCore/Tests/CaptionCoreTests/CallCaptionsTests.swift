@@ -165,4 +165,130 @@ final class CallCaptionsTests: XCTestCase {
         XCTAssertTrue(keepGoing)
         XCTAssertNil(captions.ended)
     }
+
+    /// A `CallClient` whose `poll(since:)` calls block until a test releases
+    /// them, so a poll left in flight by one loop can be superseded by a
+    /// `start()`/`stop()` deterministically instead of racing on real
+    /// concurrency or timers. Mirrors `SessionControllerTests.GatedHistory`.
+    private actor GatedCallClient: CallClient {
+        private var registeredCalls = 0
+        private var waiters: [CheckedContinuation<CallUpdate, Error>] = []
+        private var arrivalWatchers: [(need: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        private(set) var polledSince: [Int] = []
+
+        func poll(since: Int) async throws -> CallUpdate {
+            polledSince.append(since)
+            return try await withCheckedThrowingContinuation { continuation in
+                waiters.append(continuation)
+                registeredCalls += 1
+                notifyArrivals()
+            }
+        }
+
+        /// Waits until `count` calls have arrived, without releasing them.
+        func waitForArrival(_ count: Int) async {
+            if registeredCalls < count {
+                await withCheckedContinuation { arrivalWatchers.append((count, $0)) }
+            }
+        }
+
+        /// Resolves the oldest still-waiting call.
+        func resumeOldest(with update: CallUpdate) {
+            guard !waiters.isEmpty else { return }
+            waiters.removeFirst().resume(returning: update)
+        }
+
+        private func notifyArrivals() {
+            arrivalWatchers.removeAll { watcher in
+                guard registeredCalls >= watcher.need else { return false }
+                watcher.continuation.resume()
+                return true
+            }
+        }
+    }
+
+    private func make(_ client: GatedCallClient) -> (CallCaptions, CaptionStore) {
+        let store = CaptionStore()
+        return (CallCaptions(client: client, store: store), store)
+    }
+
+    /// A poll already in flight when `stop()` runs must not lead to another
+    /// request once it resolves — that would mean the loop kept going after
+    /// being told to stop.
+    func testStopHaltsPolling() async {
+        let client = GatedCallClient()
+        let (captions, _) = make(client)
+
+        captions.start()
+        await client.waitForArrival(1)
+
+        captions.stop()
+        await client.resumeOldest(with: CallUpdate(active: true, reason: nil, events: [], seq: 1))
+        await captions.waitForSupersededLoop()
+
+        let requests = await client.polledSince
+        XCTAssertEqual(requests, [0])
+    }
+
+    /// `start()` replaces the loop rather than adding a second one alongside
+    /// it: the superseded loop's in-flight poll must not lead to a further
+    /// request of its own once it resolves.
+    func testStartingAgainSupersedesThePreviousLoopRatherThanAddingASecondOne() async {
+        let client = GatedCallClient()
+        let (captions, _) = make(client)
+
+        captions.start()
+        await client.waitForArrival(1)
+
+        captions.start()
+        await client.waitForArrival(2)
+
+        await client.resumeOldest(with: CallUpdate(active: true, reason: nil, events: [], seq: 1))
+        await captions.waitForSupersededLoop()
+
+        // Only the two initial requests — one per generation — should have
+        // happened; the superseded loop did not go on to request a second poll.
+        let requests = await client.polledSince
+        XCTAssertEqual(requests, [0, 0])
+
+        // Resolve the still-open current-generation request and tear down so
+        // nothing is left dangling.
+        await client.resumeOldest(with: CallUpdate(active: true, reason: nil, events: [], seq: 2))
+        captions.stop()
+        await captions.waitForSupersededLoop()
+    }
+
+    /// The regression this task fixes: a poll already in flight when `start()`
+    /// resets state must not write its answer into the new session once it
+    /// resolves — not a stale caption landing in the just-cleared store, and
+    /// not a stale `seq` skipping the new session's own early captions.
+    func testAStaleInFlightPollDoesNotCorruptANewSession() async {
+        let client = GatedCallClient()
+        let (captions, store) = make(client)
+
+        captions.start()
+        await client.waitForArrival(1)   // first loop's poll (generation 1) in flight
+
+        captions.start()                 // supersedes it before it resolves
+        await client.waitForArrival(2)   // second loop's poll (generation 2) in flight
+
+        // Resolve the stale (first) poll with data that must not land.
+        await client.resumeOldest(with: CallUpdate(
+            active: true, reason: nil,
+            events: [.caption(text: "stale", isFinal: true, channel: nil)],
+            seq: 99))
+        await captions.waitForSupersededLoop()
+
+        XCTAssertEqual(store.paragraphs.map(\.text), [])
+
+        // The current generation's own request must still be asking from 0 —
+        // proof the stale answer's seq: 99 never reached it.
+        let requests = await client.polledSince
+        XCTAssertEqual(requests, [0, 0])
+
+        // Resolve the still-open current-generation request and tear down.
+        await client.resumeOldest(with: CallUpdate(active: true, reason: nil, events: [], seq: 2))
+        captions.stop()
+        await captions.waitForSupersededLoop()
+    }
 }

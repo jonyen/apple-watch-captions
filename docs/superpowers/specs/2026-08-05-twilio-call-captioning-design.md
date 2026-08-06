@@ -179,9 +179,33 @@ already dropped.
 ### Config
 
 - `TWILIO_FORWARD_TO` — the number `<Dial>` rings.
-- A Deepgram phone-model override, as an env var with a default rather than a
-  hardcoded model id. The exact current model name should be confirmed against
-  Deepgram's docs at implementation time, and you will want to try more than one.
+- `DEEPGRAM_PHONE_MODEL` — an env var rather than a hardcoded id, because the
+  right model here is an open question worth answering with real calls.
+
+Verified against Twilio and Deepgram docs on 2026-08-05:
+
+- Twilio media payloads are `audio/x-mulaw` at `sampleRate` 8000, base64 in
+  `media.payload`. Deepgram accepts `encoding=mulaw` with `sample_rate=8000`, so
+  the no-transcoding claim holds.
+- The `start` frame carries both `callSid` and `streamSid`, so using `callSid` as
+  the session id is available at exactly the moment the lifecycle needs it.
+- `<Start><Stream>` is confirmed non-blocking — Twilio "immediately continues with
+  the next TwiML instruction" — so `<Dial>` runs while audio is already flowing.
+- `inbound_track` is the default and means audio Twilio receives *from the other
+  party*, which is the caller. Caller-only is confirmed as free.
+
+**Model candidates, in the order worth trying:**
+
+1. `flux-general-en` — Deepgram's conversational model built for voice agents and
+   optimised for low latency. Latency is the number that decides this prototype,
+   so this is the one to try first. It did not exist when the surrounding pipeline
+   was written.
+2. `phonecall` — the long-standing alias optimised for low-bandwidth phone audio.
+   The safe baseline.
+3. `nova-3` — best general accuracy; whether it has a telephony variant should be
+   checked rather than assumed.
+
+Trying more than one is the point of the env var.
 
 ### `ProviderOptions` moves out of `server.ts`
 

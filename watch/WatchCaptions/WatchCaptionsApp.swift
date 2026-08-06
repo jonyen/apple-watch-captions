@@ -21,6 +21,12 @@ struct WatchCaptionsApp: App {
             @unknown default: break
             }
         }
+        // A transcript reaches Notion a while after the session ends, by which
+        // point the app is usually suspended. This is the wake that lets the
+        // notification arrive anyway.
+        .backgroundTask(.appRefresh) { _ in
+            await model.checkPendingExport()
+        }
     }
 }
 

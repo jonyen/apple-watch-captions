@@ -1,5 +1,6 @@
 import {
   FinalizedTranscript,
+  MIN_TRANSCRIPT_CHARS,
   readExportMarker,
   writeExportMarker,
   writeSummary,
@@ -7,9 +8,6 @@ import {
 import { Summarize } from "./summarizer";
 import { ExportTranscript } from "./notionExporter";
 import { UpdateExport } from "./notionUpdater";
-
-/** Skip summarizing and exporting transcripts with almost no content. */
-const MIN_TRANSCRIPT_CHARS = 40;
 
 export interface FinalizerOptions {
   /** Transcript directory the summary file is written to. */

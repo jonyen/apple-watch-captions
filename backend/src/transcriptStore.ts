@@ -242,6 +242,62 @@ export function writeExportMarker(
   writeFileSync(join(dir, `${name}.notion.json`), JSON.stringify(body));
 }
 
+/**
+ * Whether a transcript has reached Notion yet, and where it landed. Null when
+ * there is no such transcript.
+ *
+ * A client that just ended a session polls this to find out when the export
+ * finishes — the summary and the Notion write both happen after the session
+ * closes, so the page does not exist yet when the last caption arrives. Kept
+ * separate from `readTranscript` because polling that would ship every caption
+ * back on each attempt.
+ */
+export function readExportStatus(dir: string, name: string): ExportStatus | null {
+  if (!isSafeName(name)) return null;
+  const file = join(dir, `${name}.jsonl`);
+  if (!existsSync(file)) return null;
+
+  const marker = readExportMarker(dir, name);
+  if (!marker) {
+    // Say whether waiting is even worth it. A transcript under the content
+    // floor is never summarized or exported, so a client polling for its page
+    // would otherwise wait out its whole window on something that will never
+    // arrive. Read from the file rather than remembered, so a resumed session
+    // that grows past the floor starts reporting eligible.
+    const chars = readSegments(file).reduce((n, s) => n + s.text.length, 0);
+    return { exported: false, eligible: chars >= MIN_TRANSCRIPT_CHARS };
+  }
+
+  const summaryFile = join(dir, `${name}.summary.md`);
+  const title = existsSync(summaryFile)
+    ? parseSummary(readFileSync(summaryFile, "utf8")).title
+    : undefined;
+  return {
+    exported: true,
+    eligible: true,
+    url: marker.url,
+    ...(marker.exportedAt ? { exportedAt: marker.exportedAt } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
+/** Below this many characters a transcript is not summarized or exported. */
+export const MIN_TRANSCRIPT_CHARS = 40;
+
+export interface ExportStatus {
+  exported: boolean;
+  /**
+   * Whether this transcript can ever be exported. False for one below the
+   * content floor — the signal that tells a waiting client to stop waiting.
+   */
+  eligible: boolean;
+  /** The Notion page, once there is one. */
+  url?: string;
+  exportedAt?: string;
+  /** Topic from the summary, so a caller can name the transcript. */
+  title?: string;
+}
+
 /** The export marker for a transcript, or null if it has never been exported. */
 export function readExportMarker(dir: string, name: string): ExportMarker | null {
   if (!isSafeName(name)) return null;

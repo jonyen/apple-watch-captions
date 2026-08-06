@@ -10,6 +10,7 @@ import {
   TranscriptStore,
   listTranscripts,
   readTranscript,
+  readExportStatus,
   deleteTranscript,
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
@@ -138,7 +139,22 @@ async function handleRequest(
       sendJSON(res, 200, { transcripts: listTranscripts(opts.transcriptsDir) });
       return;
     }
-    const name = decodeURIComponent(url.pathname.slice("/v1/transcripts/".length));
+    const path = url.pathname.slice("/v1/transcripts/".length);
+
+    // Has this transcript reached Notion yet? Answered on its own so a client
+    // waiting on the export can poll it without pulling the whole transcript.
+    if (path.endsWith("/export")) {
+      const name = decodeURIComponent(path.slice(0, -"/export".length));
+      const status = readExportStatus(opts.transcriptsDir, name);
+      if (!status) {
+        sendJSON(res, 404, { error: "not found" });
+        return;
+      }
+      sendJSON(res, 200, status);
+      return;
+    }
+
+    const name = decodeURIComponent(path);
     const detail = readTranscript(opts.transcriptsDir, name);
     if (!detail) {
       sendJSON(res, 404, { error: "not found" });

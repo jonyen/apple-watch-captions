@@ -1,4 +1,5 @@
 import Foundation
+import WatchKit
 import CaptionCore
 
 @MainActor
@@ -39,6 +40,11 @@ final class AppModel: ObservableObject {
     private let controller: SessionController
     private let relay: HTTPRelayClient
     private let defaults: UserDefaults
+    /// Waits for the relay to push a finished transcript to Notion.
+    private let exports: ExportWatcher
+    private let notifier = ExportNotifier()
+    /// The foreground poll. Cancelled and replaced whenever a new wait starts.
+    private var exportPoll: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -46,6 +52,7 @@ final class AppModel: ObservableObject {
         let historyClient = RelayHistoryClient(base: base, token: Secrets.authToken)
         relay = HTTPRelayClient(base: base, token: Secrets.authToken)
         history = HistoryStore(client: historyClient)
+        exports = ExportWatcher(client: historyClient, defaults: defaults)
         controller = SessionController(
             store: store,
             relay: relay,
@@ -65,6 +72,11 @@ final class AppModel: ObservableObject {
     /// Decide what opening the app does: pick up a conversation you glanced away
     /// from, or offer the menu.
     func launch() async {
+        // Before anything else, and outside the guards below: a session that
+        // ended before the app was suspended may have reached Notion since, and
+        // that is worth saying wherever the app happens to reopen.
+        resumeExportWait()
+
         #if DEBUG
         // Lets a harness open a screen directly, since the watchOS simulator
         // offers no way to drive taps from the command line.
@@ -189,7 +201,79 @@ final class AppModel: ObservableObject {
         lastSession = session
         defaults.set(name, forKey: Keys.transcriptName)
         defaults.set(session.endedAt.timeIntervalSince1970, forKey: Keys.endedAt)
+        beginExportWait(for: name)
     }
+
+    // MARK: - Notion export
+
+    /// Start waiting for this transcript's Notion page. Nothing exists to link
+    /// to yet — the relay summarizes and exports only after the session closes.
+    private func beginExportWait(for name: String) {
+        exports.track(name: name)
+        startExportPoll()
+    }
+
+    /// Pick a wait back up on launch. A watch app is suspended within seconds
+    /// of the wrist dropping, so most waits are finished by some later wake
+    /// rather than by the poll that started them.
+    private func resumeExportWait() {
+        guard exports.pending != nil else { return }
+        startExportPoll()
+    }
+
+    private func startExportPoll() {
+        exportPoll?.cancel()
+        exportPoll = Task { [weak self] in await self?.pollForExport() }
+        scheduleExportRefresh()
+    }
+
+    /// Poll while the app is on screen. Suspension simply stops this task
+    /// making progress; `checkPendingExport()` carries the wait from there.
+    private func pollForExport() async {
+        // Here rather than at the point the wait starts, so a prompt the user
+        // never got to answer — the app can be suspended mid-session-end — is
+        // asked again on the next launch instead of leaving the notification
+        // silently undeliverable.
+        await notifier.requestAuthorization()
+        while !Task.isCancelled {
+            switch await exports.poll() {
+            case .exported(let transcript):
+                await notifier.notify(transcript)
+                return
+            case .idle, .gaveUp:
+                return
+            case .waiting:
+                try? await Task.sleep(
+                    nanoseconds: UInt64(ExportWatcher.pollInterval * 1_000_000_000))
+            }
+        }
+    }
+
+    /// One check from a background wake, rescheduling while the wait is still
+    /// live. Called by the app's background-refresh handler.
+    func checkPendingExport() async {
+        switch await exports.poll() {
+        case .exported(let transcript):
+            await notifier.notify(transcript)
+        case .waiting:
+            scheduleExportRefresh()
+        case .idle, .gaveUp:
+            break
+        }
+    }
+
+    /// Ask watchOS to wake the app to check again. watchOS decides when it
+    /// actually runs and budgets how often, so this is a fallback for a wait
+    /// the foreground poll could not finish — not the primary path.
+    private func scheduleExportRefresh() {
+        WKApplication.shared().scheduleBackgroundRefresh(
+            withPreferredDate: Date().addingTimeInterval(Self.exportRefreshDelay),
+            userInfo: nil) { _ in }
+    }
+
+    /// Comfortably past a typical export (summary, then the Notion write),
+    /// without asking watchOS for a wake it will refuse as too soon.
+    private static let exportRefreshDelay: TimeInterval = 60
 
     // MARK: - Navigation
 

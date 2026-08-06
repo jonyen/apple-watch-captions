@@ -68,6 +68,8 @@ Sessions end when you tap Stop (watch) or click the menu-bar button again (mac).
 
 Set `NOTION_TOKEN` and `NOTION_DATABASE_ID` on the relay and each finished session also lands in a Notion database — a collapsed Summary toggle and a collapsed Full transcript toggle. Exports are recorded per transcript, so they never duplicate, and anything that failed (or predates the integration) is retried on the next relay boot. Setup and the pre-flight check are in [`backend/README.md`](backend/README.md#notion-export-optional).
 
+The watch notifies you when the page is ready. The export finishes well after the conversation does — the relay summarizes first, then writes the page — so the wait is persisted and picked up by a background refresh or the next launch, rather than dying with the screen.
+
 ## Transport API
 
 Token auth via `?token=<AUTH_TOKEN>` on every request.

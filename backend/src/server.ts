@@ -16,6 +16,7 @@ import {
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
+import { voiceResponse } from "./twiml";
 
 export * from "./providerOptions";
 
@@ -30,6 +31,8 @@ export interface StartServerOptions {
   transcriptsDir?: string;
   /** Optional usage data source; enables GET /v1/usage. */
   usage?: { getUsage(): Promise<ReportData> };
+  /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
+  callForwardTo?: string;
 }
 
 export interface CaptionServer {
@@ -116,6 +119,28 @@ async function handleRequest(
   if (req.method === "GET" && url.pathname === "/app") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(VIEWER_HTML);
+    return;
+  }
+
+  // Twilio asks what to do with an inbound call. Answer: fork the caller's
+  // audio to this relay, then bridge the call onward.
+  if (req.method === "POST" && url.pathname === "/twilio/voice") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.callForwardTo) {
+      sendJSON(res, 503, { error: "call captioning not configured" });
+      return;
+    }
+    // The host Twilio reached us on is the host it should stream back to, so
+    // there is no public-URL setting to keep in sync with the deployment.
+    const streamUrl =
+      `wss://${req.headers.host ?? ""}/twilio/stream` +
+      `?token=${encodeURIComponent(token ?? "")}`;
+    res.writeHead(200, { "content-type": "text/xml" });
+    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo }));
     return;
   }
 

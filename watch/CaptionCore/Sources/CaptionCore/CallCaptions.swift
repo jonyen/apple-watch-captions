@@ -56,3 +56,68 @@ private func decodeCallEvent(_ event: [String: Any]) -> ServerMessage? {
         return nil
     }
 }
+
+/// Reads a live call onto the screen.
+///
+/// Deliberately not `SessionController`: that orchestrates permission,
+/// connection, and microphone capture, and a call needs none of them. The audio
+/// is Twilio's, so this never touches the mic or the audio session — there is
+/// nothing here to contend with the phone call itself.
+@MainActor
+public final class CallCaptions: ObservableObject {
+    /// Set once the call is over, with why. Nil while it is live.
+    @Published public private(set) var ended: CallEndReason?
+
+    public static let pollInterval: TimeInterval = 1
+
+    private let client: CallClient
+    private let store: CaptionStore
+    private var seq = 0
+    /// A call was seen live. Until then an inactive answer just means the relay
+    /// has not noticed the call yet, not that it is over.
+    private var wasActive = false
+    private var task: Task<Void, Never>?
+
+    public init(client: CallClient, store: CaptionStore) {
+        self.client = client
+        self.store = store
+    }
+
+    /// Begin reading. Safe to call again; the previous loop is replaced.
+    public func start() {
+        store.reset()
+        seq = 0
+        wasActive = false
+        ended = nil
+        task?.cancel()
+        task = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard await self.poll() else { return }
+                try? await Task.sleep(
+                    nanoseconds: UInt64(Self.pollInterval * 1_000_000_000))
+            }
+        }
+    }
+
+    public func stop() {
+        task?.cancel()
+        task = nil
+    }
+
+    /// One poll. False when the call is over and polling should stop. A failed
+    /// request keeps the loop alive — a watch out of range is not an answer.
+    @discardableResult
+    public func poll() async -> Bool {
+        guard let update = try? await client.poll(since: seq) else { return true }
+        seq = max(seq, update.seq)
+        for event in update.events { store.apply(event) }
+        if update.active {
+            wasActive = true
+            return true
+        }
+        guard wasActive else { return true }
+        ended = update.reason ?? .ended
+        return false
+    }
+}

@@ -62,3 +62,107 @@ final class CallUpdateDecodingTests: XCTestCase {
         XCTAssertEqual(update.events, [.caption(text: "hi", isFinal: true, channel: nil)])
     }
 }
+
+private final class FakeCallClient: CallClient, @unchecked Sendable {
+    var updates: [CallUpdate] = []
+    var error: Error?
+    private(set) var polledSince: [Int] = []
+
+    func poll(since: Int) async throws -> CallUpdate {
+        polledSince.append(since)
+        if let error { throw error }
+        return updates.isEmpty
+            ? CallUpdate(active: true, reason: nil, events: [], seq: since)
+            : updates.removeFirst()
+    }
+}
+
+@MainActor
+final class CallCaptionsTests: XCTestCase {
+    private func make(_ client: FakeCallClient) -> (CallCaptions, CaptionStore) {
+        let store = CaptionStore()
+        return (CallCaptions(client: client, store: store), store)
+    }
+
+    func testCaptionsReachTheStore() async {
+        let client = FakeCallClient()
+        client.updates = [CallUpdate(
+            active: true, reason: nil,
+            events: [.ready, .caption(text: "hello there", isFinal: true, channel: nil)],
+            seq: 2)]
+        let (captions, store) = make(client)
+
+        let keepGoing = await captions.poll()
+
+        XCTAssertTrue(keepGoing)
+        XCTAssertEqual(store.paragraphs.map(\.text), ["hello there"])
+        XCTAssertEqual(store.state, .listening)
+    }
+
+    func testAdvancesTheCursorSoCaptionsArriveOnce() async {
+        let client = FakeCallClient()
+        client.updates = [CallUpdate(active: true, reason: nil, events: [], seq: 7)]
+        let (captions, _) = make(client)
+
+        _ = await captions.poll()
+        _ = await captions.poll()
+
+        XCTAssertEqual(client.polledSince, [0, 7])
+    }
+
+    func testEndsWhenTheCallEnds() async {
+        let client = FakeCallClient()
+        client.updates = [
+            CallUpdate(active: true, reason: nil, events: [], seq: 1),
+            CallUpdate(active: false, reason: .ended, events: [], seq: 1),
+        ]
+        let (captions, _) = make(client)
+
+        _ = await captions.poll()
+        let keepGoing = await captions.poll()
+
+        XCTAssertFalse(keepGoing)
+        XCTAssertEqual(captions.ended, .ended)
+    }
+
+    /// Captions dying under a live call is a different thing to show than the
+    /// call ending, so the reason has to survive to the screen.
+    func testALostStreamIsReportedAsItsOwnThing() async {
+        let client = FakeCallClient()
+        client.updates = [
+            CallUpdate(active: true, reason: nil, events: [], seq: 1),
+            CallUpdate(active: false, reason: .streamLost, events: [], seq: 1),
+        ]
+        let (captions, _) = make(client)
+
+        _ = await captions.poll()
+        _ = await captions.poll()
+
+        XCTAssertEqual(captions.ended, .streamLost)
+    }
+
+    /// A watch out of range is not the call ending.
+    func testATransientFailureKeepsPolling() async {
+        let client = FakeCallClient()
+        client.error = HistoryError.message("offline")
+        let (captions, _) = make(client)
+
+        let keepGoing = await captions.poll()
+
+        XCTAssertTrue(keepGoing)
+        XCTAssertNil(captions.ended)
+    }
+
+    /// Entering call mode races the relay noticing the call. An inactive first
+    /// answer must not end a call that has not started.
+    func testAnInactiveFirstAnswerDoesNotEndTheCall() async {
+        let client = FakeCallClient()
+        client.updates = [CallUpdate(active: false, reason: nil, events: [], seq: 0)]
+        let (captions, _) = make(client)
+
+        let keepGoing = await captions.poll()
+
+        XCTAssertTrue(keepGoing)
+        XCTAssertNil(captions.ended)
+    }
+}

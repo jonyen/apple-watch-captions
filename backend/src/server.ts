@@ -6,6 +6,8 @@ import { verifyToken } from "./auth";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
+import { CurrentCall } from "./currentCall";
+import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
   listTranscripts,
@@ -49,6 +51,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     createProvider: opts.createProvider,
     transcripts: opts.transcripts,
   });
+  const currentCall = new CurrentCall();
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
@@ -63,11 +66,22 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const wss = new WebSocketServer({ noServer: true });
   http.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "", "http://localhost");
+    const token = url.searchParams.get("token") ?? undefined;
+
+    if (url.pathname === "/twilio/stream") {
+      if (!verifyToken(token, opts.authToken)) {
+        wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall));
+      return;
+    }
+
     if (url.pathname !== "/stream") {
       socket.destroy();
       return;
     }
-    const token = url.searchParams.get("token") ?? undefined;
     if (!verifyToken(token, opts.authToken)) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
       return;

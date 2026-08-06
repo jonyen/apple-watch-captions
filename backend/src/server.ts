@@ -55,7 +55,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store).catch(() => {
+    handleRequest(req, res, opts, store, currentCall).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -119,6 +119,7 @@ async function handleRequest(
   res: ServerResponse,
   opts: StartServerOptions,
   store: SessionStore,
+  calls: CurrentCall,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -155,6 +156,40 @@ async function handleRequest(
       `?token=${encodeURIComponent(token ?? "")}`;
     res.writeHead(200, { "content-type": "text/xml" });
     res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo }));
+    return;
+  }
+
+  // Presence and captions in one request: the watch uses this both to notice a
+  // call is live and to read it. Read-only — unlike /v1/audio it never creates
+  // a session, so polling when no call exists costs nothing upstream.
+  if (req.method === "GET" && url.pathname === "/v1/call") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const since = Number(url.searchParams.get("since") ?? "0") || 0;
+    const active = calls.current();
+    // reapIdle (or a direct /v1/stop) can drop a call's session without
+    // telling CurrentCall. Left unguarded, this would report `active: true`
+    // forever with no captions ever arriving — a screen that hangs rather
+    // than ever saying the call ended.
+    if (active && !store.has(active.sessionId)) {
+      sendJSON(res, 200, { active: false, events: [], seq: since });
+      return;
+    }
+    if (!active) {
+      const reason = calls.lastReason();
+      sendJSON(res, 200, {
+        active: false,
+        ...(reason ? { reason } : {}),
+        events: [],
+        seq: since,
+      });
+      return;
+    }
+    const { events, seq } = store.drain(active.sessionId, since);
+    sendJSON(res, 200, { active: true, events: flatten(events), seq });
     return;
   }
 

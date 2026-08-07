@@ -1,11 +1,34 @@
 import SwiftUI
 import CaptionCore
 
+/// What the dot in the corner is saying.
+enum CaptionIndicator {
+    /// A mic session being written down.
+    case recording
+    /// A mic session keeping nothing.
+    case liveOnly
+    /// Reading a live phone call.
+    case call
+    /// The call is over, or its captions are.
+    case callEnded(CallEndReason)
+
+    var label: String {
+        switch self {
+        case .recording: return "Recording"
+        case .liveOnly: return "Live only, not saved"
+        case .call: return "Captioning a call"
+        case .callEnded(.ended): return "Call ended"
+        case .callEnded(.streamLost): return "Captions stopped"
+        }
+    }
+}
+
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
-    /// True when nothing is being written down, which the indicator reflects.
-    let isLive: Bool
-    let onStop: () -> Void
+    let indicator: CaptionIndicator
+    /// Absent when there is nothing for the user to stop — reading a call is
+    /// not the same as hanging up, and offering Stop would imply it was.
+    let onStop: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -33,25 +56,33 @@ struct CaptionView: View {
         // this screen for a second piece of chrome.
         .overlay(alignment: .topTrailing) {
             Group {
-                if isLive {
-                    Circle().strokeBorder(.green, lineWidth: 1.5)
-                } else {
+                switch indicator {
+                case .recording:
                     Circle().fill(.green)
+                case .liveOnly:
+                    Circle().strokeBorder(.green, lineWidth: 1.5)
+                case .call:
+                    Circle().fill(.blue)
+                case .callEnded:
+                    Circle().fill(.secondary)
                 }
             }
             .frame(width: 7, height: 7)
             // A bare shape is not an accessibility element, so VoiceOver would
             // skip the indicator entirely and a label alone would do nothing.
             .accessibilityElement()
-            .accessibilityLabel(isLive ? "Live only, not saved" : "Recording")
+            .accessibilityLabel(indicator.label)
         }
         .toolbar {
             // Lowering your wrist no longer ends the session, so ending it
-            // needs somewhere to live.
+            // needs somewhere to live. Absent for a call: reading it is not
+            // the same as hanging up.
             // Trailing, so it does not take the back chevron's slot.
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: onStop) {
-                    Label("Stop", systemImage: "stop.fill")
+            if let onStop {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: onStop) {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
                 }
             }
         }

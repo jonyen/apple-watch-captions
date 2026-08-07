@@ -24,6 +24,14 @@ export const DEEPGRAM_LIVE_OPTIONS = {
   punctuate: true,
 };
 
+/**
+ * Live options for telephony audio. Twilio sends audio/x-mulaw at 8000 Hz and
+ * Deepgram accepts exactly that, so the relay forwards the bytes untouched.
+ */
+export function telephonyOptions(model: string): Record<string, unknown> {
+  return { encoding: "mulaw", sample_rate: 8000, model };
+}
+
 /** Deepgram drops the socket after ~10s without audio; KeepAlives prevent that. */
 export const KEEPALIVE_INTERVAL_MS = 5_000;
 export const KEEPALIVE_MESSAGE = JSON.stringify({ type: "KeepAlive" });

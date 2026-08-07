@@ -14,6 +14,7 @@ describe("loadConfig", () => {
       deepgramApiKey: "dg-key",
       transcriptsDir: "./data/transcripts",
       anthropicApiKey: undefined,
+      deepgramPhoneModel: "phonecall",
     });
   });
 
@@ -95,5 +96,24 @@ describe("loadConfig", () => {
 
   it("throws when DEEPGRAM_API_KEY is missing", () => {
     expect(() => loadConfig({ AUTH_TOKEN: "secret" })).toThrow(/DEEPGRAM_API_KEY/);
+  });
+});
+
+describe("call captioning config", () => {
+  const base = { AUTH_TOKEN: "t", DEEPGRAM_API_KEY: "k" };
+
+  it("defaults the phone model to the safe telephony baseline", () => {
+    expect(loadConfig(base).deepgramPhoneModel).toBe("phonecall");
+  });
+
+  it("allows the phone model to be overridden", () => {
+    expect(loadConfig({ ...base, DEEPGRAM_PHONE_MODEL: "flux-general-en" }).deepgramPhoneModel)
+      .toBe("flux-general-en");
+  });
+
+  it("reads the number calls are forwarded to", () => {
+    expect(loadConfig(base).twilioForwardTo).toBeUndefined();
+    expect(loadConfig({ ...base, TWILIO_FORWARD_TO: "+15551234567" }).twilioForwardTo)
+      .toBe("+15551234567");
   });
 });

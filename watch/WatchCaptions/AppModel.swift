@@ -10,6 +10,8 @@ final class AppModel: ObservableObject {
         case captions
         case history
         case detail(name: String)
+        /// Reading a phone call the relay is captioning.
+        case call
     }
 
     /// Navigation stack above the menu.
@@ -43,6 +45,10 @@ final class AppModel: ObservableObject {
     /// Waits for the relay to push a finished transcript to Notion.
     private let exports: ExportWatcher
     private let notifier = ExportNotifier()
+    /// Reads a live phone call. Shares `store` with mic sessions — the two are
+    /// never live at once.
+    let callCaptions: CallCaptions
+    private let callClient: RelayCallClient
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
@@ -53,6 +59,9 @@ final class AppModel: ObservableObject {
         relay = HTTPRelayClient(base: base, token: Secrets.authToken)
         history = HistoryStore(client: historyClient)
         exports = ExportWatcher(client: historyClient, defaults: defaults)
+        let callClient = RelayCallClient(base: base, token: Secrets.authToken)
+        self.callClient = callClient
+        callCaptions = CallCaptions(client: callClient, store: store)
         controller = SessionController(
             store: store,
             relay: relay,
@@ -96,6 +105,10 @@ final class AppModel: ObservableObject {
         // the menu is eligible to auto-resume.
         guard !capturing, path.isEmpty else { return }
 
+        // A call in progress is the most likely reason the app is being opened
+        // at all, so it wins over the menu and over resuming a past session.
+        if await enterCallIfLive() { return }
+
         switch launchAction(last: lastSession, now: Date(),
                             stoppedExplicitly: stoppedExplicitly) {
         case .resume(let name):
@@ -106,6 +119,24 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: - Sessions
+
+    /// Open call captions when the relay says a call is live. False on no call
+    /// or on any failure, so an unreachable relay lands on the menu.
+    private func enterCallIfLive() async -> Bool {
+        guard let update = try? await callClient.poll(since: 0), update.active else {
+            return false
+        }
+        path = [.call]
+        callCaptions.start()
+        return true
+    }
+
+    /// Leave call captions. The call itself is unaffected — this only stops
+    /// reading it.
+    func leaveCall() {
+        callCaptions.stop()
+        path = []
+    }
 
     func startNew() async {
         currentTranscript = nil

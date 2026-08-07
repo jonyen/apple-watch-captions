@@ -6,6 +6,8 @@ import { verifyToken } from "./auth";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
+import { CurrentCall } from "./currentCall";
+import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
   listTranscripts,
@@ -15,15 +17,10 @@ import {
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
+import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
+import { voiceResponse } from "./twiml";
 
-export const PROVIDER_NAMES = ["deepgram", "openai", "assemblyai"] as const;
-export type ProviderName = (typeof PROVIDER_NAMES)[number];
-
-export interface ProviderOptions {
-  channels?: number;
-  /** Requested transcription backend; absent = deepgram. */
-  provider?: ProviderName;
-}
+export * from "./providerOptions";
 
 export interface StartServerOptions {
   port: number;
@@ -36,6 +33,8 @@ export interface StartServerOptions {
   transcriptsDir?: string;
   /** Optional usage data source; enables GET /v1/usage. */
   usage?: { getUsage(): Promise<ReportData> };
+  /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
+  callForwardTo?: string;
 }
 
 export interface CaptionServer {
@@ -52,10 +51,11 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     createProvider: opts.createProvider,
     transcripts: opts.transcripts,
   });
+  const currentCall = new CurrentCall();
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store).catch(() => {
+    handleRequest(req, res, opts, store, currentCall).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -66,11 +66,22 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const wss = new WebSocketServer({ noServer: true });
   http.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "", "http://localhost");
+    const token = url.searchParams.get("token") ?? undefined;
+
+    if (url.pathname === "/twilio/stream") {
+      if (!verifyToken(token, opts.authToken)) {
+        wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall));
+      return;
+    }
+
     if (url.pathname !== "/stream") {
       socket.destroy();
       return;
     }
-    const token = url.searchParams.get("token") ?? undefined;
     if (!verifyToken(token, opts.authToken)) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
       return;
@@ -108,6 +119,7 @@ async function handleRequest(
   res: ServerResponse,
   opts: StartServerOptions,
   store: SessionStore,
+  calls: CurrentCall,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -122,6 +134,65 @@ async function handleRequest(
   if (req.method === "GET" && url.pathname === "/app") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(VIEWER_HTML);
+    return;
+  }
+
+  // Twilio asks what to do with an inbound call. Answer: fork the caller's
+  // audio to this relay, then bridge the call onward.
+  if (req.method === "POST" && url.pathname === "/twilio/voice") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.callForwardTo) {
+      sendJSON(res, 503, { error: "call captioning not configured" });
+      return;
+    }
+    // The host Twilio reached us on is the host it should stream back to, so
+    // there is no public-URL setting to keep in sync with the deployment.
+    const streamUrl =
+      `wss://${req.headers.host ?? ""}/twilio/stream` +
+      `?token=${encodeURIComponent(token ?? "")}`;
+    res.writeHead(200, { "content-type": "text/xml" });
+    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo }));
+    return;
+  }
+
+  // Presence and captions in one request: the watch uses this both to notice a
+  // call is live and to read it. Read-only — unlike /v1/audio it never creates
+  // a session, so polling when no call exists costs nothing upstream.
+  if (req.method === "GET" && url.pathname === "/v1/call") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const since = Number(url.searchParams.get("since") ?? "0") || 0;
+    const active = calls.current();
+    // reapIdle (or a direct /v1/stop) can drop a call's session without
+    // telling CurrentCall. Left unguarded, this would report `active: true`
+    // forever with no captions ever arriving — a screen that hangs rather
+    // than ever saying the call ended. The call itself may still be live —
+    // only its captions died — so this is `stream_lost`, not `ended`:
+    // reporting "ended" here would tell the watch the call is over while you
+    // may still be talking.
+    if (active && !store.has(active.sessionId)) {
+      sendJSON(res, 200, { active: false, reason: "stream_lost", events: [], seq: since });
+      return;
+    }
+    if (!active) {
+      const reason = calls.lastReason();
+      sendJSON(res, 200, {
+        active: false,
+        ...(reason ? { reason } : {}),
+        events: [],
+        seq: since,
+      });
+      return;
+    }
+    const { events, seq } = store.drain(active.sessionId, since);
+    sendJSON(res, 200, { active: true, events: flatten(events), seq });
     return;
   }
 

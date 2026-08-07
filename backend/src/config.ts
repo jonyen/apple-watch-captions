@@ -51,7 +51,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     openaiApiKey: env.OPENAI_API_KEY || undefined,
     assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
     notion: loadNotion(env),
-    deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "flux-general-en",
+    // "phonecall" is the safe baseline: @deepgram/sdk@3.13.0 only exposes
+    // listen.live() against the v1 `:version/listen` endpoint, and Flux
+    // models are served by a separate v2 streaming API this relay does not
+    // use. Defaulting to a Flux model would fail the first real call.
+    deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
     twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
   };
 }

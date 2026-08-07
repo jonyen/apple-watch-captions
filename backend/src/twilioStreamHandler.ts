@@ -28,9 +28,13 @@ export function handleTwilioStream(
     if (!sessionId) return;
     const ending = sessionId;
     sessionId = null;
-    // Only tear down the SessionStore side if this call was still the current
-    // one; a newer call may already have replaced it.
-    if (calls.end(ending, reason)) store.stop(ending);
+    // `calls.end` only decides whether CurrentCall is cleared — a newer call
+    // may already have replaced it, in which case it returns false. But
+    // `store.stop` must run unconditionally: this handler's session may have
+    // been recreated (e.g. by a stray `media` frame after replacement) and
+    // still needs closing even though CurrentCall has moved on.
+    calls.end(ending, reason);
+    store.stop(ending);
   };
 
   ws.on("message", (data: Buffer) => {
@@ -52,7 +56,13 @@ export function handleTwilioStream(
         break;
       }
       case "media":
-        if (sessionId) {
+        // Gate on this call still being current. A replaced call's handler
+        // keeps its old `sessionId` in closure; without this guard, a media
+        // frame arriving after replacement would call `store.feed` with a
+        // session id `store.stop` already removed, recreating it — and
+        // opening a fresh, unreachable Deepgram connection — under a session
+        // id nobody polls anymore.
+        if (sessionId && calls.current()?.sessionId === sessionId) {
           store.feed(sessionId, frame.audio, CALL_SESSION.ephemeral, CALL_SESSION.provider);
         }
         break;

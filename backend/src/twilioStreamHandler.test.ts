@@ -117,4 +117,52 @@ describe("handleTwilioStream", () => {
 
     expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
   });
+
+  // A replaced call is driven by a *second* socket/handler, so its old
+  // handler's closure still holds the replaced sessionId. Without the
+  // current-call guard on `media`, that stale handler would resurrect the
+  // replaced session and open a third, unreachable provider; without an
+  // unconditional `store.stop` in `endCall`, that resurrected session's
+  // provider would then never close.
+  it("does not resurrect a replaced call's session or leak its provider", () => {
+    const providers: FakeTranscriptionProvider[] = [];
+    const seen: (ProviderOptions | undefined)[] = [];
+    const store = new SessionStore({
+      createProvider: (opts) => {
+        seen.push(opts);
+        const p = new FakeTranscriptionProvider();
+        providers.push(p);
+        return p;
+      },
+    });
+    const calls = new CurrentCall();
+    const wsA = new FakeSocket();
+    const wsB = new FakeSocket();
+    handleTwilioStream(wsA, store, calls);
+    handleTwilioStream(wsB, store, calls);
+
+    wsA.send(startFrame("CA1"));
+    wsB.send(startFrame("CA2"));
+    // CA2's start already ended CA1 and stopped its provider.
+    expect(providers).toHaveLength(2);
+    expect(providers[0].closed).toBe(true);
+
+    // A media frame arriving late on the replaced socket (A still holds
+    // sessionId "CA1" in its closure) must not recreate CA1's session.
+    wsA.send(mediaFrame("AAECAw=="));
+    expect(providers).toHaveLength(2);
+
+    // A's socket closing without ever having been the current call must not
+    // leak anything — no third provider, and CA2 is untouched.
+    wsA.close();
+    expect(providers).toHaveLength(2);
+    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2" });
+
+    // CA2 is still genuinely live and ends normally, closing its provider —
+    // confirming the fix did not also break the happy path.
+    wsB.close();
+
+    expect(providers).toHaveLength(2);
+    expect(providers.every((p) => p.closed)).toBe(true);
+  });
 });

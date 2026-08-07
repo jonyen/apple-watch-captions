@@ -196,16 +196,25 @@ Verified against Twilio and Deepgram docs on 2026-08-05:
 
 **Model candidates, in the order worth trying:**
 
-1. `flux-general-en` — Deepgram's conversational model built for voice agents and
-   optimised for low latency. Latency is the number that decides this prototype,
-   so this is the one to try first. It did not exist when the surrounding pipeline
-   was written.
-2. `phonecall` — the long-standing alias optimised for low-bandwidth phone audio.
-   The safe baseline.
+1. `phonecall` — the long-standing alias optimised for low-bandwidth phone audio.
+   The safe baseline, and the default `DEEPGRAM_PHONE_MODEL` ships with. Verified
+   against `@deepgram/sdk@3.13.0`: it only exposes `listen.live()` against the v1
+   `:version/listen` endpoint. Confirmed against Deepgram's docs, this is a
+   `nova`-family listen endpoint — `phonecall` fits it.
+2. `flux-general-en` — Deepgram's conversational model built for voice agents and
+   optimised for low latency, which is the number that decides this prototype —
+   worth trying once the baseline works. **Not currently usable through this SDK
+   version**: Flux is served by a separate v2 streaming API
+   (`@deepgram/sdk@3.13.0` has no v2 listen client), so pointing
+   `DEEPGRAM_PHONE_MODEL` at it would fail the first real call with a blank
+   screen rather than transcribing anything. Trying it means either upgrading the
+   SDK to a version with v2 support, or speaking that API directly — not a
+   config-only change.
 3. `nova-3` — best general accuracy; whether it has a telephony variant should be
    checked rather than assumed.
 
-Trying more than one is the point of the env var.
+Trying more than one (within what the current SDK can reach) is the point of the
+env var.
 
 ### `ProviderOptions` moves out of `server.ts`
 

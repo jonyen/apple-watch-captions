@@ -130,6 +130,15 @@ public final class CallCaptions: ObservableObject {
         let update = try? await client.poll(since: seq)
         guard self.generation == generation else { return true }
         guard let update else { return true }
+        // `max` rather than plain assignment: an answer for a superseded
+        // generation is dropped above by the generation check, but if one ever
+        // did land, or the relay ever answered out of order, assigning a
+        // smaller `seq` backward would be the real bug — the next poll would
+        // re-request events already applied. The failure mode of `max` itself
+        // is self-healing: if a cursor somehow ran ahead of a *fresh* session's
+        // counter, the relay would prune that new session's own early captions
+        // as already-acknowledged — but `start()` resets `seq` to 0, so a fresh
+        // session never inherits a stale cursor in the first place.
         seq = max(seq, update.seq)
         for event in update.events { store.apply(event) }
         if update.active {

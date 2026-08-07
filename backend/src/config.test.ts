@@ -14,7 +14,7 @@ describe("loadConfig", () => {
       deepgramApiKey: "dg-key",
       transcriptsDir: "./data/transcripts",
       anthropicApiKey: undefined,
-      deepgramPhoneModel: "flux-general-en",
+      deepgramPhoneModel: "phonecall",
     });
   });
 
@@ -102,13 +102,13 @@ describe("loadConfig", () => {
 describe("call captioning config", () => {
   const base = { AUTH_TOKEN: "t", DEEPGRAM_API_KEY: "k" };
 
-  it("defaults the phone model to the low-latency conversational model", () => {
-    expect(loadConfig(base).deepgramPhoneModel).toBe("flux-general-en");
+  it("defaults the phone model to the safe telephony baseline", () => {
+    expect(loadConfig(base).deepgramPhoneModel).toBe("phonecall");
   });
 
   it("allows the phone model to be overridden", () => {
-    expect(loadConfig({ ...base, DEEPGRAM_PHONE_MODEL: "phonecall" }).deepgramPhoneModel)
-      .toBe("phonecall");
+    expect(loadConfig({ ...base, DEEPGRAM_PHONE_MODEL: "flux-general-en" }).deepgramPhoneModel)
+      .toBe("flux-general-en");
   });
 
   it("reads the number calls are forwarded to", () => {

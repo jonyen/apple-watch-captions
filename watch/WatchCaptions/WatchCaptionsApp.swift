@@ -66,10 +66,7 @@ private struct RootView: View {
                             Task { await model.resume(name: name) }
                         }
                     case .call:
-                        CaptionView(
-                            store: store,
-                            indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
-                            onStop: nil)
+                        call
                             // Leaving stops reading the call. It does not hang up.
                             .onDisappear { model.leaveCall() }
                     }
@@ -89,6 +86,24 @@ private struct RootView: View {
                 onStop: { model.stop() })
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })
+        }
+    }
+
+    @ViewBuilder
+    private var call: some View {
+        switch store.state {
+        // A Deepgram failure (e.g. "transcription connection lost") lands here
+        // via CallCaptions.poll applying the .error message. Unlike a mic
+        // session, there is nothing on the watch to retry — the relay owns the
+        // connection to the caller — so this just shows the error rather than
+        // offering a Retry that would restart audio capture that never existed.
+        case .error(let message):
+            ErrorView(message: message, onRetry: nil)
+        case .connecting, .listening:
+            CaptionView(
+                store: store,
+                indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
+                onStop: nil)
         }
     }
 }

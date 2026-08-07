@@ -11,11 +11,11 @@ afterEach(async () => {
   running = null;
 });
 
-function start(callForwardTo?: string) {
+function start(callForwardTo?: string, authToken = "good") {
   const providers: FakeTranscriptionProvider[] = [];
   const server = startServer({
     port: 0,
-    authToken: "good",
+    authToken,
     createProvider: () => {
       const p = new FakeTranscriptionProvider();
       providers.push(p);
@@ -119,7 +119,48 @@ describe("GET /v1/call", () => {
     await fetch(`${base(port)}/v1/stop?token=good&session=CA1`, { method: "POST" });
 
     const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
-    expect(body).toEqual({ active: false, events: [], seq: 0 });
+    // The call itself may still be live — only its captions died — so this
+    // is stream_lost, not ended. Reporting "ended" would tell the watch the
+    // call is over while the user may still be talking.
+    expect(body).toEqual({ active: false, reason: "stream_lost", events: [], seq: 0 });
     ws.close();
+  });
+});
+
+describe("POST /twilio/voice with a token containing XML metacharacters", () => {
+  // escapeXml(streamUrl) in twiml.ts is dead code on this path — the query
+  // string is already encodeURIComponent'd before voiceResponse ever sees
+  // it, so the safety here rests entirely on that encode surviving future
+  // edits. Pin the whole composition at the route, not just the XML half in
+  // isolation (that's twiml.test.ts).
+  it("keeps the emitted TwiML well-formed", async () => {
+    const token = 'a&b<c>d"e';
+    const { port } = start("+15551234567", token);
+
+    const res = await fetch(
+      `${base(port)}/twilio/voice?token=${encodeURIComponent(token)}`,
+      { method: "POST" });
+
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+
+    // The token round-trips into a stream URL Twilio can still use.
+    expect(xml).toContain(
+      `wss://127.0.0.1:${port}/twilio/stream?token=${encodeURIComponent(token)}`);
+
+    // No raw metacharacter from the token leaked into the URL attribute
+    // itself (as opposed to appearing percent-encoded).
+    const streamUrl = xml.match(/<Stream url="([^"]*)"/)?.[1];
+    expect(streamUrl).toBeTruthy();
+    expect(streamUrl).not.toMatch(/[&<>"]/);
+
+    // And the document is well-formed: every ampersand that survived is
+    // part of a real entity reference, never a bare one that would make
+    // Twilio's XML parser reject the whole document.
+    expect(xml.match(/&(?!amp;|lt;|gt;|quot;|apos;)/g)).toBeNull();
+
+    expect(xml).toContain("<Response>");
+    expect(xml).toContain("</Response>");
+    expect(xml).toContain("<Dial>+15551234567</Dial>");
   });
 });

@@ -10,10 +10,12 @@ struct RelayCallClient: CallClient {
 
     /// Short timeout on purpose: this runs on every foreground to decide
     /// whether to open call captions, so an unreachable relay has to fail fast
-    /// and let the app land on the menu rather than hang.
+    /// and let the app land on the menu rather than hang. 2s rather than 5s —
+    /// this gates every launch, and 5s of stall on an unreachable relay was
+    /// too much to pay just to find the menu.
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 5
+        config.timeoutIntervalForRequest = 2
         return URLSession(configuration: config)
     }()
 

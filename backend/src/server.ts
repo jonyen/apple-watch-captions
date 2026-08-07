@@ -173,9 +173,12 @@ async function handleRequest(
     // reapIdle (or a direct /v1/stop) can drop a call's session without
     // telling CurrentCall. Left unguarded, this would report `active: true`
     // forever with no captions ever arriving — a screen that hangs rather
-    // than ever saying the call ended.
+    // than ever saying the call ended. The call itself may still be live —
+    // only its captions died — so this is `stream_lost`, not `ended`:
+    // reporting "ended" here would tell the watch the call is over while you
+    // may still be talking.
     if (active && !store.has(active.sessionId)) {
-      sendJSON(res, 200, { active: false, events: [], seq: since });
+      sendJSON(res, 200, { active: false, reason: "stream_lost", events: [], seq: since });
       return;
     }
     if (!active) {

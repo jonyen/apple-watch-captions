@@ -131,6 +131,37 @@ Behavior worth knowing:
 - The export never blocks captions or transcript storage — it runs after the
   session's transcript is safely on disk.
 
+## Call captioning (optional, prototype)
+
+Reads a live phone call onto the watch: a caller dials a Twilio number, Twilio
+forks their audio to this relay for captioning and bridges the call to your real
+phone, and the watch polls `GET /v1/call` for what was said. See
+`docs/superpowers/specs/2026-08-05-twilio-call-captioning-design.md` for the full
+design and its reasoning.
+
+| Env | Required | Notes |
+|-----|----------|-------|
+| `TWILIO_FORWARD_TO` | Yes, to enable `/twilio/voice` | The number `<Dial>` rings — your real phone, in `+1…` form. Without it, `/twilio/voice` answers `503` rather than TwiML that dials nowhere. |
+| `DEEPGRAM_PHONE_MODEL` | No | Overrides the Deepgram model used for call audio. Defaults to `phonecall`, the safe telephony baseline — see the spec's "Model candidates" for why `flux-general-en` is not currently reachable through this relay's SDK version. |
+
+Setup (Twilio console; nothing else in this repo needs to change):
+
+1. Create a Twilio account and get off the trial — trial accounts restrict
+   outbound calls to verified numbers and play a notice on every call.
+2. Buy a phone number.
+3. Set its **Voice webhook** to `POST https://<your-relay-host>/twilio/voice?token=<AUTH_TOKEN>`.
+4. Set its **fallback URL** to a static TwiML bin that only `<Dial>`s your real
+   phone. This is the entire mitigation for the relay being down when a call
+   arrives: with no fallback, Twilio gets no TwiML and the caller hears a
+   failure; with it, an outage degrades to a plain forwarded call instead of a
+   dropped one.
+5. `fly secrets set TWILIO_FORWARD_TO=+1…`
+
+Call sessions are ephemeral by design — no transcript file, no summary, no
+Notion export. Transcribing a call is recording it in most two-party-consent
+jurisdictions, and nothing here should quietly accumulate recordings of people
+who never agreed to one.
+
 ## Manual smoke test (needs a real Deepgram key)
 
 Streams a 16 kHz mono PCM file to the running server and prints captions.

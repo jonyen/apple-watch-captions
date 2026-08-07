@@ -34,11 +34,13 @@ private struct RootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var store: CaptionStore
     @ObservedObject private var history: HistoryStore
+    @ObservedObject private var callCaptions: CallCaptions
 
     init(model: AppModel) {
         self.model = model
         store = model.store
         history = model.history
+        callCaptions = model.callCaptions
     }
 
     var body: some View {
@@ -63,6 +65,13 @@ private struct RootView: View {
                         TranscriptDetailView(history: history) { name in
                             Task { await model.resume(name: name) }
                         }
+                    case .call:
+                        CaptionView(
+                            store: store,
+                            indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
+                            onStop: nil)
+                            // Leaving stops reading the call. It does not hang up.
+                            .onDisappear { model.leaveCall() }
                     }
                 }
         }
@@ -74,7 +83,10 @@ private struct RootView: View {
         case .connecting:
             ConnectingView()
         case .listening:
-            CaptionView(store: store, isLive: model.live, onStop: { model.stop() })
+            CaptionView(
+                store: store,
+                indicator: model.live ? .liveOnly : .recording,
+                onStop: { model.stop() })
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })
         }

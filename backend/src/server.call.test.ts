@@ -38,7 +38,8 @@ describe("POST /twilio/voice", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/xml");
     const xml = await res.text();
-    expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream?token=good`);
+    // Token in the path: Twilio's stream client discards the query string.
+    expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream/good`);
     expect(xml).toContain('track="inbound_track"');
     expect(xml).toContain("<Dial>+15551234567</Dial>");
   });
@@ -72,6 +73,37 @@ describe("GET /v1/call", () => {
     const { port } = start("+15551234567");
     expect((await fetch(`${base(port)}/v1/call`)).status).toBe(401);
     expect((await fetch(`${base(port)}/v1/call?token=bad`)).status).toBe(401);
+  });
+
+  // Twilio's media-stream client discards the query string — a live call
+  // reached the relay as a bare `/twilio/stream` with no token, so the relay
+  // rejected it and Twilio reported "server closed the connection". The token
+  // travels in the path because that is what actually survives.
+  it("accepts a stream whose token is in the path, as Twilio sends it", async () => {
+    const { providers, port } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
+    await new Promise((resolve) => ws.on("open", resolve));
+
+    ws.send(JSON.stringify({
+      event: "start",
+      streamSid: "MZpath",
+      start: { callSid: "CApath", streamSid: "MZpath" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    providers[0].emitReady();
+
+    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+
+    expect(body.active).toBe(true);
+    ws.close();
+  });
+
+  it("rejects a stream whose path token is wrong", async () => {
+    const { port } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/nope`);
+    const code = await new Promise((resolve) => ws.on("close", resolve));
+
+    expect(code).toBe(4001);
   });
 
   it("serves captions from the live call", async () => {
@@ -146,7 +178,7 @@ describe("POST /twilio/voice with a token containing XML metacharacters", () => 
 
     // The token round-trips into a stream URL Twilio can still use.
     expect(xml).toContain(
-      `wss://127.0.0.1:${port}/twilio/stream?token=${encodeURIComponent(token)}`);
+      `wss://127.0.0.1:${port}/twilio/stream/${encodeURIComponent(token)}`);
 
     // No raw metacharacter from the token leaked into the URL attribute
     // itself (as opposed to appearing percent-encoded).

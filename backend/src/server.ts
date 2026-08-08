@@ -68,26 +68,22 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     const url = new URL(req.url ?? "", "http://localhost");
     const token = url.searchParams.get("token") ?? undefined;
 
-    if (url.pathname === "/twilio/stream") {
-      const ok = verifyToken(token, opts.authToken);
-      const expected = opts.authToken;
-      console.log(
-        `twilio upgrade: authorized=${ok} ` +
-          `rawUrl=${(req.url ?? "").replace(/token=[^&]*/, (m) => `token=<${m.length - 6}ch>`)} ` +
-          `gotLen=${token?.length ?? 0} wantLen=${expected.length} ` +
-          `prefixMatch=${token?.slice(0, 6) === expected.slice(0, 6)} ` +
-          `suffixMatch=${token?.slice(-6) === expected.slice(-6)}`,
-      );
-      if (!ok) {
+    // Twilio's media-stream client drops the query string: the upgrade arrives
+    // as a bare `/twilio/stream`, with no `?token=`. Verified against a live
+    // call — the relay saw `rawUrl=/twilio/stream gotLen=0`. So the token
+    // travels in the path, which Twilio does preserve. The query form is still
+    // accepted so the endpoint can be exercised directly with a normal client.
+    if (url.pathname === "/twilio/stream" || url.pathname.startsWith(TWILIO_STREAM_PREFIX)) {
+      const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
+        ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
+        : undefined;
+      if (!verifyToken(fromPath ?? token, opts.authToken)) {
+        console.log("twilio upgrade rejected: token missing or wrong");
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        ws.on("close", (code, reason) =>
-          console.log(`twilio ws closed: code=${code} reason=${reason.toString() || "-"}`));
-        ws.on("error", (err) => console.log(`twilio ws error: ${err.message}`));
-        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall);
-      });
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall));
       return;
     }
 
@@ -164,9 +160,11 @@ async function handleRequest(
     }
     // The host Twilio reached us on is the host it should stream back to, so
     // there is no public-URL setting to keep in sync with the deployment.
+    // Token in the path, not the query — Twilio's stream client discards the
+    // query string. See the upgrade handler.
     const streamUrl =
-      `wss://${req.headers.host ?? ""}/twilio/stream` +
-      `?token=${encodeURIComponent(token ?? "")}`;
+      `wss://${req.headers.host ?? ""}${TWILIO_STREAM_PREFIX}` +
+      `${encodeURIComponent(token ?? "")}`;
     const streamStatusUrl =
       `https://${req.headers.host ?? ""}/twilio/stream-status` +
       `?token=${encodeURIComponent(token ?? "")}`;
@@ -375,6 +373,18 @@ async function handleRequest(
 
   res.writeHead(404);
   res.end();
+}
+
+/** Where the media-stream token lives, since Twilio drops the query string. */
+const TWILIO_STREAM_PREFIX = "/twilio/stream/";
+
+/** A malformed percent-escape is a bad token, not a crash. */
+function safeDecode(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function flatten(events: { seq: number; payload: OutboundMessage }[]) {

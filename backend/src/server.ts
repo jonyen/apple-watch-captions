@@ -70,11 +70,13 @@ export function startServer(opts: StartServerOptions): CaptionServer {
 
     if (url.pathname === "/twilio/stream") {
       const ok = verifyToken(token, opts.authToken);
+      const expected = opts.authToken;
       console.log(
         `twilio upgrade: authorized=${ok} ` +
-          `subprotocol=${req.headers["sec-websocket-protocol"] ?? "-"} ` +
-          `version=${req.headers["sec-websocket-version"] ?? "-"} ` +
-          `ua=${(req.headers["user-agent"] ?? "-").toString().slice(0, 40)}`,
+          `rawUrl=${(req.url ?? "").replace(/token=[^&]*/, (m) => `token=<${m.length - 6}ch>`)} ` +
+          `gotLen=${token?.length ?? 0} wantLen=${expected.length} ` +
+          `prefixMatch=${token?.slice(0, 6) === expected.slice(0, 6)} ` +
+          `suffixMatch=${token?.slice(-6) === expected.slice(-6)}`,
       );
       if (!ok) {
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));

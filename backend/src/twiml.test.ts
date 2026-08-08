@@ -17,6 +17,29 @@ describe("voiceResponse", () => {
     expect(xml.indexOf("<Start>")).toBeLessThan(xml.indexOf("<Dial>"));
   });
 
+  // Without a status callback a stream that never connects is invisible here:
+  // Twilio files an alert carrying an error code and nothing else.
+  it("asks Twilio to report the stream's fate when given a callback", () => {
+    const xml = voiceResponse({
+      streamUrl: "wss://relay.example/twilio/stream?token=abc",
+      dialTo: "+15551234567",
+      streamStatusUrl: "https://relay.example/twilio/stream-status?token=abc",
+    });
+
+    expect(xml).toContain(
+      'statusCallback="https://relay.example/twilio/stream-status?token=abc"');
+    expect(xml).toContain('statusCallbackMethod="POST"');
+  });
+
+  it("omits the callback attributes when no URL is given", () => {
+    const xml = voiceResponse({
+      streamUrl: "wss://relay.example/twilio/stream?token=abc",
+      dialTo: "+15551234567",
+    });
+
+    expect(xml).not.toContain("statusCallback");
+  });
+
   // A token with an ampersand would otherwise produce XML Twilio cannot parse,
   // and the call would fail with no obvious cause.
   it("escapes XML metacharacters in the stream URL", () => {

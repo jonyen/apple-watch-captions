@@ -154,8 +154,37 @@ async function handleRequest(
     const streamUrl =
       `wss://${req.headers.host ?? ""}/twilio/stream` +
       `?token=${encodeURIComponent(token ?? "")}`;
+    const streamStatusUrl =
+      `https://${req.headers.host ?? ""}/twilio/stream-status` +
+      `?token=${encodeURIComponent(token ?? "")}`;
     res.writeHead(200, { "content-type": "text/xml" });
-    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo }));
+    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo, streamStatusUrl }));
+    return;
+  }
+
+  // Twilio's own account of what the media stream did. The relay cannot see a
+  // stream that never connects — this is the only channel that reports one,
+  // and `StreamError` carries the reason the alert log omits.
+  if (req.method === "POST" && url.pathname === "/twilio/stream-status") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    let body: Buffer = Buffer.from("");
+    try {
+      body = await readBody(req, MAX_AUDIO_BYTES);
+    } catch {
+      // A body we could not read is still worth acknowledging; Twilio retries
+      // otherwise, and the event is diagnostic rather than load-bearing.
+    }
+    const fields = new URLSearchParams(body.toString("utf8"));
+    const detail = ["StreamEvent", "StreamError", "StreamSid", "CallSid"]
+      .map((key) => `${key}=${fields.get(key) ?? "-"}`)
+      .join(" ");
+    console.log(`twilio stream status: ${detail}`);
+    res.writeHead(204);
+    res.end();
     return;
   }
 

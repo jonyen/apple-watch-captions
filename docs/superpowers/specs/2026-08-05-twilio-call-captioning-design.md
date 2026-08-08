@@ -360,6 +360,42 @@ Twilio itself is verified by making one real call.
 Deploying to the main relay rather than a separate dev app: the routes are purely
 additive and covered by tests.
 
+## Field notes — first live calls, 2026-08-08
+
+What the design got right, and the two things it did not anticipate.
+
+**Working end to end:** the voice webhook, the TwiML, `<Dial>`, the media stream,
+session creation, and `GET /v1/call`. A live call now produces a clean
+`stream-started` → `stream-stopped` with no Twilio error.
+
+**Twilio discards the query string on the media-stream URL.** The upgrade arrives
+as a bare `/twilio/stream`. The relay saw `gotLen=0` against a 64-character
+expected token, rejected the upgrade, and closed 4001 — which Twilio reports as
+error 31921, *"server closed the connection."* Technically accurate and entirely
+misleading. The token now travels in the path. This is invisible to local testing,
+because connecting by hand supplies the query string Twilio never sends.
+
+**Trial accounts gate the webhook behind a keypress.** An inbound call plays a
+trial notice and fires no webhook — and logs no HTTP request — until the caller
+presses a key. Two early calls looked like a misconfigured number because of it.
+
+### Open, as of the last call
+
+- **Deepgram closes repeatedly mid-call.** One ~47s call produced three
+  `deepgram closed: 1000` events and the provider's reconnects. Whether audio is
+  reaching Deepgram at all is unverified: `onReady` fires when the socket opens,
+  not when audio is accepted, so "ready" proves less than it appears to. Next
+  step is logging bytes fed per call.
+- **The watch does not enter call mode.** Opening the app during a live call
+  lands on the menu, so `enterCallIfLive()` returned false. Prime suspect is the
+  request timeout on `RelayCallClient`, shortened from 5s to 2s during the
+  final-review fix wave — plausibly too aggressive for a watch relaying over
+  Bluetooth, and the code falls through to the menu on timeout by design. The
+  other candidate is the `guard !capturing, path.isEmpty` skipping the check when
+  the app is already on a screen.
+- **Not yet answered:** whether reading a live call on the wrist is useful. That
+  needs a second calling device so the phone is not both ends of the call.
+
 ## What this proves, and what happens next
 
 A successful prototype answers one question — whether call captions are readable

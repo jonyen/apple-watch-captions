@@ -69,12 +69,23 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     const token = url.searchParams.get("token") ?? undefined;
 
     if (url.pathname === "/twilio/stream") {
-      if (!verifyToken(token, opts.authToken)) {
+      const ok = verifyToken(token, opts.authToken);
+      console.log(
+        `twilio upgrade: authorized=${ok} ` +
+          `subprotocol=${req.headers["sec-websocket-protocol"] ?? "-"} ` +
+          `version=${req.headers["sec-websocket-version"] ?? "-"} ` +
+          `ua=${(req.headers["user-agent"] ?? "-").toString().slice(0, 40)}`,
+      );
+      if (!ok) {
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) =>
-        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall));
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.on("close", (code, reason) =>
+          console.log(`twilio ws closed: code=${code} reason=${reason.toString() || "-"}`));
+        ws.on("error", (err) => console.log(`twilio ws error: ${err.message}`));
+        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall);
+      });
       return;
     }
 

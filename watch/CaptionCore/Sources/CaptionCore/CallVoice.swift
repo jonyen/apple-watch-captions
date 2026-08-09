@@ -14,6 +14,16 @@ public protocol CallVoiceClient: Sendable {
     func send(_ pcm: Data) async throws
 }
 
+/// A send failure worth telling the user about, as opposed to the transient
+/// ones a push-to-talk turn simply loses.
+public enum CallVoiceError: Error, Equatable {
+    /// The relay refused the turn because no call is live (HTTP 409). Not a
+    /// dropped packet or a watch out of range: the conversation is over, and
+    /// every further turn will be refused the same way. Saying so beats
+    /// leaving the user pressing and speaking into a call that ended.
+    case noCallLive
+}
+
 /// Push-to-talk: collects microphone audio only while the control is held, and
 /// sends it as one turn when released.
 ///
@@ -51,6 +61,11 @@ public final class CallVoice: ObservableObject {
     /// even when the send fails — otherwise the UI claims you are still
     /// speaking into a call that never heard you.
     ///
+    /// Returns `.noCallLive` when the relay refused the turn because the call
+    /// is over, so the caller can say so. Every other failure returns nil and
+    /// is swallowed deliberately: one lost turn on a live call is a "say that
+    /// again", not an error screen over a conversation still in progress.
+    ///
     /// `turn` and `isTalking` are both read and reset before the `await`
     /// below, not after, so a `beginTalking()` that arrives while `send` is
     /// still in flight starts the next turn cleanly rather than clobbering or
@@ -58,12 +73,20 @@ public final class CallVoice: ObservableObject {
     /// the data to send, and nothing after the `await` writes back into
     /// `turn` or `isTalking`. Unlike `CallCaptions.generation` or
     /// `CallAudio.inFlight`, there is no stale state left to guard against.
-    public func endTalking() async {
-        guard isTalking else { return }
+    @discardableResult
+    public func endTalking() async -> CallVoiceError? {
+        guard isTalking else { return nil }
         isTalking = false
         let outgoing = turn
         turn = Data()
-        guard !outgoing.isEmpty else { return }
-        try? await client.send(outgoing)
+        guard !outgoing.isEmpty else { return nil }
+        do {
+            try await client.send(outgoing)
+            return nil
+        } catch let refusal as CallVoiceError {
+            return refusal
+        } catch {
+            return nil
+        }
     }
 }

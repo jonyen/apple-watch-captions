@@ -39,8 +39,22 @@ final class AppModel: ObservableObject {
         didSet { defaults.set(stoppedExplicitly, forKey: Keys.stoppedExplicitly) }
     }
 
+    /// True while the call screen is up but no call has arrived yet. The
+    /// screen is entered by choice, before anyone has dialled — without this
+    /// the user faced a blank caption view whose indicator claimed a call was
+    /// being captioned, with the talk gesture live and recording into a turn
+    /// that could only end in a refusal.
+    @Published private(set) var callWaiting = false
+    /// True when the live call is one the watch holds: it can hear the
+    /// caller, speak back, and hang up. False on the relay's fallback, which
+    /// is captions only because the phone holds that call — so no talk
+    /// gesture, no playback, and no Stop button that would lie about being
+    /// able to end it.
+    @Published private(set) var callTwoWay = false
+
     private let controller: SessionController
     private let relay: HTTPRelayClient
+    private let micPermission = MicPermission()
     private let defaults: UserDefaults
     /// Waits for the relay to push a finished transcript to Notion.
     private let exports: ExportWatcher
@@ -54,6 +68,18 @@ final class AppModel: ObservableObject {
     private let callAudio: CallAudio
     private let audioPlayer = CallAudioPlayer()
     private var callAudioTask: Task<Void, Never>?
+    /// Identifies the push-to-talk turn currently open. `endTalking()` un-mutes
+    /// after an `await`, and a release-then-press during that in-flight send
+    /// would otherwise have turn 1's continuation un-mute turn 2's open
+    /// microphone — the speaker resuming into a live mic, sending the caller
+    /// back to themselves about four seconds late. Compared after the await.
+    private var turnGeneration = 0
+    /// True from the moment a hangup starts until the next call screen opens.
+    /// See `endCall()`.
+    private var endingCall = false
+    /// True once this call's audio engine has been asked to start. See
+    /// `callArrived(twoWay:)`.
+    private var callAudioStarted = false
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
@@ -82,7 +108,7 @@ final class AppModel: ObservableObject {
             store: store,
             relay: relay,
             audio: AudioCapture(),
-            permission: MicPermission(),
+            permission: micPermission,
             // Resuming a session restores its transcript; this reads it. Kept
             // off HistoryStore, whose `detail` belongs to the history screen.
             history: historyClient
@@ -90,6 +116,12 @@ final class AppModel: ObservableObject {
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
+        // The wait ends when the relay says a call is live. Nothing before
+        // that point should start audio or accept a talk gesture — there is
+        // no call to send it to.
+        callCaptions.onLive = { [weak self] twoWay in
+            self?.callArrived(twoWay: twoWay)
+        }
     }
 
     // MARK: - Launching
@@ -139,19 +171,49 @@ final class AppModel: ObservableObject {
     /// Open call captions when the relay says a call is live. False on no call
     /// or on any failure, so an unreachable relay lands on the menu.
     ///
-    /// Shares `startCallAudio()` with `takeCall()` — this is the resume path
-    /// (a relaunch that lands mid-call), and it used to skip audio setup
-    /// entirely: captions would appear while playback and push-to-talk stayed
-    /// silently dead, since `audioPlayer.start()` never ran and the mic tap
-    /// was never installed.
+    /// `ready: false`: this probe runs on every launch, whatever the user
+    /// opened the app for, and presence must mean "the call screen is up and
+    /// waiting" rather than "the app is running". The poll `callCaptions`
+    /// starts a line later claims presence properly.
+    ///
+    /// The call is already live here, so this skips the waiting state and
+    /// goes straight to the screen `callArrived` would have led to.
     private func enterCallIfLive() async -> Bool {
-        guard let update = try? await callClient.poll(since: 0), update.active else {
+        guard let update = try? await callClient.poll(since: 0, ready: false),
+              update.active else {
             return false
         }
         path = [.call]
+        callWaiting = false
+        callTwoWay = false
+        endingCall = false
+        callAudioStarted = false
         callCaptions.start()
-        startCallAudio()
+        // `CallCaptions.onLive` will fire again on its first poll and land on
+        // the same state; doing it here as well means the screen is right
+        // from the first frame rather than a second later.
+        callArrived(twoWay: update.twoWay)
         return true
+    }
+
+    /// A call has arrived (or was already in progress). Leaves the waiting
+    /// state and, on a call the watch holds, starts hearing and speaking.
+    ///
+    /// A fallback call gets neither: the phone holds it, the relay's stream
+    /// for it is one-way, and playing the caller aloud two seconds late would
+    /// talk over the conversation the user is already having.
+    private func callArrived(twoWay: Bool) {
+        callWaiting = false
+        // `startCallAudio` awaits the permission prompt before it has a task
+        // to show for itself, so the flag is set here, synchronously — a
+        // second arrival landing inside that await would otherwise start a
+        // second engine on the same call. Both callers can announce the same
+        // call: `enterCallIfLive` reports it directly so the screen is right
+        // from the first frame, and `CallCaptions.onLive` reports it again a
+        // poll later.
+        guard twoWay, !callAudioStarted else { return }
+        callAudioStarted = true
+        Task { await startCallAudio() }
     }
 
     /// Leave call captions. Backing out ends the call exactly like tapping
@@ -163,18 +225,41 @@ final class AppModel: ObservableObject {
 
     /// Wait for a call. Polling is what tells the relay the watch is here, so
     /// this both shows the waiting screen and makes the call reachable.
+    ///
+    /// Nothing starts yet. There is no call to hear or speak on until one
+    /// arrives, which `callCaptions.onLive` reports.
     func takeCall() {
         path = [.call]
+        callWaiting = true
+        callTwoWay = false
+        endingCall = false
+        callAudioStarted = false
         callCaptions.start()
-        startCallAudio()
     }
 
-    /// Start hearing and speaking on a call already known to be live — shared
-    /// by `takeCall()`, which starts the wait itself, and `enterCallIfLive()`,
-    /// which resumes into one already in progress.
-    private func startCallAudio() {
+    /// Start hearing and speaking on a call already known to be live.
+    ///
+    /// Permission first, as `SessionController` does for a mic session. The
+    /// call path had no equivalent and swallowed the failure with `try?`,
+    /// which failed silently in the worst possible way: `play()` returns
+    /// forever on its `engine.isRunning` guard, the input tap is never
+    /// installed, so no audio is ever captured, every turn ends up empty, and
+    /// nothing is ever sent. The user holds the screen, sees the "Talking"
+    /// badge, speaks — and the caller hears nothing, permanently, with the UI
+    /// insisting otherwise.
+    private func startCallAudio() async {
+        guard await micPermission.ensureGranted() else {
+            store.setError("Microphone access is off. Enable it in Settings › Privacy.")
+            return
+        }
         callAudio.reset()
-        try? audioPlayer.start()
+        do {
+            try audioPlayer.start()
+        } catch {
+            store.setError("Could not start call audio.")
+            return
+        }
+        callTwoWay = true
         callAudioTask?.cancel()
         callAudioTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -186,20 +271,43 @@ final class AppModel: ObservableObject {
     }
 
     /// Open a turn. Playback mutes for its duration: push-to-talk already
-    /// means the speaker is idle while the mic is open, and muting makes that
-    /// true even if a buffer was still draining.
+    /// means the speaker is idle while the mic is open, and muting discards
+    /// whatever was still queued so a draining buffer cannot render into it.
     func beginTalking() {
-        audioPlayer.isMuted = true
+        guard !callVoice.isTalking else { return }
+        turnGeneration += 1
+        audioPlayer.mute()
         callVoice.beginTalking()
     }
 
+    /// Close the turn. The un-mute is gated on this still being the turn that
+    /// opened it: releasing and pressing again while the send is in flight
+    /// would otherwise let turn 1's continuation un-mute turn 2's open
+    /// microphone, and the caller would hear themselves about four seconds
+    /// late — the one thing push-to-talk exists to prevent.
     func endTalking() async {
-        await callVoice.endTalking()
-        audioPlayer.isMuted = false
+        let generation = turnGeneration
+        let refusal = await callVoice.endTalking()
+        guard generation == turnGeneration else { return }
+        audioPlayer.unmute()
+        // Not a dropped packet: the relay refuses every turn from here on.
+        // Better to say the call is over than to leave the user pressing and
+        // speaking into it.
+        if refusal == .noCallLive { store.setError("The call has ended.") }
     }
 
-    /// Leave the call. Closing the stream is what ends it — Twilio holds the
-    /// call for exactly as long as the socket lives.
+    /// Leave the call, and end it.
+    ///
+    /// Closing the relay's Twilio stream is what ends it — under
+    /// `<Connect><Stream>` the call lives for exactly as long as that socket,
+    /// and the watch is not a party to it, so `POST /v1/call/end` is the only
+    /// thing that can hang up. Everything below it is watch-local teardown;
+    /// on its own that would return the watch to its menu and leave the
+    /// caller connected to silence, billed, until they gave up.
+    ///
+    /// Failures are ignored deliberately. The user asked to leave; a relay
+    /// that cannot be reached is not a reason to hold them on a screen they
+    /// are done with, and the call dies with the stream either way.
     ///
     /// Force-closes any turn still open, first and unconditionally.
     /// `DragGesture` never gets its `.onEnded` when the view holding it
@@ -212,13 +320,27 @@ final class AppModel: ObservableObject {
     /// original press. `callVoice.endTalking()` is a no-op when no turn is
     /// open, so calling it here unconditionally is safe.
     func endCall() async {
+        // Dismissing the screen fires its `.onDisappear`, which calls
+        // `leaveCall()`, which lands back here — so a hangup would otherwise
+        // always run twice, with two overlapping requests racing each other.
+        guard !endingCall else { return }
+        endingCall = true
+        turnGeneration += 1
         await callVoice.endTalking()
-        audioPlayer.isMuted = false
+        audioPlayer.unmute()
         callAudioTask?.cancel()
         callAudioTask = nil
         audioPlayer.stop()
         callCaptions.stop()
+        callWaiting = false
+        callTwoWay = false
+        callAudioStarted = false
+        // Leave the screen before waiting on the network. Hanging up should
+        // feel immediate; the relay is what the caller is waiting on, not the
+        // user, and holding the call screen up for the round trip only makes
+        // it look as though the tap did nothing.
         path = []
+        try? await callClient.end()
     }
 
     func startNew() async {

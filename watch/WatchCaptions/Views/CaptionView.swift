@@ -26,8 +26,11 @@ enum CaptionIndicator {
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
     let indicator: CaptionIndicator
-    /// Absent when there is nothing for the user to stop — reading a call is
-    /// not the same as hanging up, and offering Stop would imply it was.
+    /// Absent when there is nothing this screen can stop. A mic session and a
+    /// call the watch holds both have one — for a held call, Stop closes the
+    /// relay's stream, which is what ends the call. The relay's fallback does
+    /// not: the phone holds that call, so a Stop button there would claim a
+    /// power the watch has no way to exercise.
     let onStop: (() -> Void)?
     /// Present only on a call; nil elsewhere leaves the view exactly as it was.
     var onTalkChanged: ((Bool) -> Void)?
@@ -104,8 +107,9 @@ struct CaptionView: View {
         }
         .toolbar {
             // Lowering your wrist no longer ends the session, so ending it
-            // needs somewhere to live. Absent for a call: reading it is not
-            // the same as hanging up.
+            // needs somewhere to live. On a call the watch holds, this is the
+            // hangup; on the fallback there is nothing to hang up and no
+            // button. See `onStop`.
             // Trailing, so it does not take the back chevron's slot.
             if let onStop {
                 ToolbarItem(placement: .topBarTrailing) {

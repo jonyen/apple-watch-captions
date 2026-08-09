@@ -16,18 +16,33 @@ public struct CallUpdate: Equatable, Sendable {
     public let reason: CallEndReason?
     public let events: [ServerMessage]
     public let seq: Int
+    /// True when the watch holds this call: it can hear the caller, speak
+    /// back, and hang up. False on the relay's fallback shape, where the
+    /// phone holds the call and the watch gets captions only — playing the
+    /// caller aloud there would talk over the conversation the user is
+    /// already having, two seconds late.
+    public let twoWay: Bool
 
-    public init(active: Bool, reason: CallEndReason?, events: [ServerMessage], seq: Int) {
+    public init(active: Bool, reason: CallEndReason?, events: [ServerMessage], seq: Int,
+                twoWay: Bool = false) {
         self.active = active
         self.reason = reason
         self.events = events
         self.seq = seq
+        self.twoWay = twoWay
     }
 }
 
 /// Reads the call the relay is currently captioning.
 public protocol CallClient: Sendable {
-    func poll(since: Int) async throws -> CallUpdate
+    /// - Parameter ready: whether the watch is on the call screen waiting to
+    ///   take a call. This is the relay's entire notion of presence, and it
+    ///   decides whether an inbound call is handed to the watch or rung out
+    ///   to the phone — so a poll made for any other reason (the launch probe
+    ///   that decides whether to open the call screen at all) passes `false`.
+    ///   Otherwise opening the app to browse transcripts would silently arm
+    ///   the watch to receive a call it is not showing.
+    func poll(since: Int, ready: Bool) async throws -> CallUpdate
 }
 
 /// Decode `GET /v1/call`. Anything unrecognized reads as "no call": a body we
@@ -38,7 +53,12 @@ public func decodeCallUpdate(_ json: [String: Any]) -> CallUpdate {
         active: json["active"] as? Bool ?? false,
         reason: (json["reason"] as? String).flatMap(CallEndReason.init(rawValue:)),
         events: events,
-        seq: json["seq"] as? Int ?? 0)
+        seq: json["seq"] as? Int ?? 0,
+        // Absent reads as false — captions only. The safe direction: the cost
+        // of getting this wrong the other way is the watch playing a caller
+        // aloud into a room where the user is already holding that call on
+        // their phone.
+        twoWay: json["twoWay"] as? Bool ?? false)
 }
 
 private func decodeCallEvent(_ event: [String: Any]) -> ServerMessage? {
@@ -67,6 +87,17 @@ private func decodeCallEvent(_ event: [String: Any]) -> ServerMessage? {
 public final class CallCaptions: ObservableObject {
     /// Set once the call is over, with why. Nil while it is live.
     @Published public private(set) var ended: CallEndReason?
+
+    /// Called once per call, the first time the relay reports it live, with
+    /// whether the watch holds it (`twoWay`).
+    ///
+    /// Entering call mode is a *wait*: `takeCall()` opens the screen before
+    /// any call exists, and this is what says one has arrived — the moment
+    /// audio may start and the talk gesture becomes real. A held call and a
+    /// captions-only fallback arrive through the same path and differ only in
+    /// what the watch is allowed to do with them, so the distinction travels
+    /// with the arrival rather than being asked for separately.
+    public var onLive: ((_ twoWay: Bool) -> Void)?
 
     public static let pollInterval: TimeInterval = 1
 
@@ -127,7 +158,9 @@ public final class CallCaptions: ObservableObject {
     @discardableResult
     public func poll() async -> Bool {
         let generation = self.generation
-        let update = try? await client.poll(since: seq)
+        // `ready: true` unconditionally: this loop runs only while the call
+        // screen is up, which is exactly what presence means.
+        let update = try? await client.poll(since: seq, ready: true)
         guard self.generation == generation else { return true }
         guard let update else { return true }
         // `max` rather than plain assignment: an answer for a superseded
@@ -142,7 +175,12 @@ public final class CallCaptions: ObservableObject {
         seq = max(seq, update.seq)
         for event in update.events { store.apply(event) }
         if update.active {
+            // Set before the callback, not after: `onLive` starts audio and
+            // moves the screen off the waiting state, and a reentrant poll
+            // that saw `wasActive` still false would do it a second time.
+            let arriving = !wasActive
             wasActive = true
+            if arriving { onLive?(update.twoWay) }
             return true
         }
         guard wasActive else { return true }

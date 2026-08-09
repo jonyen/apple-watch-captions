@@ -147,7 +147,7 @@ final class CallVoiceTests: XCTestCase {
 
         voice.beginTalking()
         voice.capture(Data([1]))
-        async let first: Void = voice.endTalking()
+        async let first: CallVoiceError? = voice.endTalking()
         await client.waitForArrival(1)
 
         // Starts and finishes while `first`'s send is still suspended. If
@@ -157,16 +157,56 @@ final class CallVoiceTests: XCTestCase {
         // land in turn 1's buffer instead of starting turn 2.
         voice.beginTalking()
         voice.capture(Data([2]))
-        async let second: Void = voice.endTalking()
+        async let second: CallVoiceError? = voice.endTalking()
         await client.waitForArrival(2)
 
         await client.resumeOldest()
-        await first
+        _ = await first
         await client.resumeOldest()
-        await second
+        _ = await second
 
         let received = await client.received
         XCTAssertEqual(received, [Data([1]), Data([2])])
         XCTAssertFalse(voice.isTalking)
+    }
+
+    /// The relay refuses a turn with 409 when no call is live. That is not a
+    /// dropped packet — every further turn will be refused the same way — so
+    /// it has to reach the user instead of leaving them pressing and
+    /// speaking into a call that ended.
+    func testReportsTheRelaysRefusalWhenNoCallIsLive() async {
+        let client = FakeVoiceClient()
+        client.error = CallVoiceError.noCallLive
+        let voice = CallVoice(client: client)
+
+        voice.beginTalking()
+        voice.capture(Data([1]))
+        let failure = await voice.endTalking()
+
+        XCTAssertEqual(failure, .noCallLive)
+    }
+
+    /// One lost turn on a live call is a "say that again", not an error
+    /// screen over a conversation still in progress.
+    func testSwallowsATransientSendFailure() async {
+        let client = FakeVoiceClient()
+        client.error = HistoryError.message("offline")
+        let voice = CallVoice(client: client)
+
+        voice.beginTalking()
+        voice.capture(Data([1]))
+
+        let failure = await voice.endTalking()
+        XCTAssertNil(failure)
+    }
+
+    func testASuccessfulTurnReportsNoFailure() async {
+        let voice = CallVoice(client: FakeVoiceClient())
+
+        voice.beginTalking()
+        voice.capture(Data([1]))
+
+        let failure = await voice.endTalking()
+        XCTAssertNil(failure)
     }
 }

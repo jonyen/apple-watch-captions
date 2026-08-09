@@ -47,19 +47,14 @@ struct RelayCallAudioClient: CallAudioClient, CallVoiceClient {
         case 409:
             // The relay refuses this deliberately when no call is live
             // (backend/src/server.call.test.ts: "Nothing to speak into:
-            // better a clear refusal than silently dropping it"). Kept as
-            // its own case, not folded into HistoryError.message, so a
-            // caller can tell "the call ended, stop trying" apart from a
-            // transient failure worth retrying.
+            // better a clear refusal than silently dropping it"), and also
+            // on the captions-only fallback, where the phone holds the call.
+            // `CallVoice.endTalking` hands this back to `AppModel`, which
+            // says so on screen — the user is otherwise left pressing and
+            // speaking into a call that cannot hear them.
             throw CallVoiceError.noCallLive
         default:
             throw HistoryError.message("Relay error")
         }
     }
-}
-
-/// Distinguishes the relay's deliberate "no call is live" refusal (409) from
-/// other send failures — see the doc comment on `send(_:)`.
-enum CallVoiceError: Error, Equatable {
-    case noCallLive
 }

@@ -22,12 +22,15 @@ public protocol CallAudioClient: Sendable {
 /// samples. A failed fetch deliberately leaves the cursor where it is: the
 /// audio it would have carried is gone either way, and advancing past it would
 /// also skip whatever arrived alongside.
+///
+/// There is no preroll. Buffering a chunk before starting playback would buy
+/// smoothness by adding a second of latency to a path that is already about
+/// two seconds behind the caller — the wrong trade for a conversation. The
+/// jitter policy that survived is `CallAudioPlayer`'s bounded queue: schedule
+/// each batch as it lands and drop anything that would push playback more than
+/// ~2s behind, so gaps stay audible rather than turning into drift.
 @MainActor
 public final class CallAudio {
-    /// How many polls to collect before playback starts. One second of buffer
-    /// against a link that batches roughly every second.
-    public static let prerollChunks = 1
-
     private let client: CallAudioClient
     private let onSamples: ([Int16]) -> Void
     private var seq = 0

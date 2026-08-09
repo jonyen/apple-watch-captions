@@ -27,7 +27,9 @@ final class CallAudioPlayer {
     private static let maxQueuedFrames: AVAudioFrameCount = 16_000
 
     /// Silences playback while you talk, so the speaker never feeds the mic.
-    var isMuted = false
+    /// Set through `mute()`/`unmute()`, never directly: gating alone is not
+    /// silence, and the difference is audible on the call.
+    private(set) var isMuted = false
 
     /// Microphone audio, as 16 kHz Int16 — the format the relay expects.
     /// Delivered continuously; `CallVoice` decides what belongs to a turn.
@@ -47,6 +49,8 @@ final class CallAudioPlayer {
         try session.setActive(true)
 
         converter = PCMConverter()
+        // A call never begins muted, whatever the last one ended in.
+        isMuted = false
         queueLock.lock()
         framesQueued = 0
         queueLock.unlock()
@@ -75,6 +79,39 @@ final class CallAudioPlayer {
         framesQueued = 0
         queueLock.unlock()
         try? AVAudioSession.sharedInstance().setActive(false)
+    }
+
+    /// Silence the speaker for a push-to-talk turn.
+    ///
+    /// Flushes what is already scheduled rather than only gating what comes
+    /// next: up to two seconds of the caller can be sitting on the player
+    /// node, and that audio would go on rendering into an open microphone —
+    /// sending the caller back to themselves about four seconds late, which
+    /// is exactly what push-to-talk exists to prevent. Nothing else catches
+    /// it: `AudioCapture` uses `.measurement` mode, which disables the
+    /// processing that would cancel an echo, and a delay this long is the
+    /// case echo cancellers handle worst.
+    ///
+    /// `player.stop()` is what discards them. Completion handlers for the
+    /// discarded buffers may still run afterwards; `framesQueued` is reset
+    /// here and its decrement clamps at zero, so a late handler cannot drive
+    /// the count negative.
+    func mute() {
+        guard !isMuted else { return }
+        isMuted = true
+        player.stop()
+        queueLock.lock()
+        framesQueued = 0
+        queueLock.unlock()
+    }
+
+    /// Let the caller be heard again. `player.stop()` left the node stopped,
+    /// so it has to be restarted or every later `scheduleBuffer` would queue
+    /// against a node that never renders.
+    func unmute() {
+        guard isMuted else { return }
+        isMuted = false
+        if engine.isRunning { player.play() }
     }
 
     func play(_ samples: [Int16]) {

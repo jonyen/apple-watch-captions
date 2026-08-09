@@ -11,7 +11,16 @@ describe("CurrentCall", () => {
   it("holds the call it was given", () => {
     const calls = new CurrentCall();
     calls.begin("CA1", "CA1");
-    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", twoWay: true });
+  });
+
+  // The fallback shape is captions only: the phone holds that call, so the
+  // watch can neither speak on it nor hang it up, and the watch has to be
+  // told which kind of call it is reading.
+  it("remembers a one-way call as one the watch does not hold", () => {
+    const calls = new CurrentCall();
+    calls.begin("CA1", "CA1", false);
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", twoWay: false });
   });
 
   it("records how the call ended", () => {
@@ -33,7 +42,7 @@ describe("CurrentCall", () => {
 
     expect(calls.end("CA1", "stream_lost")).toBe(false);
 
-    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2" });
+    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2", twoWay: true });
     expect(calls.lastReason()).toBeNull();
   });
 

@@ -53,6 +53,20 @@ final class CallUpdateDecodingTests: XCTestCase {
         XCTAssertEqual(update.seq, 0)
     }
 
+    /// Whether the watch holds the call decides whether it plays the caller
+    /// aloud and offers push-to-talk at all.
+    func testDecodesACallTheWatchHolds() {
+        XCTAssertTrue(decodeCallUpdate(["active": true, "twoWay": true]).twoWay)
+    }
+
+    /// Absent reads as captions-only, the safe direction: guessing wrong the
+    /// other way plays the caller aloud into a room where the user is already
+    /// holding that call on their phone.
+    func testACallWithoutTheFlagReadsAsCaptionsOnly() {
+        XCTAssertFalse(decodeCallUpdate(["active": true]).twoWay)
+        XCTAssertFalse(decodeCallUpdate(["active": true, "twoWay": false]).twoWay)
+    }
+
     func testSkipsEventTypesItDoesNotKnow() {
         let update = decodeCallUpdate([
             "active": true,
@@ -67,9 +81,11 @@ private final class FakeCallClient: CallClient, @unchecked Sendable {
     var updates: [CallUpdate] = []
     var error: Error?
     private(set) var polledSince: [Int] = []
+    private(set) var polledReady: [Bool] = []
 
-    func poll(since: Int) async throws -> CallUpdate {
+    func poll(since: Int, ready: Bool) async throws -> CallUpdate {
         polledSince.append(since)
+        polledReady.append(ready)
         if let error { throw error }
         return updates.isEmpty
             ? CallUpdate(active: true, reason: nil, events: [], seq: since)
@@ -166,7 +182,7 @@ final class CallCaptionsTests: XCTestCase {
         XCTAssertNil(captions.ended)
     }
 
-    /// A `CallClient` whose `poll(since:)` calls block until a test releases
+    /// A `CallClient` whose `poll(since:ready:)` calls block until a test releases
     /// them, so a poll left in flight by one loop can be superseded by a
     /// `start()`/`stop()` deterministically instead of racing on real
     /// concurrency or timers. Mirrors `SessionControllerTests.GatedHistory`.
@@ -176,7 +192,7 @@ final class CallCaptionsTests: XCTestCase {
         private var arrivalWatchers: [(need: Int, continuation: CheckedContinuation<Void, Never>)] = []
         private(set) var polledSince: [Int] = []
 
-        func poll(since: Int) async throws -> CallUpdate {
+        func poll(since: Int, ready: Bool) async throws -> CallUpdate {
             polledSince.append(since)
             return try await withCheckedThrowingContinuation { continuation in
                 waiters.append(continuation)
@@ -290,5 +306,67 @@ final class CallCaptionsTests: XCTestCase {
         await client.resumeOldest(with: CallUpdate(active: true, reason: nil, events: [], seq: 2))
         captions.stop()
         await captions.waitForSupersededLoop()
+    }
+
+    /// Entering call mode is a wait: the screen opens before any call exists,
+    /// and this is what says one has arrived — the moment audio may start and
+    /// the talk gesture becomes real.
+    func testAnnouncesTheCallArriving() async {
+        let client = FakeCallClient()
+        client.updates = [
+            CallUpdate(active: false, reason: nil, events: [], seq: 0),
+            CallUpdate(active: true, reason: nil, events: [], seq: 1, twoWay: true),
+        ]
+        let (captions, _) = make(client)
+        var arrivals: [Bool] = []
+        captions.onLive = { arrivals.append($0) }
+
+        _ = await captions.poll()
+        XCTAssertEqual(arrivals, [], "no call yet: still waiting")
+
+        _ = await captions.poll()
+        XCTAssertEqual(arrivals, [true])
+    }
+
+    /// A captions-only fallback arrives through the same path and differs
+    /// only in what the watch may do with it.
+    func testAnnouncesAFallbackCallAsCaptionsOnly() async {
+        let client = FakeCallClient()
+        client.updates = [CallUpdate(active: true, reason: nil, events: [], seq: 1, twoWay: false)]
+        let (captions, _) = make(client)
+        var arrivals: [Bool] = []
+        captions.onLive = { arrivals.append($0) }
+
+        _ = await captions.poll()
+
+        XCTAssertEqual(arrivals, [false])
+    }
+
+    /// Once per call, not once per poll: this starts the audio engine and
+    /// moves the screen off the waiting state.
+    func testAnnouncesTheCallOnlyOnce() async {
+        let client = FakeCallClient()
+        let (captions, _) = make(client)
+        var arrivals = 0
+        captions.onLive = { _ in arrivals += 1 }
+
+        _ = await captions.poll()
+        _ = await captions.poll()
+        _ = await captions.poll()
+
+        XCTAssertEqual(arrivals, 1)
+    }
+
+    /// Presence is what decides whether an inbound call is handed to the
+    /// watch at all, and this loop runs only while the call screen is up —
+    /// so every poll it makes claims it.
+    func testPollingTheCallScreenClaimsPresence() async {
+        let client = FakeCallClient()
+        let (captions, _) = make(client)
+
+        _ = await captions.poll()
+        _ = await captions.poll()
+
+        XCTAssertEqual(client.polledReady, [true, true])
     }
 }

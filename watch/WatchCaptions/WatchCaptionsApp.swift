@@ -35,12 +35,14 @@ private struct RootView: View {
     @ObservedObject private var store: CaptionStore
     @ObservedObject private var history: HistoryStore
     @ObservedObject private var callCaptions: CallCaptions
+    @ObservedObject private var callVoice: CallVoice
 
     init(model: AppModel) {
         self.model = model
         store = model.store
         history = model.history
         callCaptions = model.callCaptions
+        callVoice = model.callVoice
     }
 
     var body: some View {
@@ -50,7 +52,8 @@ private struct RootView: View {
                     onNew: { Task { await model.startNew() } },
                     onLive: { Task { await model.startLive() } },
                     onContinue: { Task { await model.continueLast() } },
-                    onBrowse: { Task { await model.showHistory() } })
+                    onBrowse: { Task { await model.showHistory() } },
+                    onTakeCall: { model.takeCall() })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -67,8 +70,9 @@ private struct RootView: View {
                         }
                     case .call:
                         call
-                            // Leaving stops reading the call. It does not hang up.
-                            .onDisappear { model.leaveCall() }
+                            // Closing the stream is what ends the call, so
+                            // backing out hangs up exactly like tapping End.
+                            .onDisappear { Task { await model.leaveCall() } }
                     }
                 }
         }
@@ -83,7 +87,8 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: model.live ? .liveOnly : .recording,
-                onStop: { model.stop() })
+                onStop: { model.stop() },
+                onTalkChanged: nil)
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })
         }
@@ -99,11 +104,27 @@ private struct RootView: View {
         // offering a Retry that would restart audio capture that never existed.
         case .error(let message):
             ErrorView(message: message, onRetry: nil)
+        // Taking a call opens this screen before anyone has dialled, so the
+        // wait gets a screen of its own rather than an empty transcript
+        // claiming to be a call.
+        case _ where model.callWaiting:
+            CallWaitingView(onCancel: { Task { await model.endCall() } })
         case .connecting, .listening:
             CaptionView(
                 store: store,
                 indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
-                onStop: nil)
+                // Stop only where it can do something: on the fallback the
+                // phone holds the call, and nothing here can hang it up.
+                onStop: model.callTwoWay ? { Task { await model.endCall() } } : nil,
+                // Same for the talk gesture — that stream is one-way, so a
+                // turn recorded into it could only end in a refusal.
+                onTalkChanged: model.callTwoWay ? { talking in
+                    Task {
+                        if talking { model.beginTalking() }
+                        else { await model.endTalking() }
+                    }
+                } : nil,
+                isTalking: model.callVoice.isTalking)
         }
     }
 }

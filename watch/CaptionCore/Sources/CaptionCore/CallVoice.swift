@@ -1,0 +1,92 @@
+import Combine
+import Foundation
+
+/// Sends your voice to the relay.
+///
+/// `CallVoice` can have two turns' worth of `send` in flight at once — a
+/// turn started right after the previous one was released, before its send
+/// completed. Nothing here orders those calls against each other, so a
+/// conforming client that cares about turns landing in the order they were
+/// spoken (rather than the order their network requests happen to finish)
+/// must provide that ordering itself, e.g. by serializing requests or by
+/// tagging them for the relay to reorder.
+public protocol CallVoiceClient: Sendable {
+    func send(_ pcm: Data) async throws
+}
+
+/// A send failure worth telling the user about, as opposed to the transient
+/// ones a push-to-talk turn simply loses.
+public enum CallVoiceError: Error, Equatable {
+    /// The relay refused the turn because no call is live (HTTP 409). Not a
+    /// dropped packet or a watch out of range: the conversation is over, and
+    /// every further turn will be refused the same way. Saying so beats
+    /// leaving the user pressing and speaking into a call that ended.
+    case noCallLive
+}
+
+/// Push-to-talk: collects microphone audio only while the control is held, and
+/// sends it as one turn when released.
+///
+/// The mic keeps running throughout — starting and stopping capture per turn
+/// would clip the first word — so anything captured outside a turn is dropped
+/// here rather than transmitted. That is also what keeps the room off the call.
+@MainActor
+public final class CallVoice: ObservableObject {
+    @Published public private(set) var isTalking = false
+
+    private let client: CallVoiceClient
+    private var turn = Data()
+
+    public init(client: CallVoiceClient) {
+        self.client = client
+    }
+
+    /// Open a turn. A repeat call while already talking is a no-op rather
+    /// than a reset: the caller wired to this — a drag gesture — fires
+    /// `.onChanged` repeatedly for the same press, and wiping `turn` on every
+    /// one of those would drop whatever was already captured mid-word.
+    public func beginTalking() {
+        guard !isTalking else { return }
+        turn = Data()
+        isTalking = true
+    }
+
+    /// Offer captured audio. Kept only while a turn is open.
+    public func capture(_ pcm: Data) {
+        guard isTalking else { return }
+        turn.append(pcm)
+    }
+
+    /// Close the turn and send it. Releasing always stops the talking state,
+    /// even when the send fails — otherwise the UI claims you are still
+    /// speaking into a call that never heard you.
+    ///
+    /// Returns `.noCallLive` when the relay refused the turn because the call
+    /// is over, so the caller can say so. Every other failure returns nil and
+    /// is swallowed deliberately: one lost turn on a live call is a "say that
+    /// again", not an error screen over a conversation still in progress.
+    ///
+    /// `turn` and `isTalking` are both read and reset before the `await`
+    /// below, not after, so a `beginTalking()` that arrives while `send` is
+    /// still in flight starts the next turn cleanly rather than clobbering or
+    /// being clobbered by this one: `outgoing` already holds its own copy of
+    /// the data to send, and nothing after the `await` writes back into
+    /// `turn` or `isTalking`. Unlike `CallCaptions.generation` or
+    /// `CallAudio.inFlight`, there is no stale state left to guard against.
+    @discardableResult
+    public func endTalking() async -> CallVoiceError? {
+        guard isTalking else { return nil }
+        isTalking = false
+        let outgoing = turn
+        turn = Data()
+        guard !outgoing.isEmpty else { return nil }
+        do {
+            try await client.send(outgoing)
+            return nil
+        } catch let refusal as CallVoiceError {
+            return refusal
+        } catch {
+            return nil
+        }
+    }
+}

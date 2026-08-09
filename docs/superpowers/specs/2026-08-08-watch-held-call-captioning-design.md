@@ -66,7 +66,8 @@ POST /twilio/voice?attempt=N
    │     → <Play>ringback</Play><Redirect>/twilio/voice?attempt=N+1</Redirect>
    │
    └─ budget exhausted?
-         → <Dial>+1‑second‑line</Dial>          (your phone rings normally)
+         → phase 1's shape: <Start><Stream>…</Start><Dial>+1‑second‑line</Dial>
+           (your phone rings normally — and is still captioned)
 
 Once connected — one bidirectional WebSocket:
    caller audio ─┬─► Deepgram ──► captions ──► watch polls   (built in phase 1)
@@ -76,9 +77,16 @@ Once connected — one bidirectional WebSocket:
 
 **`<Connect><Stream>` is the blocking form, and that is the whole trick.** The call
 lives exactly as long as the WebSocket does. Ending the call on the Watch closes the
-socket and the call ends — no REST call, no separate hangup path. Phase 1 used
-`<Start><Stream>` precisely because it does *not* block; here the opposite property
-is what makes Twilio the call's owner.
+socket and the call ends — no REST call to *Twilio*, no separate hangup path in the
+telephony sense. Phase 1 used `<Start><Stream>` precisely because it does *not*
+block; here the opposite property is what makes Twilio the call's owner.
+
+One correction to that, learned in review: **the Watch is not a party to that
+socket**, so "ending the call on the Watch closes the socket" needs something to
+carry the instruction across. It is `POST /v1/call/end`, which closes the socket the
+relay holds. Without it, tapping Stop was purely watch-local — the Watch returned to
+its menu and the caller stayed connected to silence, billed, until they gave up. The
+same closer ends a call *displaced* by a newer one, which was stranded the same way.
 
 **The wait budget rides in the URL.** `?attempt=N` means Twilio carries the retry
 count, so the relay stays stateless about ringing — no timers, no per-call
@@ -94,6 +102,22 @@ requires: `CallCaptions.poll()` treats an inactive answer seen *before* any acti
 one as "keep going," precisely so entering call mode can race the relay noticing
 the call. Waiting for a call that has not arrived is the same state. No new
 logic — the `wasActive` guard already covers it.
+
+### Known gaps in the hangup, as merged
+
+**The hangup is fire-and-forget.** `AppModel.endCall()` dismisses the screen and
+then POSTs `/v1/call/end` with a two-second timeout, no retry, and no user-visible
+failure. On a flaky watch link this reproduces the very symptom the route was added
+to fix: the screen returns to the menu while the caller stays connected and billed.
+Recovery exists — relaunching finds the call still live and Stop can be tried
+again — but nothing tells the user to. Worth either a retry or saying plainly that
+the hangup did not land.
+
+**`callTwoWay` means "call audio started", not "the watch holds this call".** It is
+set only after microphone permission and the engine both succeed, so on a held call
+where the mic is denied the watch shows an error screen with no Stop button on a
+live, billed call. The back gesture still tears down correctly, so it is
+recoverable, just not obvious.
 
 ## Ringing
 
@@ -192,14 +216,27 @@ Rejected: a bottom talk bar, which costs caption space on the binding constraint
 - `GET /v1/call/audio?since=N` → raw μ-law with a cursor header. Binary rather than
   base64-in-JSON: a third less data on the link that is already the bottleneck.
 - `POST /v1/call/audio` → 16 kHz Int16 from the mic while push-to-talk is held.
+- `POST /v1/call/end` → hang up, by closing the call's WebSocket. The only thing
+  that can end a call, for the reason given above.
 
-`GET /v1/call` also marks presence, which is what makes the ringing decision work.
+`GET /v1/call?ready=1` marks presence, which is what makes the ringing decision
+work. **The flag matters**: the Watch also polls this route on every launch to
+decide whether to open the call screen at all, and counting that would make presence
+mean "the app is running" rather than "the Watch is waiting for a call" — opening the
+app to browse transcripts would arm `<Connect>` for ten seconds and hand a real call
+to a Watch sitting on the History screen.
+
+`GET /v1/call` also answers `twoWay`, distinguishing a call the Watch holds from a
+fallback call the phone holds. The fallback's `<Start><Stream>` reaches the same
+WebSocket endpoint, and the two must not be treated alike: that stream is one-way, so
+the Watch neither speaks into it (409) nor plays the caller aloud from it. The relay
+tells them apart by a marker in the stream path, since Twilio drops the query string.
 
 ### Config
 
-The wait budget, and `TWILIO_FORWARD_TO` keeps its name but changes meaning: it
-becomes the second line Twilio falls back to, rather than the number it always
-dials.
+The wait budget (`CALL_WAIT_ATTEMPTS`), and `TWILIO_FORWARD_TO` keeps its name but
+changes meaning: it becomes the second line Twilio falls back to, rather than the
+number it always dials.
 
 ### Cleanup
 
@@ -211,8 +248,12 @@ running in production. It comes out as part of this work.
 ### New in CaptionCore
 
 - **`MuLaw.decode`** — μ-law bytes to Int16, mirroring the relay's encoder.
-- **`CallAudio`** — polls the downlink, tracks the cursor, and owns the jitter
-  policy: how much to buffer before starting, and what to do when a poll is late.
+- **`CallAudio`** — polls the downlink and tracks the cursor. The jitter policy
+  ended up next to the player rather than here, and ended up simpler than planned:
+  no preroll, because buying smoothness with another second of latency is the wrong
+  trade on a path already two seconds behind. What survives is `CallAudioPlayer`'s
+  bounded queue — schedule each batch as it lands, drop anything that would push
+  playback more than ~2s behind, so a stall stays a gap rather than becoming drift.
 - **`CallVoice`** — push-to-talk state and upload batching.
 
 Three small types rather than one, each testable against a fake client.
@@ -250,6 +291,11 @@ accumulating, for the reason given above.
 **Voicemail solves itself.** Falling back to the second line means that line's
 carrier voicemail catches unanswered calls, so forwarding the real number does not
 cost the voicemail it otherwise would.
+
+**The fallback stays captioned.** It reuses phase 1's `<Start><Stream>` + `<Dial>`
+shape rather than a bare `<Dial>`, so a call that rings out to your phone still
+puts captions on your wrist — the configuration phase 1 proved works. Falling back
+costs you the watch-held call, not the captions.
 
 ## Accepted limits
 

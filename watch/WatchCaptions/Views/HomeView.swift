@@ -9,6 +9,7 @@ struct HomeView: View {
     let onLive: () -> Void
     let onContinue: () -> Void
     let onBrowse: () -> Void
+    let onTakeCall: () -> Void
     /// Which build this is, so a bug report can name one. Injectable for previews.
     var versionLabel: String = AppBuild.versionLabel
 
@@ -57,6 +58,9 @@ struct HomeView: View {
                 Button(action: onContinue) {
                     Label("Continue last", systemImage: "arrow.clockwise")
                 }
+            }
+            Button(action: onTakeCall) {
+                Label("Take call", systemImage: "phone.badge.waveform")
             }
             Button(action: onBrowse) {
                 Label("Transcripts", systemImage: "list.bullet")

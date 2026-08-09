@@ -143,6 +143,7 @@ design and its reasoning.
 |-----|----------|-------|
 | `TWILIO_FORWARD_TO` | Yes, to enable `/twilio/voice` | The number `<Dial>` rings — your real phone, in `+1…` form. Without it, `/twilio/voice` answers `503` rather than TwiML that dials nowhere. |
 | `DEEPGRAM_PHONE_MODEL` | No | Overrides the Deepgram model used for call audio. Defaults to `phonecall`, the safe telephony baseline — see the spec's "Model candidates" for why `flux-general-en` is not currently reachable through this relay's SDK version. |
+| `CALL_WAIT_ATTEMPTS` | No | How many ringback rounds the caller hears before the call falls back to `TWILIO_FORWARD_TO`. Roughly four seconds each, so the default `5` is about twenty seconds of ringing. Must be a whole number, 1 or more; anything else is ignored with a warning rather than booting on a budget that would skip the ring entirely. |
 
 Setup (Twilio console; nothing else in this repo needs to change):
 

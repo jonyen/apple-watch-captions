@@ -19,13 +19,18 @@ struct RelayCallClient: CallClient {
         return URLSession(configuration: config)
     }()
 
-    func poll(since: Int) async throws -> CallUpdate {
+    func poll(since: Int, ready: Bool) async throws -> CallUpdate {
         var components = URLComponents(
             url: base.appendingPathComponent("v1/call"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "since", value: String(since)),
         ]
+        // Only a poll from the call screen claims presence. The relay hands an
+        // inbound call to the watch on the strength of this alone, so the
+        // launch probe — which runs whatever the user opened the app for —
+        // deliberately omits it.
+        if ready { components.queryItems?.append(URLQueryItem(name: "ready", value: "1")) }
         let (data, response) = try await Self.session.data(from: components.url!)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw HistoryError.message("Relay error")
@@ -34,5 +39,28 @@ struct RelayCallClient: CallClient {
             throw HistoryError.message("Unreadable response")
         }
         return decodeCallUpdate(json)
+    }
+
+    /// Hang up. Twilio holds the call for exactly as long as the relay's
+    /// WebSocket lives, and the watch is not a party to that socket — so this
+    /// is the only thing that ends a call. Without it the caller stays
+    /// connected to silence, billed, until they give up.
+    ///
+    /// A 409 means there was nothing to end (the caller already hung up, or
+    /// the phone holds this one). That is the outcome the caller wanted, so
+    /// it is not an error.
+    func end() async throws {
+        var components = URLComponents(
+            url: base.appendingPathComponent("v1/call/end"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "token", value: token)]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        let (_, response) = try await Self.session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw HistoryError.message("Relay error")
+        }
+        guard http.statusCode == 200 || http.statusCode == 409 else {
+            throw HistoryError.message("Relay error")
+        }
     }
 }

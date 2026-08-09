@@ -236,6 +236,30 @@ describe("ring, connect, or fall back", () => {
     expect(xml).not.toContain("<Play>");
   });
 
+  // `attempt` is user-reachable — anyone holding the token can request
+  // /twilio/voice directly with any value. Unclamped, a huge value could
+  // hang forever: for |attempt| beyond ~9e15, IEEE-754 makes `attempt + 1
+  // === attempt`, so the redirect keeps encoding the same still-in-budget
+  // value and the call rings indefinitely. A negative value rings well past
+  // the intended ~20s budget before terminating. Malformed input of any of
+  // these shapes must land on the fallback branch immediately rather than
+  // being trusted to keep ringing.
+  it.each([
+    ["a negative attempt", "-3"],
+    ["a non-integer attempt", "2.5"],
+    ["an attempt past Number.MAX_SAFE_INTEGER", "1e16"],
+  ])("treats %s as budget already spent, not a fresh ring", async (_label, attempt) => {
+    const { port } = start("+15551234567");
+
+    const xml = await (await fetch(
+      `${base(port)}/twilio/voice?token=good&attempt=${attempt}`,
+      { method: "POST" },
+    )).text();
+
+    expect(xml).toContain("<Dial>+15551234567</Dial>");
+    expect(xml).not.toContain("<Play>");
+  });
+
   it("serves the ringback tone without a token, because Twilio fetches it", async () => {
     const { port } = start("+15551234567");
 

@@ -188,8 +188,18 @@ async function handleRequest(
     const encoded = encodeURIComponent(token ?? "");
     const streamUrl = `wss://${host}${TWILIO_STREAM_PREFIX}${encoded}`;
     const streamStatusUrl = `https://${host}/twilio/stream-status?token=${encoded}`;
-    const attempt = Number(url.searchParams.get("attempt") ?? "1") || 1;
     const budget = opts.waitAttempts ?? 5;
+    const requestedAttempt = Number(url.searchParams.get("attempt") ?? "1");
+    // A well-formed attempt is a whole number within the wait budget.
+    // Anything else — negative, fractional, NaN, or absurdly large (where
+    // `+ 1` below can silently no-op under IEEE-754 and loop forever) — is
+    // untrusted input reachable by anyone holding the token, so it is
+    // treated as the budget already being spent rather than trusted to keep
+    // ringing.
+    const attempt =
+      Number.isInteger(requestedAttempt) && requestedAttempt >= 1 && requestedAttempt <= budget
+        ? requestedAttempt
+        : budget;
 
     res.writeHead(200, { "content-type": "text/xml" });
 

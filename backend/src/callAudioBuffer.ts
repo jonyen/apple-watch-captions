@@ -44,6 +44,18 @@ export class CallAudioBuffer {
     };
   }
 
+  /**
+   * Drop everything waiting, so the next call never inherits this one's audio.
+   *
+   * **`seq` is deliberately not reset**, and that is load-bearing rather than
+   * an oversight. The watch's `CallAudio.reset()` puts its cursor back to 0 at
+   * the start of every call; that is only safe because this counter keeps
+   * climbing across calls, so a cursor of 0 is always behind whatever arrives
+   * next. Reset `seq` here and a watch still holding the previous call's
+   * cursor would silently skip the new call's opening seconds as
+   * already-heard — and nothing would look wrong from either side.
+   * `callAudioBuffer.test.ts` pins the invariant.
+   */
   clear(): void {
     this.chunks = [];
     this.bytes = 0;

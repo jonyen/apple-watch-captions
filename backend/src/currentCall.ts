@@ -5,6 +5,14 @@ export interface ActiveCall {
   /** The SessionStore session carrying this call's captions. */
   sessionId: string;
   callSid: string;
+  /**
+   * True when the watch holds this call: `<Connect><Stream>`, audio both ways,
+   * hangup by closing the socket. False on the fallback shape
+   * (`<Start><Stream>` + `<Dial>`), which is captions only — the phone holds
+   * that call, the stream is unidirectional, and neither speaking nor hanging
+   * up from the watch is possible.
+   */
+  twoWay: boolean;
 }
 
 /**
@@ -20,8 +28,8 @@ export class CurrentCall {
   private active: ActiveCall | null = null;
   private reason: CallEndReason | null = null;
 
-  begin(sessionId: string, callSid: string): void {
-    this.active = { sessionId, callSid };
+  begin(sessionId: string, callSid: string, twoWay = true): void {
+    this.active = { sessionId, callSid, twoWay };
     this.reason = null;
   }
 

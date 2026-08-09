@@ -10,7 +10,7 @@ describe("CallUplink", () => {
   it("hands audio to the attached sender", () => {
     const sent: Buffer[] = [];
     const uplink = new CallUplink();
-    uplink.attach((mulaw) => sent.push(mulaw));
+    uplink.attach((mulaw) => sent.push(mulaw), () => {});
 
     expect(uplink.write(Buffer.from([1, 2]))).toBe(true);
     expect([...sent[0]]).toEqual([1, 2]);
@@ -20,7 +20,7 @@ describe("CallUplink", () => {
     const sent: Buffer[] = [];
     const uplink = new CallUplink();
     const sender = (mulaw: Buffer) => sent.push(mulaw);
-    uplink.attach(sender);
+    uplink.attach(sender, () => {});
     uplink.detach(sender);
 
     expect(uplink.write(Buffer.from([1]))).toBe(false);
@@ -32,8 +32,8 @@ describe("CallUplink", () => {
     const first: Buffer[] = [];
     const second: Buffer[] = [];
     const uplink = new CallUplink();
-    uplink.attach((m) => first.push(m));
-    uplink.attach((m) => second.push(m));
+    uplink.attach((m) => first.push(m), () => {});
+    uplink.attach((m) => second.push(m), () => {});
 
     uplink.write(Buffer.from([9]));
 
@@ -45,7 +45,7 @@ describe("CallUplink", () => {
     const sent: Buffer[] = [];
     const sender = (mulaw: Buffer) => sent.push(mulaw);
     const uplink = new CallUplink();
-    uplink.attach(sender);
+    uplink.attach(sender, () => {});
 
     const result = uplink.detach(sender);
 
@@ -60,8 +60,8 @@ describe("CallUplink", () => {
     const secondSender = (mulaw: Buffer) => secondSent.push(mulaw);
     const uplink = new CallUplink();
 
-    uplink.attach(firstSender);
-    uplink.attach(secondSender);
+    uplink.attach(firstSender, () => {});
+    uplink.attach(secondSender, () => {});
 
     const result = uplink.detach(firstSender);
 
@@ -69,5 +69,46 @@ describe("CallUplink", () => {
     expect(uplink.write(Buffer.from([42]))).toBe(true);
     expect(secondSent).toHaveLength(1);
     expect(firstSent).toHaveLength(0);
+  });
+
+  // Under <Connect><Stream> the socket *is* the call, and the watch is not a
+  // party to it — so this closer is the only thing that can hang up.
+  it("hangs up by closing the attached call's socket", () => {
+    let closed = 0;
+    const uplink = new CallUplink();
+    uplink.attach(() => {}, () => { closed += 1; });
+
+    expect(uplink.end()).toBe(true);
+    expect(closed).toBe(1);
+  });
+
+  it("reports nothing to hang up when no call is attached", () => {
+    expect(new CallUplink().end()).toBe(false);
+  });
+
+  // A second hangup must not close a call that arrived in between, and the
+  // route answering it must be able to say "there is no call" honestly.
+  it("leaves nothing attached after hanging up", () => {
+    let closed = 0;
+    const uplink = new CallUplink();
+    uplink.attach(() => {}, () => { closed += 1; });
+    uplink.end();
+
+    expect(uplink.end()).toBe(false);
+    expect(uplink.write(Buffer.from([1]))).toBe(false);
+    expect(closed).toBe(1);
+  });
+
+  // The closer usually triggers the socket's own close handling, which
+  // detaches. Clearing before the closer runs is what keeps that from
+  // reaching back in and finding half-torn-down state.
+  it("is already detached by the time the closer runs", () => {
+    const uplink = new CallUplink();
+    let seenDuringClose: boolean | null = null;
+    uplink.attach(() => {}, () => { seenDuringClose = uplink.write(Buffer.from([1])); });
+
+    uplink.end();
+
+    expect(seenDuringClose).toBe(false);
   });
 });

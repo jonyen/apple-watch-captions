@@ -33,12 +33,25 @@ class FakeSocket implements TwilioSocketLike {
   receive(frame: object) {
     this.handlers.get("message")?.(Buffer.from(JSON.stringify(frame)));
   }
+  /**
+   * The production `TwilioSocketLike.close` — the handler calls it to hang up.
+   * Deliberately does *not* fire the close handler: a real socket closes
+   * asynchronously, so the `close` event lands on a later tick, after
+   * whatever else was already in flight. Collapsing the two would hide every
+   * ordering bug that lives in that gap. `die()` delivers the event.
+   */
   close() {
+    this.closes += 1;
+  }
+  /** How many times the handler asked to close this socket. */
+  closes = 0;
+  /** Simulates the socket's close event arriving. */
+  die() {
     this.handlers.get("close")?.();
   }
 }
 
-function harness() {
+function harness(options: { twoWay?: boolean } = {}) {
   const providers: FakeTranscriptionProvider[] = [];
   const seen: (ProviderOptions | undefined)[] = [];
   const store = new SessionStore({
@@ -53,7 +66,7 @@ function harness() {
   const ws = new FakeSocket();
   const downlink = new CallAudioBuffer();
   const uplink = new CallUplink();
-  handleTwilioStream(ws, store, calls, downlink, uplink);
+  handleTwilioStream(ws, store, calls, downlink, uplink, options);
   return { ws, store, calls, providers, seen, downlink, uplink };
 }
 
@@ -74,7 +87,7 @@ describe("handleTwilioStream", () => {
 
     ws.receive(startFrame("CA1"));
 
-    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", twoWay: true });
     expect(seen).toEqual([{ telephony: true }]);
   });
 
@@ -112,7 +125,7 @@ describe("handleTwilioStream", () => {
     const { ws, calls, providers } = harness();
     ws.receive(startFrame("CA1"));
 
-    ws.close();
+    ws.die();
 
     expect(calls.lastReason()).toBe("stream_lost");
     expect(providers[0].closed).toBe(true);
@@ -123,7 +136,7 @@ describe("handleTwilioStream", () => {
     ws.receive(startFrame("CA1"));
     ws.receive({ event: "stop" });
 
-    ws.close();
+    ws.die();
 
     expect(calls.lastReason()).toBe("ended");
   });
@@ -134,7 +147,7 @@ describe("handleTwilioStream", () => {
 
     ws.receive({ event: "dtmf", dtmf: { digit: "1" } });
 
-    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", twoWay: true });
   });
 
   // A replaced call is driven by a *second* socket/handler, so its old
@@ -173,13 +186,13 @@ describe("handleTwilioStream", () => {
 
     // A's socket closing without ever having been the current call must not
     // leak anything — no third provider, and CA2 is untouched.
-    wsA.close();
+    wsA.die();
     expect(providers).toHaveLength(2);
-    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2" });
+    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2", twoWay: true });
 
     // CA2 is still genuinely live and ends normally, closing its provider —
     // confirming the fix did not also break the happy path.
-    wsB.close();
+    wsB.die();
 
     expect(providers).toHaveLength(2);
     expect(providers.every((p) => p.closed)).toBe(true);
@@ -244,12 +257,22 @@ describe("bidirectional audio", () => {
     wsA.receive(startFrame("CA1"));
     wsB.receive(startFrame("CA2"));
 
+    // Audio B has taken in but the watch has not collected yet. A's teardown
+    // must leave it alone.
+    wsB.receive(mediaFrame("AAECAw=="));
+
     // A's socket dying after being replaced must not silence B's live call.
-    wsA.close();
+    wsA.die();
 
     expect(uplink.write(Buffer.from([0xaa]))).toBe(true);
     const frame = JSON.parse(wsB.sent.at(-1)!);
     expect(frame.streamSid).toBe("MZ-CA2");
+
+    // The downlink is the one shared object teardown used to wipe
+    // unconditionally. Because `clear()` deliberately leaves `seq` alone, the
+    // watch would have seen no gap — just the caller's speech silently
+    // missing between two polls.
+    expect([...downlink.drain(0).audio]).toEqual([0, 1, 2, 3]);
   });
 
   // The uplink survives a replacement because attach() unconditionally
@@ -274,5 +297,107 @@ describe("bidirectional audio", () => {
     wsB.receive(startFrame("CA2"));
 
     expect(downlink.drain(0).audio.length).toBe(0);
+  });
+});
+
+describe("ending the call", () => {
+  // The whole point of <Connect><Stream>: the call lives exactly as long as
+  // this socket, so closing it is the hangup. Nothing else can end the call —
+  // the watch is not a party to the socket at all.
+  it("hangs up by closing the socket when the uplink is ended", () => {
+    const { ws, uplink } = harness();
+    ws.receive(startFrame("CA1"));
+
+    expect(uplink.end()).toBe(true);
+
+    expect(ws.closes).toBe(1);
+  });
+
+  // Twilio's close event follows the close we asked for. It must read as the
+  // call ending, not as the stream dying under a live call — "Captions
+  // stopped" would be the wrong thing to leave on the wrist after hanging up.
+  it("reports a hangup as the call ending, not as a lost stream", () => {
+    const { ws, calls, uplink } = harness();
+    ws.receive(startFrame("CA1"));
+    uplink.end();
+
+    ws.die();
+
+    expect(calls.current()).toBeNull();
+    expect(calls.lastReason()).toBe("ended");
+  });
+
+  it("has nothing to hang up once the call is over", () => {
+    const { ws, uplink } = harness();
+    ws.receive(startFrame("CA1"));
+    ws.receive({ event: "stop" });
+
+    expect(uplink.end()).toBe(false);
+  });
+
+  // A displaced caller is stranded exactly as badly as one nobody hung up on:
+  // their socket stays open, their call stays live and billed, and every byte
+  // of their audio is discarded because a newer call owns the buffers.
+  it("closes the displaced call's socket when a newer call replaces it", () => {
+    const store = new SessionStore({ createProvider: () => new FakeTranscriptionProvider() });
+    const calls = new CurrentCall();
+    const downlink = new CallAudioBuffer();
+    const uplink = new CallUplink();
+    const wsA = new FakeSocket();
+    const wsB = new FakeSocket();
+    handleTwilioStream(wsA, store, calls, downlink, uplink);
+    handleTwilioStream(wsB, store, calls, downlink, uplink);
+
+    wsA.receive(startFrame("CA1"));
+    wsB.receive(startFrame("CA2"));
+
+    expect(wsA.closes).toBe(1);
+    // And the replacement is untouched: it is the live call now.
+    expect(wsB.closes).toBe(0);
+    expect(uplink.write(Buffer.from([0xaa]))).toBe(true);
+  });
+});
+
+// The fallback branch serves <Start><Stream> + <Dial> at this same endpoint.
+// That stream is unidirectional: Twilio cannot accept media back on it, and a
+// malformed outbound frame risks erroring the stream — losing the captions the
+// fallback exists to preserve. The phone holds that call, so the watch must
+// neither speak into it nor play the caller aloud two seconds late.
+describe("a one-way (fallback) stream", () => {
+  it("attaches no uplink, so speaking is refused rather than silently dropped", () => {
+    const { ws, uplink } = harness({ twoWay: false });
+
+    ws.receive(startFrame("CA1"));
+
+    expect(uplink.write(Buffer.from([0xff]))).toBe(false);
+    expect(ws.sent).toHaveLength(0);
+  });
+
+  it("fills no downlink, so the watch has nothing to play", () => {
+    const { ws, downlink } = harness({ twoWay: false });
+    ws.receive(startFrame("CA1"));
+
+    ws.receive(mediaFrame("AAECAw=="));
+
+    expect(downlink.drain(0).audio.length).toBe(0);
+  });
+
+  // Captions are the entire reason the fallback keeps a stream at all.
+  it("still captions the call", () => {
+    const { ws, providers, calls } = harness({ twoWay: false });
+    ws.receive(startFrame("CA1"));
+
+    ws.receive(mediaFrame("AAECAw=="));
+
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", twoWay: false });
+    expect(providers[0].receivedAudio.map((c) => [...c])).toEqual([[0, 1, 2, 3]]);
+  });
+
+  it("cannot be hung up from the watch, because the phone holds the call", () => {
+    const { ws, uplink } = harness({ twoWay: false });
+    ws.receive(startFrame("CA1"));
+
+    expect(uplink.end()).toBe(false);
+    expect(ws.closes).toBe(0);
   });
 });

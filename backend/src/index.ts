@@ -105,6 +105,7 @@ const server = startServer({
   transcriptsDir: config.transcriptsDir,
   usage: createUsageService({ env: process.env }),
   callForwardTo: config.twilioForwardTo,
+  waitAttempts: config.callWaitAttempts,
 });
 
 const addr = server.address();

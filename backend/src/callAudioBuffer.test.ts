@@ -62,4 +62,25 @@ describe("CallAudioBuffer", () => {
 
     expect(buffer.drain(0).audio.length).toBe(0);
   });
+
+  // Load-bearing, and easy to "tidy up" into a bug: the watch resets its own
+  // cursor to 0 at the start of every call (CallAudio.reset), which is only
+  // safe because this counter keeps climbing across calls. Reset seq here and
+  // a watch still holding the previous call's cursor would skip the new
+  // call's opening seconds as already-heard, with nothing looking wrong from
+  // either side.
+  it("keeps counting across a clear, so a reset cursor is always behind", () => {
+    const buffer = new CallAudioBuffer();
+    buffer.append(Buffer.from([1, 2]));
+    const before = buffer.drain(0).seq;
+
+    buffer.clear();
+    buffer.append(Buffer.from([3, 4]));
+
+    const after = buffer.drain(before);
+    expect(after.seq).toBeGreaterThan(before);
+    expect([...after.audio]).toEqual([3, 4]);
+    // And a cursor of 0 — a fresh call on the watch — still sees it.
+    expect([...buffer.drain(0).audio]).toEqual([3, 4]);
+  });
 });

@@ -40,7 +40,10 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
-  /** How many ringback rounds before falling back. Defaults to 5 (~20s). */
+  /**
+   * How many ringback rounds before falling back. Defaults to 5 (~20s).
+   * Fed by `CALL_WAIT_ATTEMPTS` — see `config.ts`.
+   */
   waitAttempts?: number;
 }
 
@@ -86,15 +89,28 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     // travels in the path, which Twilio does preserve. The query form is still
     // accepted so the endpoint can be exercised directly with a normal client.
     if (url.pathname === "/twilio/stream" || url.pathname.startsWith(TWILIO_STREAM_PREFIX)) {
-      const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
-        ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
+      // Which TwiML we served rides in the path too, for the same reason the
+      // token does — Twilio discards the query string. The fallback shape
+      // (`<Start><Stream>` + `<Dial>`) reaches this same endpoint but is
+      // one-way, and treating it as a held call would put media frames on a
+      // stream that cannot accept them and the caller on the watch speaker
+      // while the user is talking to them on the phone.
+      let rest = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
+        ? url.pathname.slice(TWILIO_STREAM_PREFIX.length)
         : undefined;
+      let twoWay = true;
+      if (rest !== undefined && rest.endsWith(TWILIO_FALLBACK_SUFFIX)) {
+        twoWay = false;
+        rest = rest.slice(0, -TWILIO_FALLBACK_SUFFIX.length);
+      }
+      const fromPath = rest !== undefined ? safeDecode(rest) : undefined;
       if (!verifyToken(fromPath ?? token, opts.authToken)) {
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) =>
-        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall, downlink, uplink));
+        handleTwilioStream(
+          ws as unknown as TwilioSocketLike, store, currentCall, downlink, uplink, { twoWay }));
       return;
     }
 
@@ -222,8 +238,13 @@ async function handleRequest(
     // Out of patience: ring the second line, whose carrier voicemail catches
     // it. Still `voiceResponse` — phase 1's `<Start><Stream>` + `<Dial>`
     // shape — deliberately, so a call that rings out to the phone is still
-    // captioned.
-    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo, streamStatusUrl }));
+    // captioned. The stream URL carries the fallback marker so the relay
+    // treats it as the one-way stream it is.
+    res.end(voiceResponse({
+      streamUrl: `${streamUrl}${TWILIO_FALLBACK_SUFFIX}`,
+      dialTo: opts.callForwardTo,
+      streamStatusUrl,
+    }));
     return;
   }
 
@@ -272,6 +293,27 @@ async function handleRequest(
     return;
   }
 
+  // Hang up. Under `<Connect><Stream>` the call lives exactly as long as the
+  // Twilio WebSocket, and the watch is not a party to that socket — so this is
+  // the only thing that can end a call. Without it, tapping Stop returns the
+  // watch to its menu and leaves the caller connected to silence, billed,
+  // until they give up.
+  if (req.method === "POST" && url.pathname === "/v1/call/end") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    // False on a fallback call too: the phone holds that one, so there is no
+    // socket here whose closing would end it.
+    if (!uplink.end()) {
+      sendJSON(res, 409, { error: "no call is live" });
+      return;
+    }
+    sendJSON(res, 200, { ended: true });
+    return;
+  }
+
   // Your voice, while push-to-talk is held. 16 kHz Int16 in, mu-law 8 kHz out.
   if (req.method === "POST" && url.pathname === "/v1/call/audio") {
     const token = url.searchParams.get("token") ?? undefined;
@@ -304,8 +346,15 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
-    // Polling is how the watch says it is here; the ringing decision reads it.
-    presence.mark();
+    // Presence is claimed explicitly, not inferred from any poll at all.
+    // The watch also probes this route on every launch — to decide whether to
+    // open the call screen — and counting that as presence would mean opening
+    // the app to browse transcripts silently arms `<Connect>`: a call arriving
+    // within the next ten seconds would be handed to a watch sitting on the
+    // History screen, with nothing polling, no ringback left to fall back on,
+    // and no indication anything had happened. `ready=1` says something
+    // stronger: the call screen is up and waiting.
+    if (url.searchParams.get("ready") === "1") presence.mark();
     const since = Number(url.searchParams.get("since") ?? "0") || 0;
     const active = calls.current();
     // reapIdle (or a direct /v1/stop) can drop a call's session without
@@ -330,7 +379,10 @@ async function handleRequest(
       return;
     }
     const { events, seq } = store.drain(active.sessionId, since);
-    sendJSON(res, 200, { active: true, events: flatten(events), seq });
+    // `twoWay` tells the watch whether this is a call it holds — hear the
+    // caller, speak back, hang up — or the fallback, which is captions only
+    // because the phone holds it.
+    sendJSON(res, 200, { active: true, twoWay: active.twoWay, events: flatten(events), seq });
     return;
   }
 
@@ -475,6 +527,14 @@ async function handleRequest(
 
 /** Where the media-stream token lives, since Twilio drops the query string. */
 const TWILIO_STREAM_PREFIX = "/twilio/stream/";
+
+/**
+ * Appended to the stream path on the fallback branch, so the upgrade handler
+ * knows which TwiML it served. In the path rather than the query string for
+ * the same reason the token is, and unambiguous because the token is
+ * percent-encoded, which turns any `/` of its own into `%2F`.
+ */
+const TWILIO_FALLBACK_SUFFIX = "/fallback";
 
 /** A malformed percent-escape is a bad token, not a crash. */
 function safeDecode(value: string): string | undefined {

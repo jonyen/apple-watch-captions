@@ -12,7 +12,11 @@ afterEach(async () => {
   running = null;
 });
 
-function start(callForwardTo?: string, authToken = "good") {
+function start(
+  callForwardTo?: string,
+  authToken = "good",
+  extra: { waitAttempts?: number } = {},
+) {
   const providers: FakeTranscriptionProvider[] = [];
   const server = startServer({
     port: 0,
@@ -23,6 +27,7 @@ function start(callForwardTo?: string, authToken = "good") {
       return p;
     },
     callForwardTo,
+    ...extra,
   });
   running = server;
   return { providers, port: (server.address() as AddressInfo).port };
@@ -214,9 +219,11 @@ describe("ring, connect, or fall back", () => {
     expect(xml).not.toContain("<Connect>");
   });
 
-  it("connects the stream once the watch has polled", async () => {
+  it("connects the stream once the watch has said it is ready", async () => {
     const { port } = start("+15551234567");
-    await fetch(`${base(port)}/v1/call?token=good`); // this is what marks presence
+    // ready=1 is what marks presence — see the test below for why a plain
+    // poll deliberately does not.
+    await fetch(`${base(port)}/v1/call?token=good&ready=1`);
 
     const xml = await (await fetch(`${base(port)}/twilio/voice?token=good`, {
       method: "POST",
@@ -224,6 +231,24 @@ describe("ring, connect, or fall back", () => {
 
     expect(xml).toContain("<Connect>");
     expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream/good`);
+  });
+
+  // Presence must mean "the call screen is up and waiting", not "the app is
+  // running". The watch probes this route on every launch to decide whether
+  // to open call captions; if that counted, opening the app to browse
+  // transcripts would silently arm <Connect> for ten seconds — handing a real
+  // call to a watch sitting on the History screen, with nothing polling, no
+  // ringback left, and no way for the user to tell.
+  it("does not count a plain poll as the watch being ready for a call", async () => {
+    const { port } = start("+15551234567");
+    await fetch(`${base(port)}/v1/call?token=good`);
+
+    const xml = await (await fetch(`${base(port)}/twilio/voice?token=good`, {
+      method: "POST",
+    })).text();
+
+    expect(xml).not.toContain("<Connect>");
+    expect(xml).toContain("ringback.wav");
   });
 
   it("falls back to the second line once the budget is spent", async () => {
@@ -257,6 +282,33 @@ describe("ring, connect, or fall back", () => {
       { method: "POST" },
     )).text();
 
+    expect(xml).toContain("<Dial>+15551234567</Dial>");
+    expect(xml).not.toContain("<Play>");
+  });
+
+  // The fallback keeps a stream so the call is still captioned, but that
+  // stream is <Start><Stream> — one-way. The relay has to be able to tell,
+  // and Twilio drops the query string, so the marker rides in the path.
+  it("marks the fallback stream as the one-way stream it is", async () => {
+    const { port } = start("+15551234567");
+
+    const xml = await (await fetch(`${base(port)}/twilio/voice?token=good&attempt=99`, {
+      method: "POST",
+    })).text();
+
+    expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream/good/fallback`);
+  });
+
+  // waitAttempts was declared and never passed by anything, so the budget was
+  // whatever the default happened to be, unconfigurable.
+  it("honours a configured wait budget", async () => {
+    const { port } = start("+15551234567", "good", { waitAttempts: 1 });
+
+    const xml = await (await fetch(`${base(port)}/twilio/voice?token=good`, {
+      method: "POST",
+    })).text();
+
+    // Budget of one means the very first attempt is already the last.
     expect(xml).toContain("<Dial>+15551234567</Dial>");
     expect(xml).not.toContain("<Play>");
   });
@@ -358,6 +410,128 @@ describe("call audio", () => {
     const onWire = Buffer.from(media.media.payload, "base64");
     expect(onWire.length).toBe(pcm.length / 4); // half the 8-sample count: 4 bytes
     expect(onWire).toEqual(pcm16kToMuLaw8k(pcm));
+    ws.close();
+  });
+});
+
+describe("POST /v1/call/end", () => {
+  it("rejects a hangup without a valid token", async () => {
+    const { port } = start("+15551234567");
+    expect((await fetch(`${base(port)}/v1/call/end`, { method: "POST" })).status).toBe(401);
+    expect((await fetch(`${base(port)}/v1/call/end?token=bad`, { method: "POST" })).status)
+      .toBe(401);
+  });
+
+  it("409s when there is no call to end", async () => {
+    const { port } = start("+15551234567");
+
+    const res = await fetch(`${base(port)}/v1/call/end?token=good`, { method: "POST" });
+
+    expect(res.status).toBe(409);
+  });
+
+  // Under <Connect><Stream> the call lives exactly as long as this socket, and
+  // the watch is not a party to it. Without this route, tapping Stop returned
+  // the watch to its menu and left the caller connected to silence — billed,
+  // indefinitely, until they gave up.
+  it("closes the live call's stream, which is what ends the call", async () => {
+    const { port } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
+    const closed = new Promise((resolve) => ws.on("close", resolve));
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start", streamSid: "MZe", start: { callSid: "CAe", streamSid: "MZe" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`${base(port)}/v1/call/end?token=good`, { method: "POST" });
+
+    expect(res.status).toBe(200);
+    await closed;
+    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+    expect(body.active).toBe(false);
+    // Hanging up is the call ending, not the stream dying under a live call.
+    expect(body.reason).toBe("ended");
+  });
+});
+
+// <Start><Stream> reaches the same WebSocket endpoint as <Connect><Stream>,
+// and the two must not be treated alike: the fallback is one-way, the phone
+// holds that call, and pushing media at it risks erroring the very stream the
+// captions ride on.
+describe("a fallback call", () => {
+  async function startFallbackCall(port: number) {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good/fallback`);
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start", streamSid: "MZf", start: { callSid: "CAf", streamSid: "MZf" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return ws;
+  }
+
+  it("tells the watch it is captions only", async () => {
+    const { port } = start("+15551234567");
+    const ws = await startFallbackCall(port);
+
+    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+
+    expect(body.active).toBe(true);
+    expect(body.twoWay).toBe(false);
+    ws.close();
+  });
+
+  it("refuses your voice rather than dropping it into a stream Twilio ignores", async () => {
+    const { port } = start("+15551234567");
+    const ws = await startFallbackCall(port);
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=good`, {
+      method: "POST",
+      body: Buffer.alloc(800),
+    });
+
+    expect(res.status).toBe(409);
+    ws.close();
+  });
+
+  it("serves no caller audio, so the watch never plays a call held on the phone", async () => {
+    const { port } = start("+15551234567");
+    const ws = await startFallbackCall(port);
+    ws.send(JSON.stringify({
+      event: "media", media: { payload: Buffer.from([0xff, 0xfe]).toString("base64") },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=good&since=0`);
+
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+    ws.close();
+  });
+
+  it("cannot be hung up from the watch", async () => {
+    const { port } = start("+15551234567");
+    const ws = await startFallbackCall(port);
+
+    const res = await fetch(`${base(port)}/v1/call/end?token=good`, { method: "POST" });
+
+    expect(res.status).toBe(409);
+    ws.close();
+  });
+
+  // A held call is the opposite on every count, and that contrast is the
+  // point of the flag.
+  it("is distinguishable from a call the watch holds", async () => {
+    const { port } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start", streamSid: "MZg", start: { callSid: "CAg", streamSid: "MZg" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+
+    expect(body.twoWay).toBe(true);
     ws.close();
   });
 });

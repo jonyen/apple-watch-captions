@@ -2,6 +2,14 @@ import Combine
 import Foundation
 
 /// Sends your voice to the relay.
+///
+/// `CallVoice` can have two turns' worth of `send` in flight at once — a
+/// turn started right after the previous one was released, before its send
+/// completed. Nothing here orders those calls against each other, so a
+/// conforming client that cares about turns landing in the order they were
+/// spoken (rather than the order their network requests happen to finish)
+/// must provide that ordering itself, e.g. by serializing requests or by
+/// tagging them for the relay to reorder.
 public protocol CallVoiceClient: Sendable {
     func send(_ pcm: Data) async throws
 }
@@ -23,7 +31,12 @@ public final class CallVoice: ObservableObject {
         self.client = client
     }
 
+    /// Open a turn. A repeat call while already talking is a no-op rather
+    /// than a reset: the caller wired to this — a drag gesture — fires
+    /// `.onChanged` repeatedly for the same press, and wiping `turn` on every
+    /// one of those would drop whatever was already captured mid-word.
     public func beginTalking() {
+        guard !isTalking else { return }
         turn = Data()
         isTalking = true
     }

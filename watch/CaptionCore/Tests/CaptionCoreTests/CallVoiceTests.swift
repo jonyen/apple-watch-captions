@@ -74,4 +74,99 @@ final class CallVoiceTests: XCTestCase {
 
         XCTAssertEqual(client.sent, [Data([1]), Data([2])])
     }
+
+    /// `DragGesture.onChanged` fires repeatedly for one held press, so
+    /// `beginTalking()` is called many times per turn. A repeat call must not
+    /// reset the buffer, or audio already captured mid-word is dropped with
+    /// no signal to the user.
+    func testARepeatBeginTalkingDoesNotWipeTheBuffer() async {
+        let client = FakeVoiceClient()
+        let voice = CallVoice(client: client)
+
+        voice.beginTalking()
+        voice.capture(Data([1]))
+        voice.beginTalking()
+        voice.capture(Data([2]))
+        voice.beginTalking()
+        await voice.endTalking()
+
+        XCTAssertEqual(client.sent, [Data([1, 2])])
+    }
+
+    /// A `CallVoiceClient` whose `send` blocks until a test releases it, so a
+    /// turn left in flight by one `endTalking()` can be overlapped by a
+    /// second, deterministically, instead of racing on real concurrency.
+    /// Mirrors `CallAudioTests.GatedAudioClient` / `CallCaptionsTests.GatedCallClient`.
+    private actor GatedVoiceClient: CallVoiceClient {
+        private var registeredCalls = 0
+        private var waiters: [CheckedContinuation<Void, Error>] = []
+        private var arrivalWatchers: [(need: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        private(set) var received: [Data] = []
+
+        func send(_ pcm: Data) async throws {
+            received.append(pcm)
+            try await withCheckedThrowingContinuation { continuation in
+                waiters.append(continuation)
+                registeredCalls += 1
+                notifyArrivals()
+            }
+        }
+
+        /// Waits until `count` calls have arrived, without releasing them.
+        func waitForArrival(_ count: Int) async {
+            if registeredCalls < count {
+                await withCheckedContinuation { arrivalWatchers.append((count, $0)) }
+            }
+        }
+
+        /// Resolves the oldest still-waiting call.
+        func resumeOldest() {
+            guard !waiters.isEmpty else { return }
+            waiters.removeFirst().resume(returning: ())
+        }
+
+        private func notifyArrivals() {
+            arrivalWatchers.removeAll { watcher in
+                guard registeredCalls >= watcher.need else { return false }
+                watcher.continuation.resume()
+                return true
+            }
+        }
+    }
+
+    /// A second `beginTalking()`/`capture()`/`endTalking()` that lands while
+    /// the first turn's `send` is still in flight must not lose, duplicate,
+    /// or blend the two turns, and must not leave `isTalking` stuck. This is
+    /// the reentrancy the four other `CaptionCore` state-corruption bugs had:
+    /// state read before an `await` and written back after it. `endTalking()`
+    /// avoids that shape by resetting `turn`/`isTalking` before its one
+    /// `await`; this is the regression test for that ordering.
+    func testAnOverlappingTurnDoesNotCorruptTheOneBeingSent() async {
+        let client = GatedVoiceClient()
+        let voice = CallVoice(client: client)
+
+        voice.beginTalking()
+        voice.capture(Data([1]))
+        async let first: Void = voice.endTalking()
+        await client.waitForArrival(1)
+
+        // Starts and finishes while `first`'s send is still suspended. If
+        // `turn`/`isTalking` were reset after the `await` instead of before,
+        // this `beginTalking()` would still see `isTalking == true` and no-op
+        // (thanks to the idempotency guard above), so this `capture` would
+        // land in turn 1's buffer instead of starting turn 2.
+        voice.beginTalking()
+        voice.capture(Data([2]))
+        async let second: Void = voice.endTalking()
+        await client.waitForArrival(2)
+
+        await client.resumeOldest()
+        await first
+        await client.resumeOldest()
+        await second
+
+        let received = await client.received
+        XCTAssertEqual(received, [Data([1]), Data([2])])
+        XCTAssertFalse(voice.isTalking)
+    }
 }

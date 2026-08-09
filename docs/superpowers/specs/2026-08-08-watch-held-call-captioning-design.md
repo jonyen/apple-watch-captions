@@ -123,6 +123,26 @@ its capture pipeline already makes; the relay downsamples to 8 kHz μ-law and se
 media frames back over the same WebSocket. No new audio format anywhere on the
 Watch.
 
+Verified against Twilio's docs on 2026-08-08:
+
+- Outbound frames are `{"event":"media","streamSid":"…","media":{"payload":"<base64>"}}`.
+- The payload **must** be μ-law at 8 kHz, base64, and **must not carry audio file
+  header bytes** — a WAV header in the payload is a streaming error, so the relay
+  sends raw samples only.
+- Bidirectional audio requires `<Connect><Stream>`; `<Start><Stream>` cannot do it.
+  That confirms the flow above rather than merely assuming it.
+
+**`streamSid` is required on every outbound frame, and the current handler throws it
+away.** `parseTwilioFrame` already returns it on the `start` frame, but
+`twilioStreamHandler` keeps only `callSid`. Retaining `streamSid` alongside the
+session id is a one-line change and the uplink cannot work without it — easy to miss,
+and it fails only at runtime.
+
+Twilio also supports `mark` and `clear` on bidirectional streams. `clear` empties
+audio Twilio has buffered but not yet played, which is the natural way to drop a
+half-sent push-to-talk burst if you release early. Not required for 2a; worth
+knowing it exists before inventing something worse.
+
 ## Push-to-talk
 
 The mic is live only while a control is held.

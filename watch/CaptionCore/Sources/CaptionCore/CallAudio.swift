@@ -31,6 +31,14 @@ public final class CallAudio {
     private let client: CallAudioClient
     private let onSamples: ([Int16]) -> Void
     private var seq = 0
+    /// True while a `fetch` is in flight. `@MainActor` methods are reentrant
+    /// across suspension points, so two `poll()` calls started before either
+    /// resumes would otherwise both read the same `seq`, both fetch the same
+    /// audio window, and both hand it to `onSamples` — audible as a stutter.
+    /// A `poll()` that arrives while one is already in flight is a no-op
+    /// rather than a second fetch. Mirrors `CallCaptions.generation`, just
+    /// with one cursor to protect instead of a whole session to invalidate.
+    private var inFlight = false
 
     public init(client: CallAudioClient, onSamples: @escaping ([Int16]) -> Void) {
         self.client = client
@@ -43,6 +51,9 @@ public final class CallAudio {
     }
 
     public func poll() async {
+        guard !inFlight else { return }
+        inFlight = true
+        defer { inFlight = false }
         guard let chunk = try? await client.fetch(since: seq) else { return }
         seq = max(seq, chunk.seq)
         guard !chunk.samples.isEmpty else { return }

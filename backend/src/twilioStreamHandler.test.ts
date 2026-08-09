@@ -9,10 +9,15 @@ import { CallAudioBuffer } from "./callAudioBuffer";
 import { CallUplink } from "./callUplink";
 
 /**
- * A socket the test drives directly, standing in for Twilio. `send` is
- * overloaded on purpose: tests call it with a frame object to simulate
- * Twilio pushing a message in, while the handler under test calls it with a
- * JSON string to send audio out — that second form is what `sent` records.
+ * A socket the test drives directly, standing in for Twilio. `send` is the
+ * production `TwilioSocketLike` method — the handler under test calls it
+ * with a JSON string to send audio out, and `sent` records exactly that.
+ * `receive` is test-only: it simulates Twilio pushing a frame in. Keeping
+ * these as two distinctly named methods (rather than one overloaded on
+ * argument type) means a call written the way real code would call `send` —
+ * `ws.send(JSON.stringify(frame))` — cannot be silently swallowed into
+ * `sent` when it was meant to drive the handler; it just does what `send`
+ * actually does.
  */
 class FakeSocket implements TwilioSocketLike {
   private handlers = new Map<string, (...args: any[]) => void>();
@@ -21,12 +26,12 @@ class FakeSocket implements TwilioSocketLike {
     this.handlers.set(event, cb);
     return this;
   }
-  send(data: string | object) {
-    if (typeof data === "string") {
-      this.sent.push(data);
-      return;
-    }
-    this.handlers.get("message")?.(Buffer.from(JSON.stringify(data)));
+  send(data: string) {
+    this.sent.push(data);
+  }
+  /** Simulates Twilio pushing a frame in over the socket. */
+  receive(frame: object) {
+    this.handlers.get("message")?.(Buffer.from(JSON.stringify(frame)));
   }
   close() {
     this.handlers.get("close")?.();
@@ -67,7 +72,7 @@ describe("handleTwilioStream", () => {
   it("begins a telephony session on the start frame", () => {
     const { ws, calls, seen } = harness();
 
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
     expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
     expect(seen).toEqual([{ telephony: true }]);
@@ -75,9 +80,9 @@ describe("handleTwilioStream", () => {
 
   it("feeds decoded audio to the session", () => {
     const { ws, providers } = harness();
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
-    ws.send(mediaFrame("AAECAw=="));
+    ws.receive(mediaFrame("AAECAw=="));
 
     expect(providers[0].receivedAudio.map((c) => [...c])).toEqual([[0, 1, 2, 3]]);
   });
@@ -85,16 +90,16 @@ describe("handleTwilioStream", () => {
   it("drops audio arriving before the start frame", () => {
     const { ws, providers } = harness();
 
-    ws.send(mediaFrame("AAECAw=="));
+    ws.receive(mediaFrame("AAECAw=="));
 
     expect(providers).toHaveLength(0);
   });
 
   it("ends the call on the stop frame", () => {
     const { ws, calls, providers } = harness();
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
-    ws.send({ event: "stop" });
+    ws.receive({ event: "stop" });
 
     expect(calls.current()).toBeNull();
     expect(calls.lastReason()).toBe("ended");
@@ -105,7 +110,7 @@ describe("handleTwilioStream", () => {
   // would be a lie on the user's wrist.
   it("reports a socket that closes without a stop frame as lost", () => {
     const { ws, calls, providers } = harness();
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
     ws.close();
 
@@ -115,8 +120,8 @@ describe("handleTwilioStream", () => {
 
   it("does not report an end twice", () => {
     const { ws, calls } = harness();
-    ws.send(startFrame("CA1"));
-    ws.send({ event: "stop" });
+    ws.receive(startFrame("CA1"));
+    ws.receive({ event: "stop" });
 
     ws.close();
 
@@ -125,9 +130,9 @@ describe("handleTwilioStream", () => {
 
   it("survives a frame it cannot parse", () => {
     const { ws, calls } = harness();
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
-    ws.send({ event: "dtmf", dtmf: { digit: "1" } });
+    ws.receive({ event: "dtmf", dtmf: { digit: "1" } });
 
     expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
   });
@@ -155,15 +160,15 @@ describe("handleTwilioStream", () => {
     handleTwilioStream(wsA, store, calls, new CallAudioBuffer(), new CallUplink());
     handleTwilioStream(wsB, store, calls, new CallAudioBuffer(), new CallUplink());
 
-    wsA.send(startFrame("CA1"));
-    wsB.send(startFrame("CA2"));
+    wsA.receive(startFrame("CA1"));
+    wsB.receive(startFrame("CA2"));
     // CA2's start already ended CA1 and stopped its provider.
     expect(providers).toHaveLength(2);
     expect(providers[0].closed).toBe(true);
 
     // A media frame arriving late on the replaced socket (A still holds
     // sessionId "CA1" in its closure) must not recreate CA1's session.
-    wsA.send(mediaFrame("AAECAw=="));
+    wsA.receive(mediaFrame("AAECAw=="));
     expect(providers).toHaveLength(2);
 
     // A's socket closing without ever having been the current call must not
@@ -184,9 +189,9 @@ describe("handleTwilioStream", () => {
 describe("bidirectional audio", () => {
   it("copies the caller's audio into the downlink buffer", () => {
     const { ws, downlink } = harness();
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
-    ws.send(mediaFrame("AAECAw=="));
+    ws.receive(mediaFrame("AAECAw=="));
 
     expect([...downlink.drain(0).audio]).toEqual([0, 1, 2, 3]);
   });
@@ -195,7 +200,7 @@ describe("bidirectional audio", () => {
   // only callSid, and the uplink cannot work without it.
   it("sends uplink audio back to Twilio addressed to the stream", () => {
     const { ws, uplink } = harness();
-    ws.send(startFrame("CA1"));
+    ws.receive(startFrame("CA1"));
 
     expect(uplink.write(Buffer.from([0xff, 0xff]))).toBe(true);
 
@@ -207,18 +212,18 @@ describe("bidirectional audio", () => {
 
   it("stops accepting uplink audio once the call ends", () => {
     const { ws, uplink } = harness();
-    ws.send(startFrame("CA1"));
-    ws.send({ event: "stop" });
+    ws.receive(startFrame("CA1"));
+    ws.receive({ event: "stop" });
 
     expect(uplink.write(Buffer.from([0xff]))).toBe(false);
   });
 
   it("empties the downlink buffer when a call ends, so the next call starts clean", () => {
     const { ws, downlink } = harness();
-    ws.send(startFrame("CA1"));
-    ws.send(mediaFrame("AAECAw=="));
+    ws.receive(startFrame("CA1"));
+    ws.receive(mediaFrame("AAECAw=="));
 
-    ws.send({ event: "stop" });
+    ws.receive({ event: "stop" });
 
     expect(downlink.drain(0).audio.length).toBe(0);
   });
@@ -236,8 +241,8 @@ describe("bidirectional audio", () => {
     handleTwilioStream(wsA, store, calls, downlink, uplink);
     handleTwilioStream(wsB, store, calls, downlink, uplink);
 
-    wsA.send(startFrame("CA1"));
-    wsB.send(startFrame("CA2"));
+    wsA.receive(startFrame("CA1"));
+    wsB.receive(startFrame("CA2"));
 
     // A's socket dying after being replaced must not silence B's live call.
     wsA.close();
@@ -245,5 +250,29 @@ describe("bidirectional audio", () => {
     expect(uplink.write(Buffer.from([0xaa]))).toBe(true);
     const frame = JSON.parse(wsB.sent.at(-1)!);
     expect(frame.streamSid).toBe("MZ-CA2");
+  });
+
+  // The uplink survives a replacement because attach() unconditionally
+  // overwrites, so the new sender wins immediately regardless of what the
+  // old handler does. CallAudioBuffer has no such self-healing semantics —
+  // it is an append-only shared queue, so A's buffered-but-undrained audio
+  // would otherwise sit there and be served under B's identity until A's own
+  // socket eventually tears down.
+  it("does not let a replaced call's buffered audio leak into the new call's downlink", () => {
+    const store = new SessionStore({ createProvider: () => new FakeTranscriptionProvider() });
+    const calls = new CurrentCall();
+    const downlink = new CallAudioBuffer();
+    const uplink = new CallUplink();
+    const wsA = new FakeSocket();
+    const wsB = new FakeSocket();
+    handleTwilioStream(wsA, store, calls, downlink, uplink);
+    handleTwilioStream(wsB, store, calls, downlink, uplink);
+
+    wsA.receive(startFrame("CA1"));
+    wsA.receive(mediaFrame("AAECAw=="));
+
+    wsB.receive(startFrame("CA2"));
+
+    expect(downlink.drain(0).audio.length).toBe(0);
   });
 });

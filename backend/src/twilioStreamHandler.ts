@@ -67,6 +67,10 @@ export function handleTwilioStream(
         if (previous) {
           calls.end(previous.sessionId, "ended");
           store.stop(previous.sessionId);
+          // The previous call's own handler may never run its endCall (its
+          // socket can outlive the replacement) — its buffered audio must not
+          // be served to the watch under the new call's identity.
+          downlink.clear();
         }
         sessionId = frame.callSid;
         streamSid = frame.streamSid;

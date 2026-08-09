@@ -11,6 +11,7 @@ import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import { CallAudioBuffer } from "./callAudioBuffer";
 import { CallUplink } from "./callUplink";
 import { CallPresence } from "./callPresence";
+import { pcm16kToMuLaw8k } from "./mulaw";
 import { ringbackWav } from "./ringback";
 import {
   TranscriptStore,
@@ -66,7 +67,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall, presence).catch(() => {
+    handleRequest(req, res, opts, store, currentCall, presence, downlink, uplink).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -140,6 +141,8 @@ async function handleRequest(
   store: SessionStore,
   calls: CurrentCall,
   presence: CallPresence,
+  downlink: CallAudioBuffer,
+  uplink: CallUplink,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -245,6 +248,48 @@ async function handleRequest(
       .map((key) => `${key}=${fields.get(key) ?? "-"}`)
       .join(" ");
     console.log(`twilio stream status: ${detail}`);
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // The caller's audio, for the watch to play. Binary rather than base64 in
+  // JSON: a third less data on the link that is already the bottleneck.
+  if (req.method === "GET" && url.pathname === "/v1/call/audio") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const since = Number(url.searchParams.get("since") ?? "0") || 0;
+    const { audio, seq } = downlink.drain(since);
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": audio.length,
+      "x-seq": String(seq),
+    });
+    res.end(audio);
+    return;
+  }
+
+  // Your voice, while push-to-talk is held. 16 kHz Int16 in, mu-law 8 kHz out.
+  if (req.method === "POST" && url.pathname === "/v1/call/audio") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    let body: Buffer = Buffer.from("");
+    try {
+      body = await readBody(req, MAX_AUDIO_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    if (!uplink.write(pcm16kToMuLaw8k(body))) {
+      sendJSON(res, 409, { error: "no call is live" });
+      return;
+    }
     res.writeHead(204);
     res.end();
     return;

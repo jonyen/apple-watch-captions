@@ -271,3 +271,54 @@ describe("ring, connect, or fall back", () => {
     expect(body.subarray(0, 4).toString("ascii")).toBe("RIFF");
   });
 });
+
+describe("call audio", () => {
+  it("serves nothing but a cursor when there is no audio", async () => {
+    const { port } = start("+15551234567");
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=good&since=0`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-seq")).toBe("0");
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+  });
+
+  it("rejects audio requests without a valid token", async () => {
+    const { port } = start("+15551234567");
+    expect((await fetch(`${base(port)}/v1/call/audio`)).status).toBe(401);
+    expect((await fetch(`${base(port)}/v1/call/audio?token=bad`, { method: "POST" })).status)
+      .toBe(401);
+  });
+
+  // Nothing to speak into: better a clear refusal than silently dropping it.
+  it("409s uplink audio when no call is live", async () => {
+    const { port } = start("+15551234567");
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=good`, {
+      method: "POST",
+      body: Buffer.alloc(800),
+    });
+
+    expect(res.status).toBe(409);
+  });
+
+  it("carries the caller's audio through to the watch", async () => {
+    const { providers, port } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start", streamSid: "MZa", start: { callSid: "CAa", streamSid: "MZa" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    ws.send(JSON.stringify({
+      event: "media", media: { payload: Buffer.from([0xff, 0xfe]).toString("base64") },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=good&since=0`);
+
+    expect([...Buffer.from(await res.arrayBuffer())]).toEqual([0xff, 0xfe]);
+    expect(Number(res.headers.get("x-seq"))).toBeGreaterThan(0);
+    ws.close();
+  });
+});

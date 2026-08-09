@@ -35,12 +35,14 @@ private struct RootView: View {
     @ObservedObject private var store: CaptionStore
     @ObservedObject private var history: HistoryStore
     @ObservedObject private var callCaptions: CallCaptions
+    @ObservedObject private var callVoice: CallVoice
 
     init(model: AppModel) {
         self.model = model
         store = model.store
         history = model.history
         callCaptions = model.callCaptions
+        callVoice = model.callVoice
     }
 
     var body: some View {
@@ -50,7 +52,8 @@ private struct RootView: View {
                     onNew: { Task { await model.startNew() } },
                     onLive: { Task { await model.startLive() } },
                     onContinue: { Task { await model.continueLast() } },
-                    onBrowse: { Task { await model.showHistory() } })
+                    onBrowse: { Task { await model.showHistory() } },
+                    onTakeCall: { model.takeCall() })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -67,7 +70,8 @@ private struct RootView: View {
                         }
                     case .call:
                         call
-                            // Leaving stops reading the call. It does not hang up.
+                            // Closing the stream is what ends the call, so
+                            // backing out hangs up exactly like tapping End.
                             .onDisappear { model.leaveCall() }
                     }
                 }
@@ -83,7 +87,8 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: model.live ? .liveOnly : .recording,
-                onStop: { model.stop() })
+                onStop: { model.stop() },
+                onTalkChanged: nil)
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })
         }
@@ -103,7 +108,14 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
-                onStop: nil)
+                onStop: { model.endCall() },
+                onTalkChanged: { talking in
+                    Task {
+                        if talking { model.beginTalking() }
+                        else { await model.endTalking() }
+                    }
+                },
+                isTalking: model.callVoice.isTalking)
         }
     }
 }

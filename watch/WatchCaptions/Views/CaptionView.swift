@@ -29,6 +29,9 @@ struct CaptionView: View {
     /// Absent when there is nothing for the user to stop — reading a call is
     /// not the same as hanging up, and offering Stop would imply it was.
     let onStop: (() -> Void)?
+    /// Present only on a call; nil elsewhere leaves the view exactly as it was.
+    var onTalkChanged: ((Bool) -> Void)?
+    var isTalking = false
 
     var body: some View {
         ScrollView {
@@ -51,6 +54,23 @@ struct CaptionView: View {
         // session's restored transcript, which arrives above the live captions,
         // was scrolled past the moment it landed and could not be reached.
         .defaultScrollAnchor(.bottom)
+        .gesture(
+            // The whole caption area is the talk target: it keeps captions
+            // full-size on a screen where space is the binding constraint, and
+            // scrolling is the Digital Crown so touch is otherwise unused.
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in if !isTalking { onTalkChanged?(true) } }
+                .onEnded { _ in onTalkChanged?(false) },
+            isEnabled: onTalkChanged != nil)
+        .overlay(alignment: .bottom) {
+            if isTalking {
+                // A stray press must be visible, not silent.
+                Label("Talking", systemImage: "mic.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(.red, in: Capsule())
+            }
+        }
         // Filled means this is being recorded; a hollow ring means the captions
         // are all there is. Same spot and size either way — there is no room on
         // this screen for a second piece of chrome.

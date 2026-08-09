@@ -49,6 +49,11 @@ final class AppModel: ObservableObject {
     /// never live at once.
     let callCaptions: CallCaptions
     private let callClient: RelayCallClient
+    /// Push-to-talk state for the call on screen.
+    let callVoice: CallVoice
+    private let callAudio: CallAudio
+    private let audioPlayer = CallAudioPlayer()
+    private var callAudioTask: Task<Void, Never>?
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
@@ -62,6 +67,17 @@ final class AppModel: ObservableObject {
         let callClient = RelayCallClient(base: base, token: Secrets.authToken)
         self.callClient = callClient
         callCaptions = CallCaptions(client: callClient, store: store)
+        let audioClient = RelayCallAudioClient(base: base, token: Secrets.authToken)
+        let voice = CallVoice(client: audioClient)
+        callVoice = voice
+        let player = audioPlayer
+        callAudio = CallAudio(client: audioClient) { [player] samples in player.play(samples) }
+        // The mic runs for the whole call; CallVoice keeps only what falls
+        // inside a push-to-talk turn and discards the rest, so the room never
+        // reaches the caller.
+        audioPlayer.onCapturedPCM = { [voice] pcm in
+            Task { @MainActor in voice.capture(pcm) }
+        }
         controller = SessionController(
             store: store,
             relay: relay,
@@ -131,9 +147,49 @@ final class AppModel: ObservableObject {
         return true
     }
 
-    /// Leave call captions. The call itself is unaffected — this only stops
-    /// reading it.
+    /// Leave call captions. Backing out ends the call exactly like tapping
+    /// End: closing the stream is what ends it, so there is no way to stop
+    /// reading a call and leave it live.
     func leaveCall() {
+        endCall()
+    }
+
+    /// Wait for a call. Polling is what tells the relay the watch is here, so
+    /// this both shows the waiting screen and makes the call reachable.
+    func takeCall() {
+        path = [.call]
+        callCaptions.start()
+        callAudio.reset()
+        try? audioPlayer.start()
+        callAudioTask?.cancel()
+        callAudioTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.callAudio.poll()
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+
+    /// Open a turn. Playback mutes for its duration: push-to-talk already
+    /// means the speaker is idle while the mic is open, and muting makes that
+    /// true even if a buffer was still draining.
+    func beginTalking() {
+        audioPlayer.isMuted = true
+        callVoice.beginTalking()
+    }
+
+    func endTalking() async {
+        await callVoice.endTalking()
+        audioPlayer.isMuted = false
+    }
+
+    /// Leave the call. Closing the stream is what ends it — Twilio holds the
+    /// call for exactly as long as the socket lives.
+    func endCall() {
+        callAudioTask?.cancel()
+        callAudioTask = nil
+        audioPlayer.stop()
         callCaptions.stop()
         path = []
     }

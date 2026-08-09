@@ -19,8 +19,9 @@ describe("CallUplink", () => {
   it("stops writing once detached", () => {
     const sent: Buffer[] = [];
     const uplink = new CallUplink();
-    uplink.attach((mulaw) => sent.push(mulaw));
-    uplink.detach();
+    const sender = (mulaw: Buffer) => sent.push(mulaw);
+    uplink.attach(sender);
+    uplink.detach(sender);
 
     expect(uplink.write(Buffer.from([1]))).toBe(false);
     expect(sent).toHaveLength(0);
@@ -38,5 +39,35 @@ describe("CallUplink", () => {
 
     expect(first).toHaveLength(0);
     expect(second).toHaveLength(1);
+  });
+
+  it("detaching the currently attached sender clears it and returns true", () => {
+    const sent: Buffer[] = [];
+    const sender = (mulaw: Buffer) => sent.push(mulaw);
+    const uplink = new CallUplink();
+    uplink.attach(sender);
+
+    const result = uplink.detach(sender);
+
+    expect(result).toBe(true);
+    expect(uplink.write(Buffer.from([1]))).toBe(false);
+  });
+
+  it("detaching a superseded sender returns false and leaves the newer sender attached", () => {
+    const firstSent: Buffer[] = [];
+    const secondSent: Buffer[] = [];
+    const firstSender = (mulaw: Buffer) => firstSent.push(mulaw);
+    const secondSender = (mulaw: Buffer) => secondSent.push(mulaw);
+    const uplink = new CallUplink();
+
+    uplink.attach(firstSender);
+    uplink.attach(secondSender);
+
+    const result = uplink.detach(firstSender);
+
+    expect(result).toBe(false);
+    expect(uplink.write(Buffer.from([42]))).toBe(true);
+    expect(secondSent).toHaveLength(1);
+    expect(firstSent).toHaveLength(0);
   });
 });

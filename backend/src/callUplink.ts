@@ -13,8 +13,15 @@ export class CallUplink {
     this.sender = sender;
   }
 
-  detach(): void {
+  /**
+   * Detach the sender only if it is the currently attached one.
+   * Returns false when the given sender is no longer the active one — a socket
+   * dying for a call that was already replaced must not clear its replacement.
+   */
+  detach(sender: (mulaw: Buffer) => void): boolean {
+    if (this.sender !== sender) return false;
     this.sender = null;
+    return true;
   }
 
   /** False when no call is live, so a caller can answer 409 rather than 200. */

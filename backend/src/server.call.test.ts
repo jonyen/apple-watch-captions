@@ -3,6 +3,7 @@ import { AddressInfo } from "net";
 import WebSocket from "ws";
 import { startServer, CaptionServer } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { pcm16kToMuLaw8k } from "./mulaw";
 
 let running: CaptionServer | null = null;
 
@@ -303,7 +304,7 @@ describe("call audio", () => {
   });
 
   it("carries the caller's audio through to the watch", async () => {
-    const { providers, port } = start("+15551234567");
+    const { port } = start("+15551234567");
     const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
     await new Promise((resolve) => ws.on("open", resolve));
     ws.send(JSON.stringify({
@@ -319,6 +320,44 @@ describe("call audio", () => {
 
     expect([...Buffer.from(await res.arrayBuffer())]).toEqual([0xff, 0xfe]);
     expect(Number(res.headers.get("x-seq"))).toBeGreaterThan(0);
+    ws.close();
+  });
+
+  // The 409 test above only proves the guard fires when no call is live; it
+  // says nothing about the path that matters more — a live call, a real
+  // conversion, and the result actually reaching the socket Twilio reads
+  // from. Wire all three together and read the frame back off the same
+  // WebSocket the live stream uses, the way the downlink test above does.
+  it("converts a live POST's PCM to mu-law and writes it through to Twilio", async () => {
+    const { port } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
+    const frames: any[] = [];
+    ws.on("message", (data: Buffer) => frames.push(JSON.parse(data.toString())));
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start", streamSid: "MZc", start: { callSid: "CAc", streamSid: "MZc" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // 8 samples of 16 kHz little-endian Int16 — pcm16kToMuLaw8k halves the
+    // sample count by averaging pairs, so this must yield 4 mu-law bytes.
+    const pcm = Buffer.alloc(16);
+    for (let i = 0; i < 8; i++) pcm.writeInt16LE((i + 1) * 1000, i * 2);
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=good`, {
+      method: "POST",
+      body: pcm,
+    });
+
+    expect(res.status).toBe(204);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const media = frames.find((f) => f.event === "media");
+    expect(media).toBeTruthy();
+    expect(media.streamSid).toBe("MZc");
+    const onWire = Buffer.from(media.media.payload, "base64");
+    expect(onWire.length).toBe(pcm.length / 4); // half the 8-sample count: 4 bytes
+    expect(onWire).toEqual(pcm16kToMuLaw8k(pcm));
     ws.close();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { voiceResponse } from "./twiml";
+import { voiceResponse, ringbackResponse, connectStreamResponse } from "./twiml";
 
 describe("voiceResponse", () => {
   it("forks the caller's audio and then dials through", () => {
@@ -50,5 +50,48 @@ describe("voiceResponse", () => {
 
     expect(xml).toContain("token=a&amp;b&lt;c");
     expect(xml).not.toContain("token=a&b");
+  });
+});
+
+describe("ringbackResponse", () => {
+  it("rings, then asks Twilio to check again", () => {
+    const xml = ringbackResponse({
+      ringbackUrl: "https://relay.example/twilio/ringback.wav",
+      nextUrl: "https://relay.example/twilio/voice?token=abc&attempt=2",
+    });
+
+    expect(xml).toContain("<Play>https://relay.example/twilio/ringback.wav</Play>");
+    expect(xml).toContain("&amp;attempt=2");
+    expect(xml.indexOf("<Play>")).toBeLessThan(xml.indexOf("<Redirect>"));
+  });
+});
+
+describe("connectStreamResponse", () => {
+  // <Connect> is the blocking, bidirectional form: the call lives exactly as
+  // long as the socket. <Start> would return immediately and end the call.
+  it("connects a bidirectional stream", () => {
+    const xml = connectStreamResponse({
+      streamUrl: "wss://relay.example/twilio/stream/abc",
+    });
+
+    expect(xml).toContain("<Connect>");
+    expect(xml).toContain('<Stream url="wss://relay.example/twilio/stream/abc"');
+    expect(xml).not.toContain("<Start>");
+    expect(xml).not.toContain("<Dial>");
+  });
+
+  it("carries a status callback when given one", () => {
+    const xml = connectStreamResponse({
+      streamUrl: "wss://relay.example/twilio/stream/abc",
+      streamStatusUrl: "https://relay.example/twilio/stream-status?token=abc",
+    });
+
+    expect(xml).toContain('statusCallback="https://relay.example/twilio/stream-status?token=abc"');
+  });
+
+  // A bidirectional stream carries the caller's audio in both directions;
+  // restricting the track would silence half of it.
+  it("does not restrict the track", () => {
+    expect(connectStreamResponse({ streamUrl: "wss://x/y" })).not.toContain("track=");
   });
 });

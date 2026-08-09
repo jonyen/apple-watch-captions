@@ -40,6 +40,59 @@ export function voiceResponse({
   ].join("");
 }
 
+export interface RingbackOptions {
+  /** Where the ringback tone is served from. */
+  ringbackUrl: string;
+  /** The webhook to come back to, carrying the next attempt number. */
+  nextUrl: string;
+}
+
+/**
+ * Ring the caller once, then ask Twilio to come back and check whether the
+ * watch has arrived. The retry count rides in `nextUrl`, so the relay keeps no
+ * per-call state about ringing.
+ */
+export function ringbackResponse({ ringbackUrl, nextUrl }: RingbackOptions): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<Response>",
+    `<Play>${escapeXml(ringbackUrl)}</Play>`,
+    `<Redirect>${escapeXml(nextUrl)}</Redirect>`,
+    "</Response>",
+  ].join("");
+}
+
+export interface ConnectStreamOptions {
+  streamUrl: string;
+  streamStatusUrl?: string;
+}
+
+/**
+ * Hand the call to the relay.
+ *
+ * `<Connect>` is the blocking, bidirectional form: Twilio holds the call open
+ * for exactly as long as the WebSocket lives, and audio flows both ways. That
+ * is what makes Twilio the call's owner and leaves neither phone nor watch in
+ * a call. `<Start>` — phase 1's form — would return immediately and the call
+ * would end.
+ */
+export function connectStreamResponse({
+  streamUrl,
+  streamStatusUrl,
+}: ConnectStreamOptions): string {
+  const status = streamStatusUrl
+    ? ` statusCallback="${escapeXml(streamStatusUrl)}" statusCallbackMethod="POST"`
+    : "";
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<Response>",
+    "<Connect>",
+    `<Stream url="${escapeXml(streamUrl)}"${status}/>`,
+    "</Connect>",
+    "</Response>",
+  ].join("");
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")

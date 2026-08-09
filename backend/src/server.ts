@@ -10,6 +10,8 @@ import { CurrentCall } from "./currentCall";
 import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import { CallAudioBuffer } from "./callAudioBuffer";
 import { CallUplink } from "./callUplink";
+import { CallPresence } from "./callPresence";
+import { ringbackWav } from "./ringback";
 import {
   TranscriptStore,
   listTranscripts,
@@ -20,7 +22,7 @@ import {
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
-import { voiceResponse } from "./twiml";
+import { voiceResponse, ringbackResponse, connectStreamResponse } from "./twiml";
 
 export * from "./providerOptions";
 
@@ -37,6 +39,8 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
+  /** How many ringback rounds before falling back. Defaults to 5 (~20s). */
+  waitAttempts?: number;
 }
 
 export interface CaptionServer {
@@ -54,16 +58,15 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     transcripts: opts.transcripts,
   });
   const currentCall = new CurrentCall();
-  // Not yet exposed over HTTP — the watch-facing routes and presence wiring
-  // land in a later task. Constructed here only so the Twilio stream handler
-  // has somewhere to mirror audio both ways; ephemeral, like everything else
-  // about a call.
+  const presence = new CallPresence();
+  // Ephemeral, like everything else about a call: mirrors audio both ways
+  // between the Twilio stream and the watch-facing routes.
   const downlink = new CallAudioBuffer();
   const uplink = new CallUplink();
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall).catch(() => {
+    handleRequest(req, res, opts, store, currentCall, presence).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -86,7 +89,6 @@ export function startServer(opts: StartServerOptions): CaptionServer {
         ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
         : undefined;
       if (!verifyToken(fromPath ?? token, opts.authToken)) {
-        console.log("twilio upgrade rejected: token missing or wrong");
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
       }
@@ -137,6 +139,7 @@ async function handleRequest(
   opts: StartServerOptions,
   store: SessionStore,
   calls: CurrentCall,
+  presence: CallPresence,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -154,8 +157,19 @@ async function handleRequest(
     return;
   }
 
-  // Twilio asks what to do with an inbound call. Answer: fork the caller's
-  // audio to this relay, then bridge the call onward.
+  // Twilio fetches this itself, with no token, so it must be open. It carries
+  // no information beyond a ringing sound.
+  if (req.method === "GET" && url.pathname === "/twilio/ringback.wav") {
+    const wav = ringbackWav();
+    res.writeHead(200, { "content-type": "audio/wav", "content-length": wav.length });
+    res.end(wav);
+    return;
+  }
+
+  // Twilio asks what to do with an inbound call. Answer depends on whether
+  // the watch is here: connect the call straight to it, ring the caller and
+  // ask Twilio to check again, or — once the wait budget is spent — fall back
+  // to the second line, still captioned.
   if (req.method === "POST" && url.pathname === "/twilio/voice") {
     const token = url.searchParams.get("token") ?? undefined;
     if (!verifyToken(token, opts.authToken)) {
@@ -170,13 +184,32 @@ async function handleRequest(
     // there is no public-URL setting to keep in sync with the deployment.
     // Token in the path, not the query — Twilio's stream client discards the
     // query string. See the upgrade handler.
-    const streamUrl =
-      `wss://${req.headers.host ?? ""}${TWILIO_STREAM_PREFIX}` +
-      `${encodeURIComponent(token ?? "")}`;
-    const streamStatusUrl =
-      `https://${req.headers.host ?? ""}/twilio/stream-status` +
-      `?token=${encodeURIComponent(token ?? "")}`;
+    const host = req.headers.host ?? "";
+    const encoded = encodeURIComponent(token ?? "");
+    const streamUrl = `wss://${host}${TWILIO_STREAM_PREFIX}${encoded}`;
+    const streamStatusUrl = `https://${host}/twilio/stream-status?token=${encoded}`;
+    const attempt = Number(url.searchParams.get("attempt") ?? "1") || 1;
+    const budget = opts.waitAttempts ?? 5;
+
     res.writeHead(200, { "content-type": "text/xml" });
+
+    if (presence.isPresent()) {
+      res.end(connectStreamResponse({ streamUrl, streamStatusUrl }));
+      return;
+    }
+
+    if (attempt < budget) {
+      res.end(ringbackResponse({
+        ringbackUrl: `https://${host}/twilio/ringback.wav`,
+        nextUrl: `https://${host}/twilio/voice?token=${encoded}&attempt=${attempt + 1}`,
+      }));
+      return;
+    }
+
+    // Out of patience: ring the second line, whose carrier voicemail catches
+    // it. Still `voiceResponse` — phase 1's `<Start><Stream>` + `<Dial>`
+    // shape — deliberately, so a call that rings out to the phone is still
+    // captioned.
     res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo, streamStatusUrl }));
     return;
   }
@@ -216,6 +249,8 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
+    // Polling is how the watch says it is here; the ringing decision reads it.
+    presence.mark();
     const since = Number(url.searchParams.get("since") ?? "0") || 0;
     const active = calls.current();
     // reapIdle (or a direct /v1/stop) can drop a call's session without

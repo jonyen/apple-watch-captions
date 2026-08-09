@@ -30,10 +30,12 @@ function start(callForwardTo?: string, authToken = "good") {
 const base = (port: number) => `http://127.0.0.1:${port}`;
 
 describe("POST /twilio/voice", () => {
+  // attempt=99 is past the wait budget, landing on the fallback branch —
+  // phase 1's shape, still the one this test pins.
   it("returns TwiML pointing the stream at this relay", async () => {
     const { port } = start("+15551234567");
 
-    const res = await fetch(`${base(port)}/twilio/voice?token=good`, { method: "POST" });
+    const res = await fetch(`${base(port)}/twilio/voice?token=good&attempt=99`, { method: "POST" });
 
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/xml");
@@ -170,7 +172,7 @@ describe("POST /twilio/voice with a token containing XML metacharacters", () => 
     const { port } = start("+15551234567", token);
 
     const res = await fetch(
-      `${base(port)}/twilio/voice?token=${encodeURIComponent(token)}`,
+      `${base(port)}/twilio/voice?token=${encodeURIComponent(token)}&attempt=99`,
       { method: "POST" });
 
     expect(res.status).toBe(200);
@@ -194,5 +196,54 @@ describe("POST /twilio/voice with a token containing XML metacharacters", () => 
     expect(xml).toContain("<Response>");
     expect(xml).toContain("</Response>");
     expect(xml).toContain("<Dial>+15551234567</Dial>");
+  });
+});
+
+describe("ring, connect, or fall back", () => {
+  it("rings and asks Twilio to check again when the watch is absent", async () => {
+    const { port } = start("+15551234567");
+
+    const xml = await (await fetch(`${base(port)}/twilio/voice?token=good`, {
+      method: "POST",
+    })).text();
+
+    expect(xml).toContain("<Play>");
+    expect(xml).toContain("ringback.wav");
+    expect(xml).toContain("attempt=2");
+    expect(xml).not.toContain("<Connect>");
+  });
+
+  it("connects the stream once the watch has polled", async () => {
+    const { port } = start("+15551234567");
+    await fetch(`${base(port)}/v1/call?token=good`); // this is what marks presence
+
+    const xml = await (await fetch(`${base(port)}/twilio/voice?token=good`, {
+      method: "POST",
+    })).text();
+
+    expect(xml).toContain("<Connect>");
+    expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream/good`);
+  });
+
+  it("falls back to the second line once the budget is spent", async () => {
+    const { port } = start("+15551234567");
+
+    const xml = await (await fetch(`${base(port)}/twilio/voice?token=good&attempt=99`, {
+      method: "POST",
+    })).text();
+
+    expect(xml).toContain("<Dial>+15551234567</Dial>");
+    expect(xml).not.toContain("<Play>");
+  });
+
+  it("serves the ringback tone without a token, because Twilio fetches it", async () => {
+    const { port } = start("+15551234567");
+
+    const res = await fetch(`${base(port)}/twilio/ringback.wav`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("audio/wav");
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.subarray(0, 4).toString("ascii")).toBe("RIFF");
   });
 });

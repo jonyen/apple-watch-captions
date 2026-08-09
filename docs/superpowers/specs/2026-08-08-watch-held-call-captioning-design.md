@@ -66,7 +66,8 @@ POST /twilio/voice?attempt=N
    │     → <Play>ringback</Play><Redirect>/twilio/voice?attempt=N+1</Redirect>
    │
    └─ budget exhausted?
-         → <Dial>+1‑second‑line</Dial>          (your phone rings normally)
+         → phase 1's shape: <Start><Stream>…</Start><Dial>+1‑second‑line</Dial>
+           (your phone rings normally — and is still captioned)
 
 Once connected — one bidirectional WebSocket:
    caller audio ─┬─► Deepgram ──► captions ──► watch polls   (built in phase 1)
@@ -250,6 +251,11 @@ accumulating, for the reason given above.
 **Voicemail solves itself.** Falling back to the second line means that line's
 carrier voicemail catches unanswered calls, so forwarding the real number does not
 cost the voicemail it otherwise would.
+
+**The fallback stays captioned.** It reuses phase 1's `<Start><Stream>` + `<Dial>`
+shape rather than a bare `<Dial>`, so a call that rings out to your phone still
+puts captions on your wrist — the configuration phase 1 proved works. Falling back
+costs you the watch-held call, not the captions.
 
 ## Accepted limits
 

@@ -62,6 +62,15 @@ struct CaptionView: View {
                 .onChanged { _ in if !isTalking { onTalkChanged?(true) } }
                 .onEnded { _ in onTalkChanged?(false) },
             isEnabled: onTalkChanged != nil)
+        // SwiftUI does not synthesize DragGesture's .onEnded when this view
+        // itself leaves the hierarchy mid-press — which happens on a call
+        // when store.state flips to .error and this view is swapped for
+        // ErrorView. Without this, the model never hears the release. The
+        // authoritative fix is in AppModel.endCall(), which force-closes any
+        // open turn unconditionally; this closes the gap immediately, while
+        // the call is still live and the user hasn't backed out yet, rather
+        // than leaving playback muted until they do.
+        .onDisappear { if isTalking { onTalkChanged?(false) } }
         .overlay(alignment: .bottom) {
             if isTalking {
                 // A stray press must be visible, not silent.

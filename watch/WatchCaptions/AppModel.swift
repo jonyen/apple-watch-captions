@@ -138,20 +138,27 @@ final class AppModel: ObservableObject {
 
     /// Open call captions when the relay says a call is live. False on no call
     /// or on any failure, so an unreachable relay lands on the menu.
+    ///
+    /// Shares `startCallAudio()` with `takeCall()` — this is the resume path
+    /// (a relaunch that lands mid-call), and it used to skip audio setup
+    /// entirely: captions would appear while playback and push-to-talk stayed
+    /// silently dead, since `audioPlayer.start()` never ran and the mic tap
+    /// was never installed.
     private func enterCallIfLive() async -> Bool {
         guard let update = try? await callClient.poll(since: 0), update.active else {
             return false
         }
         path = [.call]
         callCaptions.start()
+        startCallAudio()
         return true
     }
 
     /// Leave call captions. Backing out ends the call exactly like tapping
     /// End: closing the stream is what ends it, so there is no way to stop
     /// reading a call and leave it live.
-    func leaveCall() {
-        endCall()
+    func leaveCall() async {
+        await endCall()
     }
 
     /// Wait for a call. Polling is what tells the relay the watch is here, so
@@ -159,6 +166,13 @@ final class AppModel: ObservableObject {
     func takeCall() {
         path = [.call]
         callCaptions.start()
+        startCallAudio()
+    }
+
+    /// Start hearing and speaking on a call already known to be live — shared
+    /// by `takeCall()`, which starts the wait itself, and `enterCallIfLive()`,
+    /// which resumes into one already in progress.
+    private func startCallAudio() {
         callAudio.reset()
         try? audioPlayer.start()
         callAudioTask?.cancel()
@@ -186,7 +200,20 @@ final class AppModel: ObservableObject {
 
     /// Leave the call. Closing the stream is what ends it — Twilio holds the
     /// call for exactly as long as the socket lives.
-    func endCall() {
+    ///
+    /// Force-closes any turn still open, first and unconditionally.
+    /// `DragGesture` never gets its `.onEnded` when the view holding it
+    /// leaves the hierarchy mid-press — which happens here whenever
+    /// `store.state` swaps `CaptionView` for `ErrorView` while the caption
+    /// area is held — so without this, `callVoice.isTalking` and
+    /// `audioPlayer.isMuted` would stay stuck true and survive into the next
+    /// call: it would open already "talking", play nothing from its first
+    /// packet, and eventually send a stale blob accumulated since the
+    /// original press. `callVoice.endTalking()` is a no-op when no turn is
+    /// open, so calling it here unconditionally is safe.
+    func endCall() async {
+        await callVoice.endTalking()
+        audioPlayer.isMuted = false
         callAudioTask?.cancel()
         callAudioTask = nil
         audioPlayer.stop()

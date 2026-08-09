@@ -72,7 +72,7 @@ private struct RootView: View {
                         call
                             // Closing the stream is what ends the call, so
                             // backing out hangs up exactly like tapping End.
-                            .onDisappear { model.leaveCall() }
+                            .onDisappear { Task { await model.leaveCall() } }
                     }
                 }
         }
@@ -108,7 +108,7 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
-                onStop: { model.endCall() },
+                onStop: { Task { await model.endCall() } },
                 onTalkChanged: { talking in
                     Task {
                         if talking { model.beginTalking() }

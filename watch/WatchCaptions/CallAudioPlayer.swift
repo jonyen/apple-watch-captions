@@ -15,6 +15,17 @@ final class CallAudioPlayer {
         commonFormat: .pcmFormatInt16, sampleRate: 8_000, channels: 1, interleaved: true)!
     private var converter = PCMConverter()
 
+    /// Frames scheduled on `player` but not yet finished playing, guarded by
+    /// `queueLock` since it's written from both `play(_:)` (the poller) and
+    /// each buffer's completion handler (an AVAudioEngine render thread).
+    private let queueLock = NSLock()
+    private var framesQueued: AVAudioFrameCount = 0
+    /// ~2s of 8kHz audio: enough to absorb one slow HTTP poll without an
+    /// audible gap, short enough that a backlog never drifts far behind the
+    /// live caller. Not tuned against real network jitter yet — a starting
+    /// point, adjust if playback lags or gaps too often in practice.
+    private static let maxQueuedFrames: AVAudioFrameCount = 16_000
+
     /// Silences playback while you talk, so the speaker never feeds the mic.
     var isMuted = false
 
@@ -36,6 +47,9 @@ final class CallAudioPlayer {
         try session.setActive(true)
 
         converter = PCMConverter()
+        queueLock.lock()
+        framesQueued = 0
+        queueLock.unlock()
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
@@ -57,18 +71,40 @@ final class CallAudioPlayer {
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
+        queueLock.lock()
+        framesQueued = 0
+        queueLock.unlock()
         try? AVAudioSession.sharedInstance().setActive(false)
     }
 
     func play(_ samples: [Int16]) {
         guard !isMuted, !samples.isEmpty, engine.isRunning else { return }
+        let incoming = AVAudioFrameCount(samples.count)
+
+        queueLock.lock()
+        let wouldExceed = framesQueued + incoming > Self.maxQueuedFrames
+        queueLock.unlock()
+        // The caller is live; stale audio is worthless. Rather than let the
+        // queue grow and playback drift further behind, drop this chunk and
+        // stay near real time — the gap that leaves is the lesser cost.
+        guard !wouldExceed else { return }
+
         guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
-        buffer.frameLength = AVAudioFrameCount(samples.count)
+            pcmFormat: format, frameCapacity: incoming) else { return }
+        buffer.frameLength = incoming
         guard let channel = buffer.int16ChannelData else { return }
         samples.withUnsafeBufferPointer { source in
             channel[0].update(from: source.baseAddress!, count: samples.count)
         }
-        player.scheduleBuffer(buffer, completionHandler: nil)
+
+        queueLock.lock()
+        framesQueued += incoming
+        queueLock.unlock()
+        player.scheduleBuffer(buffer) { [weak self] in
+            guard let self else { return }
+            self.queueLock.lock()
+            self.framesQueued = self.framesQueued > incoming ? self.framesQueued - incoming : 0
+            self.queueLock.unlock()
+        }
     }
 }

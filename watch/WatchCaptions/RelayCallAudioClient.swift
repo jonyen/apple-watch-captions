@@ -38,8 +38,28 @@ struct RelayCallAudioClient: CallAudioClient, CallVoiceClient {
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.httpBody = pcm
         let (_, response) = try await Self.session.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 204 else {
+        guard let http = response as? HTTPURLResponse else {
+            throw HistoryError.message("Relay error")
+        }
+        switch http.statusCode {
+        case 204:
+            return
+        case 409:
+            // The relay refuses this deliberately when no call is live
+            // (backend/src/server.call.test.ts: "Nothing to speak into:
+            // better a clear refusal than silently dropping it"). Kept as
+            // its own case, not folded into HistoryError.message, so a
+            // caller can tell "the call ended, stop trying" apart from a
+            // transient failure worth retrying.
+            throw CallVoiceError.noCallLive
+        default:
             throw HistoryError.message("Relay error")
         }
     }
+}
+
+/// Distinguishes the relay's deliberate "no call is live" refusal (409) from
+/// other send failures — see the doc comment on `send(_:)`.
+enum CallVoiceError: Error, Equatable {
+    case noCallLive
 }

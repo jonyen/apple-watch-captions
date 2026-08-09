@@ -8,6 +8,8 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { CurrentCall } from "./currentCall";
 import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
+import { CallAudioBuffer } from "./callAudioBuffer";
+import { CallUplink } from "./callUplink";
 import {
   TranscriptStore,
   listTranscripts,
@@ -52,6 +54,12 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     transcripts: opts.transcripts,
   });
   const currentCall = new CurrentCall();
+  // Not yet exposed over HTTP — the watch-facing routes and presence wiring
+  // land in a later task. Constructed here only so the Twilio stream handler
+  // has somewhere to mirror audio both ways; ephemeral, like everything else
+  // about a call.
+  const downlink = new CallAudioBuffer();
+  const uplink = new CallUplink();
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
@@ -83,7 +91,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) =>
-        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall));
+        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall, downlink, uplink));
       return;
     }
 

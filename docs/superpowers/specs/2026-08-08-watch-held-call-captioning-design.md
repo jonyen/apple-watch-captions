@@ -103,6 +103,22 @@ one as "keep going," precisely so entering call mode can race the relay noticing
 the call. Waiting for a call that has not arrived is the same state. No new
 logic — the `wasActive` guard already covers it.
 
+### Known gaps in the hangup, as merged
+
+**The hangup is fire-and-forget.** `AppModel.endCall()` dismisses the screen and
+then POSTs `/v1/call/end` with a two-second timeout, no retry, and no user-visible
+failure. On a flaky watch link this reproduces the very symptom the route was added
+to fix: the screen returns to the menu while the caller stays connected and billed.
+Recovery exists — relaunching finds the call still live and Stop can be tried
+again — but nothing tells the user to. Worth either a retry or saying plainly that
+the hangup did not land.
+
+**`callTwoWay` means "call audio started", not "the watch holds this call".** It is
+set only after microphone permission and the engine both succeed, so on a held call
+where the mic is denied the watch shows an error screen with no Stop button on a
+live, billed call. The back gesture still tears down correctly, so it is
+recoverable, just not obvious.
+
 ## Ringing
 
 The caller must hear something while the Watch is given a chance to answer. Silence

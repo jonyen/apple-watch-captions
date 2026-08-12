@@ -9,6 +9,11 @@ import CaptionCore
 /// cellular data and per-minute transcription are all paid for the minutes you
 /// read rather than the hours the app is running.
 ///
+/// The same request also announces that this broadcast is running, which is
+/// what lets the Watch open itself. Without that the two sides deadlock: the
+/// phone would stream only once a reader appeared, and the Watch would open
+/// only once a producer did, so neither would ever go first.
+///
 /// A poll rather than a push, because the phone has no channel the Watch can
 /// reach directly, and because presence is a fading fact rather than an event:
 /// the Watch stops reading by going away, which nothing announces.
@@ -53,6 +58,8 @@ final class PresenceWatcher {
         task = nil
     }
 
+    /// Announces this broadcast and returns whether anything is reading it.
+    ///
     /// False on any failure. An unreachable relay is not an audience, and
     /// streaming into one would waste exactly what this exists to save.
     private func fetchPresence() async -> Bool {
@@ -61,9 +68,12 @@ final class PresenceWatcher {
         components.queryItems = [
             URLQueryItem(name: "session", value: PhoneAudio.sessionID),
             URLQueryItem(name: "token", value: token),
+            URLQueryItem(name: "role", value: "producer"),
         ]
-        guard let url = components.url,
-              let (data, response) = try? await session.data(from: url),
+        guard let url = components.url else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        guard let (data, response) = try? await session.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return false }

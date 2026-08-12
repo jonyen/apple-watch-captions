@@ -254,7 +254,12 @@ async function handleRequest(
   // audio nobody is watching never leaves the device — which is what keeps an
   // always-running capture from costing battery, data and transcription around
   // the clock. Read-only, and it never creates a session, so asking is cheap.
-  if (req.method === "GET" && url.pathname === "/v1/presence") {
+  // POST marks the caller present and answers in the same request; GET only
+  // asks. A broadcast announces itself with `role=producer` rather than waiting
+  // until audio flows, because the two sides would otherwise deadlock: the
+  // phone streams only once a reader appears, and the watch opens only once a
+  // producer does, so neither would ever go first.
+  if (url.pathname === "/v1/presence" && (req.method === "GET" || req.method === "POST")) {
     const token = url.searchParams.get("token") ?? undefined;
     if (!verifyToken(token, opts.authToken)) {
       sendJSON(res, 401, { error: "unauthorized" });
@@ -264,6 +269,11 @@ async function handleRequest(
     if (!session) {
       sendJSON(res, 400, { error: "missing session" });
       return;
+    }
+    if (req.method === "POST") {
+      const role = url.searchParams.get("role");
+      if (role === "producer") readers.markProducer(session);
+      if (role === "reader") readers.mark(session);
     }
     sendJSON(res, 200, {
       reader: readers.isPresent(session),

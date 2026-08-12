@@ -109,4 +109,39 @@ describe("GET /v1/presence", () => {
 
     expect(await res.json()).toEqual({ reader: false, producer: false });
   });
+
+  it("marks a broadcast present on POST, before any audio flows", async () => {
+    const { port } = start();
+
+    // The deadlock this breaks: the phone streams only once a reader appears,
+    // and the watch opens only once a producer does. Announcing the broadcast
+    // itself is what lets one of them go first.
+    const res = await fetch(
+      `${base(port)}/v1/presence?session=phone-audio&token=good&role=producer`,
+      { method: "POST" },
+    );
+
+    expect(await res.json()).toEqual({ reader: false, producer: true });
+  });
+
+  it("answers the reader question in the same request the producer marks itself", async () => {
+    const { port } = start();
+    await read(port, "phone-audio");
+
+    const res = await fetch(
+      `${base(port)}/v1/presence?session=phone-audio&token=good&role=producer`,
+      { method: "POST" },
+    );
+
+    expect(await res.json()).toEqual({ reader: true, producer: true });
+  });
+
+  it("does not mark anything on GET", async () => {
+    const { port } = start();
+
+    await presence(port, "phone-audio");
+    const res = await presence(port, "phone-audio");
+
+    expect(await res.json()).toEqual({ reader: false, producer: false });
+  });
 });

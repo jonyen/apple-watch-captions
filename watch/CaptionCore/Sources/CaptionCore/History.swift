@@ -221,6 +221,51 @@ public func decodeTranscriptList(_ json: [String: Any]) throws -> [TranscriptLis
     }
 }
 
+public extension String {
+    /// Parse a stored summary as markdown, falling back to the literal text.
+    ///
+    /// Summaries are written as markdown by the relay: an overview paragraph,
+    /// `## ` section headings, and `- ` bullets. SwiftUI's `Text(String)`
+    /// overload does not parse any of it, so headings and bullets would
+    /// otherwise show their syntax characters on the wrist.
+    ///
+    /// Neither of `AttributedString(markdown:)`'s syntax options covers both
+    /// needs at once: `.full` interprets block syntax but collapses paragraph
+    /// and line breaks entirely, running every section together; `.inlineOnly*`
+    /// preserves that structure but leaves block syntax like `## ` and `- `
+    /// untouched. So heading and bullet markers are stripped by hand first,
+    /// then the rest is parsed inline-only to keep the line breaks that make
+    /// a multi-section summary readable on a small screen.
+    var asSummaryMarkdown: AttributedString {
+        let blockSyntaxStripped = split(separator: "\n", omittingEmptySubsequences: false)
+            .map(Self.strippingBlockMarkers)
+            .joined(separator: "\n")
+        return (try? AttributedString(
+            markdown: blockSyntaxStripped,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(self)
+    }
+
+    /// Strips one line's leading `## ` heading marker or `- ` bullet marker,
+    /// replacing a bullet with a plain dot since inline-only parsing does not
+    /// render markdown lists.
+    private static func strippingBlockMarkers(from line: Substring) -> String {
+        var rest = line
+        var hashCount = 0
+        while rest.first == "#" && hashCount < 6 {
+            rest = rest.dropFirst()
+            hashCount += 1
+        }
+        if hashCount > 0, rest.first == " " {
+            return String(rest.dropFirst())
+        }
+        if line.hasPrefix("- ") {
+            return "• " + line.dropFirst(2)
+        }
+        return String(line)
+    }
+}
+
 /// Decode `GET /v1/transcripts/<name>`.
 public func decodeTranscriptDetail(_ json: [String: Any], name: String) -> TranscriptDetail {
     let segments = (json["segments"] as? [[String: Any]] ?? []).map { segment in

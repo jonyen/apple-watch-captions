@@ -154,4 +154,38 @@ describe("createGeminiSummarizer", () => {
     // The existing thinking_level must survive the edit.
     expect(body.generation_config.thinking_level).toBe("low");
   });
+
+  it("throws rather than storing a summary truncated at the token ceiling", async () => {
+    // Legacy generateContent shape: a MAX_TOKENS finishReason means the text,
+    // if any, is a partial the backfill must not treat as done.
+    const fetch = vi.fn(async () =>
+      json({
+        candidates: [
+          {
+            finishReason: "MAX_TOKENS",
+            content: { parts: [{ text: "A chat that stops mid-" }] },
+          },
+        ],
+      }),
+    );
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await expect(summarize(transcript())).rejects.toThrow(/truncated/i);
+  });
+
+  it("still succeeds when finishReason is present but not a truncation", async () => {
+    const fetch = vi.fn(async () =>
+      json({
+        candidates: [
+          {
+            finishReason: "STOP",
+            content: { parts: [{ text: "A chat happened." }] },
+          },
+        ],
+      }),
+    );
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await expect(summarize(transcript())).resolves.toBe("A chat happened.");
+  });
 });

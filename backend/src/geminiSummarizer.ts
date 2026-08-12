@@ -53,6 +53,13 @@ export function createGeminiSummarizer(
       throw new Error(`Gemini request failed: ${response.status} ${message}`);
     }
 
+    // A truncated summary must not be stored: the summary file is the
+    // done-marker, so a partial would never be revisited. Mirrors the Claude
+    // path's stop_reason check (summarizer.ts).
+    if (isTruncated(payload)) {
+      throw new Error(`Gemini summary truncated at the token ceiling for ${transcript.name}`);
+    }
+
     const text = extractText(payload);
     if (text === undefined || text.trim().length === 0) {
       // Never return "" — the finalizer skips empty summaries silently, which
@@ -61,6 +68,27 @@ export function createGeminiSummarizer(
     }
     return text;
   };
+}
+
+/**
+ * Whether the response signals it was cut off at `max_output_tokens` rather
+ * than finishing naturally. Checked defensively, like `extractText` below:
+ * an absent or unrecognized marker means "not truncated", not an error, so
+ * this can never break a currently-passing shape.
+ *
+ * Only the legacy `generateContent` shape's `candidates[0].finishReason ===
+ * "MAX_TOKENS"` is handled with any confidence — that field is documented
+ * and this file already has a captured example of the shape around it. The
+ * newer `steps`/interactions shape (the one this summarizer actually calls)
+ * has no confirmed finish-reason equivalent: no truncated example of it has
+ * been captured, and the one live response on file (see the "parses the
+ * shape the live API actually returns" test) carries only `status:
+ * "completed"` with no hint of what a cut-off response would say. Rather
+ * than guess a field name for that shape, it is left unchecked here — a
+ * truncation on that path would currently slip through uncaught.
+ */
+function isTruncated(payload: any): boolean {
+  return payload?.candidates?.[0]?.finishReason === "MAX_TOKENS";
 }
 
 /**

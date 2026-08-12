@@ -1,0 +1,211 @@
+# Expansive summaries: give the model room, then ask it for structure
+
+## Problem
+
+Transcript summaries are too thin. Four complaints, all real:
+
+- **Too short overall.** A one-or-two sentence overview and a few bullets, whatever
+  the recording.
+- **Loses specifics.** Names, numbers, dates, and decisions get compressed away.
+- **Missing structure.** Flat overview-plus-bullets regardless of content, so a long
+  recording has no navigable shape.
+- **Doesn't cover the whole recording.** The beginning is well covered; the rest
+  thins out or drops.
+
+The first three are the prompt. The fourth is partly mechanical, and that part is
+worth stating plainly because it would survive any prompt rewrite.
+
+## The token ceiling is doing more damage than the prompt
+
+`summarizer.ts` sets `max_tokens: 2048` alongside `thinking: { type: "adaptive" }`.
+On Opus 4.8 `max_tokens` bounds thinking *and* response text together — so the
+summary competes with the model's own reasoning for a 2048-token budget. A long
+transcript is exactly the case where thinking grows, which is exactly when the
+summary gets squeezed.
+
+Worse, nothing notices:
+
+```ts
+const block = response.content.find((b) => b.type === "text");
+return block?.type === "text" ? block.text : "";
+```
+
+`stop_reason` is never read. A summary that hit the ceiling is stored as though it
+were complete, and because `<name>.summary.md` is the done-marker, the backfill
+sweep will never revisit it. A truncated summary is permanent.
+
+The Gemini path sets no output limit at all. So the two providers already produce
+different lengths from the same prompt — Claude clipped at 2048, Gemini running to
+its own default.
+
+| Symptom | Cause |
+|---|---|
+| Summaries thin out on long recordings | Thinking + text share a 2048-token ceiling |
+| Truncation is permanent | `stop_reason` unchecked; summary file is the done-marker |
+| Providers disagree on length | Claude capped, Gemini uncapped |
+
+## Design
+
+### One summary, shown everywhere
+
+No tiering. The watch, the viewer page, and Notion all render the same stored
+summary. A short overview for the wrist plus a long body for Notion was considered
+and rejected: it doubles the generation, storage, and parsing paths to save
+scrolling on a screen that already scrolls.
+
+### Shape: topic sections, depth scaling with length
+
+```
+Title: <short title>
+
+<overview paragraph>
+
+## <topic>
+<detail, preserving names, numbers, dates, decisions>
+
+## <topic>
+...
+
+## Action items
+- ...
+```
+
+Section count grows with the recording rather than being fixed, which is what
+addresses uneven coverage on the prompt side. The `Title:` first line is unchanged —
+`parseSummary` depends on it and is already covered by `summaryPrompt.test.ts`.
+
+`SUMMARY_SYSTEM_PROMPT` is shared by both summarizers, so this is a single edit that
+moves Claude and Gemini together.
+
+### Token budget
+
+`max_tokens` goes to **16000** — the documented default for non-streaming requests,
+chosen because it stays under SDK HTTP timeouts and needs no conversion to
+`.stream()`. Opus 4.8 supports up to 128K, but reaching for it would mean rewriting
+the call as a stream for output lengths this feature does not need.
+
+Gemini gets an explicit `maxOutputTokens: 16000` so the two providers agree.
+
+`summarizer.ts` treats `stop_reason === "max_tokens"` as a failure and throws.
+Both call sites already handle a throwing summarizer, and both leave the work
+retryable:
+
+- `backfillSummaries` catches, logs, counts `failed`, and continues to the next
+  transcript.
+- `finalizeSession` catches, logs, and still exports the transcript to Notion
+  without a summary — the same path taken when no API key is configured.
+
+Neither writes `<name>.summary.md`, so the next boot sweep retries the transcript.
+A truncated summary therefore becomes a retry instead of a permanent artifact,
+which is the whole point of the change.
+
+### Watch rendering
+
+`TranscriptDetailView.swift` renders the summary with `Text(summary)` where
+`summary` is a `String`. That overload does not parse markdown, so today's `- `
+bullets already display literally; adding `##` headings would make it worse.
+
+Fix at the render site: parse to `AttributedString` with the markdown initializer,
+falling back to the plain string if parsing throws. No storage-format change, and
+summaries written before this ship keep working.
+
+### Regeneration
+
+Everything stored today was written under the old prompt, so the archive needs a
+pass. Three constraints shape it:
+
+1. `backfillSummaries` skips any transcript that already has a summary — the file
+   *is* the marker. Regeneration needs a `force` mode; a re-run alone does nothing.
+2. `runBackfills()` executes on **every server boot**. Regeneration must not go
+   there, or every Fly.io restart re-summarizes the whole archive and bills for it.
+3. **Notion does need one fix.** `createNotionUpdater` replaces the summary
+   toggle, but `backfillSummaries` does not use the updater — it uses
+   `opts.patchPage`, wired to `createNotionSummaryPatcher`, which calls
+   `appendToggle`. Today that is correct, because the patcher only ever sees
+   pages that lack a summary. Under `force` it would append a **second**
+   "Summary" toggle to a page that already has one.
+
+   The fix is to make the patcher replace rather than append: look for an
+   existing "Summary" toggle, `DELETE` it if present, then append. That logic
+   already exists as `findToggles` in `notionUpdater.ts`, but it is private
+   there, and `notionUpdater` imports from `notionExporter` — so importing it
+   the other way would create a cycle. Move `findToggles`, `SUMMARY_TOGGLE`,
+   and `TRANSCRIPT_TOGGLE` into `notionExporter.ts`, export them, and have
+   `notionUpdater.ts` import them from there. Import direction stays one-way.
+
+   For the existing non-force path this is a no-op: there is no toggle to
+   delete on a page that never had a summary.
+
+So: `backfillSummaries` gains `force?: boolean`, bounded by the existing `limit`.
+
+**Correction found during implementation.** The first draft of this spec claimed
+`listTranscripts(dir).reverse()` already yields newest-first. It does not.
+`transcriptStore.ts:151` sorts chronologically and reverses — that is already
+newest-first — and `summaryBackfill.ts:53` then reverses *again*, making the real
+iteration order oldest-first. Left alone, `--last N` would have regenerated the
+**oldest** N.
+
+The fix is to delete that second `.reverse()`. Order was never load-bearing for
+the boot sweep, which passes no `limit` and therefore processes every
+unsummarized transcript regardless of sequence; newest-first is also the better
+order there, since an interrupted run leaves the most recent transcripts done. A separate `npm run resummarize -- --last N` entrypoint drives it,
+outside the boot path. The script reports how many transcripts match before
+spending anything.
+
+`--last N` is **required**: invoked without it the script exits non-zero and prints
+usage rather than defaulting to the whole archive. Regenerating everything is a
+real thing to want, but it should be spelled `--last 9999` deliberately, not
+reached by forgetting a flag. `force` defaults to `false`, so every existing
+caller — `runBackfills()` above all — keeps today's skip-if-summarized behavior
+with no change.
+
+## Testing
+
+Follows the existing suites — `summaryPrompt.test.ts` and `summaryBackfill.test.ts`
+both exist and already inject fakes.
+
+| Test | Asserts |
+|---|---|
+| Prompt shape | The system prompt names its sections and the `Title:` contract |
+| `parseSummary` unchanged | Existing title-parsing tests still pass against the new body shape |
+| Truncation guard | A `stop_reason: "max_tokens"` response throws rather than returning text |
+| Backfill default | Without `force`, transcripts with summaries are still skipped |
+| Backfill force | With `force` and `--last N`, exactly the newest N regenerate |
+| Backfill bounds | Transcripts outside the N are untouched on disk |
+| Patcher replaces | Patching a page that already has a "Summary" toggle deletes the old one before appending — exactly one toggle remains |
+| Patcher unchanged | Patching a page with no "Summary" toggle issues no DELETE and appends once |
+
+## Out of scope
+
+- **Model migration.** The repo is on `claude-opus-4-8`; `claude-opus-5` is current.
+  That migration carries its own prompt re-tuning and belongs on its own branch.
+- **Tiered summaries.** Rejected above.
+
+## Known follow-ups
+
+Found by the final whole-branch review, deliberately not fixed on this branch.
+
+- **The web viewer shows raw markdown.** `viewerPage.ts:125` sets `textContent`
+  with `white-space: pre-wrap`, so the new `## ` headings render literally. An
+  earlier draft of this spec claimed the viewer "needs no change" — that was
+  wrong. It needs no change to keep *working*, but this branch fixed exactly
+  this problem on the watch and left the viewer showing the syntax characters.
+- **A truncation failure permanently costs the Notion page its title.** When
+  summarization fails, `finalizer.ts` still exports with `summary=null`, so
+  `pageTitle` falls back to `Captions <date> UTC`. The later summary backfill
+  patches the Summary toggle but never the title —
+  `createNotionTitlePatcher` has no caller in either backfill path. Pre-existing
+  for any summary failure, but this branch converts "truncated summary with a
+  good title" into "no summary, generic title, summary fixed later, title never".
+- **The watch re-parses the summary on every body evaluation.**
+  `TranscriptDetailView` calls `asSummaryMarkdown` inside `content(for:)`, which
+  does a split/map/join plus a full `AttributedString(markdown:)` parse each
+  time. `Text(String)` was previously free. Caching the parsed value on
+  `TranscriptDetail` alongside `title`/`summaryBody` would be cheap insurance
+  now that summaries are genuinely long.
+- **Gemini's non-`"completed"` statuses are unenumerated.** The truncation guard
+  treats any `status` other than `"completed"` as a failure. No other terminal
+  status has been observed. If a benign one exists, the transcript will be
+  retried every boot rather than silently mis-stored — a fail-closed mode that
+  names the offending status in its error, chosen deliberately over the
+  fail-open alternative.

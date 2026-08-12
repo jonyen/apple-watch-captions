@@ -22,6 +22,11 @@ export interface SummaryBackfillOptions {
   delayMs?: number;
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Re-summarize transcripts that already have a summary. Off by default: the
+   * summary file is the done-marker, and the boot-time sweep must stay cheap.
+   */
+  force?: boolean;
 }
 
 export interface SummaryBackfillResult {
@@ -35,8 +40,11 @@ export interface SummaryBackfillResult {
  * Generates summaries for stored transcripts that never got one — sessions
  * that ended while the Anthropic key was unset, out of credit, or erroring.
  *
- * The summary file is the marker: a transcript with `<name>.summary.md` is
- * never summarized twice, so this is safe to re-run.
+ * The summary file is the marker: without `force`, a transcript with
+ * `<name>.summary.md` is never summarized twice, so a plain re-run is safe.
+ * Under `force: true` every stored transcript is a candidate again, so
+ * re-running is no longer automatically safe — pair it with a `limit` to
+ * bound the number of paid model calls.
  */
 export async function backfillSummaries(
   opts: SummaryBackfillOptions,
@@ -44,10 +52,15 @@ export async function backfillSummaries(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const delayMs = opts.delayMs ?? 1000;
   const result: SummaryBackfillResult = { summarized: 0, skipped: 0, failed: 0, patched: 0 };
+  // Counts model calls actually made (success or failure), not just
+  // successes — `limit` bounds paid calls, so a run of systematic failures
+  // (e.g. every transcript exceeding the token ceiling) must not keep
+  // walking the archive looking for `limit` successes that never come.
+  let attempts = 0;
 
-  for (const listed of listTranscripts(opts.dir).reverse()) {
-    if (opts.limit !== undefined && result.summarized >= opts.limit) break;
-    if (listed.hasSummary) {
+  for (const listed of listTranscripts(opts.dir)) {
+    if (opts.limit !== undefined && attempts >= opts.limit) break;
+    if (listed.hasSummary && !opts.force) {
       result.skipped++;
       continue;
     }
@@ -64,6 +77,7 @@ export async function backfillSummaries(
 
     if (delayMs > 0) await sleep(delayMs);
 
+    attempts++;
     let summary: string;
     try {
       summary = await opts.summarize(transcript);

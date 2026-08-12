@@ -30,7 +30,9 @@ interface Call {
 }
 
 /** Fake Notion API: records calls, answers with plausible payloads. */
-function fakeNotion(opts: { properties?: Record<string, { type: string }> } = {}) {
+function fakeNotion(
+  opts: { properties?: Record<string, { type: string }>; blockChildren?: unknown[] } = {},
+) {
   const calls: Call[] = [];
   const properties = opts.properties ?? {
     Name: { type: "title" },
@@ -39,6 +41,9 @@ function fakeNotion(opts: { properties?: Record<string, { type: string }> } = {}
     Segments: { type: "number" },
     Session: { type: "rich_text" },
   };
+  // Blocks returned for a GET .../children lookup (findToggles), e.g. an
+  // existing "Summary" toggle a test wants the patcher to discover.
+  const blockChildren = opts.blockChildren ?? [];
   let appended = 0;
 
   const fetch = vi.fn(async (url: string, init: any) => {
@@ -50,6 +55,12 @@ function fakeNotion(opts: { properties?: Record<string, { type: string }> } = {}
     }
     if (url.endsWith("/pages")) {
       return json({ id: "page-1", url: "https://notion.so/page-1" });
+    }
+    if (method === "GET" && url.includes("/children")) {
+      return json({ results: blockChildren });
+    }
+    if (method === "DELETE") {
+      return json({});
     }
     if (url.includes("/pages/")) {
       return json({ id: url.split("/pages/")[1], object: "page" }); // property update
@@ -341,7 +352,10 @@ describe("createNotionExporter", () => {
     await patch("page-9", "An overview.\n- ship it");
 
     expect(notion.calls.find((c) => c.url.endsWith("/pages"))).toBeUndefined();
-    const append = notion.calls.find((c) => c.url.includes("/blocks/page-9/children"))!;
+    // findToggles issues a preceding GET to this same path; match the PATCH.
+    const append = notion.calls.find(
+      (c) => c.url.includes("/blocks/page-9/children") && c.method === "PATCH",
+    )!;
     expect(append.method).toBe("PATCH");
 
     const toggle = append.body.children[0];
@@ -356,7 +370,9 @@ describe("createNotionExporter", () => {
 
     await patch("page-9", "Title: A chat\n\nAn overview.");
 
-    const append = notion.calls.find((c) => c.url.includes("/blocks/page-9/children"))!;
+    const append = notion.calls.find(
+      (c) => c.url.includes("/blocks/page-9/children") && c.method === "PATCH",
+    )!;
     expect(append.body.children[0].toggle.children.map(textOf)).toEqual(["An overview."]);
   });
 
@@ -378,6 +394,38 @@ describe("createNotionExporter", () => {
     const patch = createNotionSummaryPatcher({ token: "t", databaseId: DB_ID, fetch: fetch as any });
 
     await expect(patch("page-9", "An overview.")).rejects.toThrow(/404/);
+  });
+
+  it("deletes an existing Summary toggle before appending the new one", async () => {
+    const notion = fakeNotion({
+      blockChildren: [
+        {
+          id: "blk_old",
+          type: "toggle",
+          toggle: { rich_text: [{ plain_text: "Summary" }] },
+        },
+      ],
+    });
+    const patch = createNotionSummaryPatcher({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await patch("page-1", "Title: X\n\nAn overview.");
+
+    const del = notion.calls.find((c) => c.method === "DELETE");
+    expect(del?.url).toContain("/blocks/blk_old");
+    const append = notion.calls.find(
+      (c) => c.url.includes("/blocks/page-1/children") && c.method === "PATCH",
+    )!;
+    expect(notion.calls.indexOf(del!)).toBeLessThan(notion.calls.indexOf(append));
+  });
+
+  it("issues no DELETE when the page has no Summary toggle", async () => {
+    const notion = fakeNotion();
+    const patch = createNotionSummaryPatcher({ token: "t", databaseId: DB_ID, fetch: notion.fetch });
+
+    await patch("page-1", "Title: X\n\nAn overview.");
+
+    expect(notion.calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(notion.calls.find((c) => c.url.includes("/blocks/page-1/children"))).toBeDefined();
   });
 
   it("looks up the database schema once across exports", async () => {

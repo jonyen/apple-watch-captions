@@ -37,7 +37,7 @@ struct TranscriptDetailView: View {
                 }
 
                 if let summary = detail.summaryBody {
-                    Text(summary).font(.system(size: 14))
+                    Text(summary.asSummaryMarkdown).font(.system(size: 14))
                 } else {
                     Text("No summary").font(.system(size: 14)).foregroundStyle(.secondary)
                 }

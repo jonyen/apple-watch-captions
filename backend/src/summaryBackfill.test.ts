@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { backfillSummaries } from "./summaryBackfill";
@@ -147,6 +147,85 @@ describe("backfillSummaries", () => {
 
     expect(readTranscript(dir, name)?.summary).toBe("A chat happened.");
     expect(result).toMatchObject({ summarized: 1, patched: 0 });
+  });
+
+  it("skips already-summarized transcripts by default", async () => {
+    const names = [
+      storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
+      storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
+      storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
+    ];
+    for (const name of names) writeSummary(dir, name, "already done");
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({ dir, summarize, delayMs: 0 });
+
+    expect(summarize).not.toHaveBeenCalled();
+    expect(result.summarized).toBe(0);
+    expect(result.skipped).toBe(3);
+  });
+
+  it("regenerates already-summarized transcripts under force", async () => {
+    const names = [
+      storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
+      storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
+      storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
+    ];
+    for (const name of names) writeSummary(dir, name, "already done");
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({ dir, force: true, summarize, delayMs: 0 });
+
+    expect(summarize).toHaveBeenCalledTimes(3);
+    expect(result.summarized).toBe(3);
+    expect(result.skipped).toBe(0);
+  });
+
+  it("under force with a limit, regenerates only the newest N", async () => {
+    // backfillSummaries walks listTranscripts(dir) directly, which is already
+    // newest-first, so a limit of 2 regenerates the two newest transcripts here
+    // (ddd, eee) and never reaches ccc/bbb/aaa.
+    const [aaa, bbb, ccc, ddd, eee] = [
+      storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
+      storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
+      storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
+      storeSession(dir, "ddd", Date.UTC(2026, 6, 6, 4, 0, 0)),
+      storeSession(dir, "eee", Date.UTC(2026, 6, 6, 5, 0, 0)),
+    ];
+    for (const name of [aaa, bbb, ccc, ddd, eee]) writeSummary(dir, name, "already done");
+
+    const result = await backfillSummaries({
+      dir,
+      force: true,
+      limit: 2,
+      summarize: async () => "Regenerated.",
+      delayMs: 0,
+    });
+
+    expect(result.summarized).toBe(2);
+    const readSummaryFile = (name: string) => readFileSync(join(dir, `${name}.summary.md`), "utf8");
+    // The two newest were regenerated.
+    expect(readSummaryFile(ddd)).toBe("Regenerated.");
+    expect(readSummaryFile(eee)).toBe("Regenerated.");
+    // The three oldest still hold their original summary text, byte-for-byte.
+    expect(readSummaryFile(aaa)).toBe("already done");
+    expect(readSummaryFile(bbb)).toBe("already done");
+    expect(readSummaryFile(ccc)).toBe("already done");
+  });
+
+  it("bounds attempts by limit even when every call fails, so a limited run cannot bill for the whole archive", async () => {
+    storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0));
+    storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0));
+    storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0));
+    storeSession(dir, "ddd", Date.UTC(2026, 6, 6, 4, 0, 0));
+    const summarize = vi.fn(async () => {
+      throw new Error("credit balance too low");
+    });
+
+    const result = await backfillSummaries({ dir, summarize, delayMs: 0, limit: 2 });
+
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ summarized: 0, failed: 2 });
   });
 
   it("paces requests", async () => {

@@ -8,38 +8,18 @@ import { ChannelSplitProvider } from "./channelSplitProvider";
 import { UnavailableProvider } from "./unavailableProvider";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
-import { Summarize, createClaudeSummarizer } from "./summarizer";
-import { createGeminiSummarizer } from "./geminiSummarizer";
 import { createFinalizer } from "./finalizer";
 import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
 import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
+import { chooseSummarizer } from "./chooseSummarizer";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
 
-/**
- * Pick the summarizer backend: an explicit SUMMARY_PROVIDER wins, otherwise
- * whichever key is configured (Claude first, since it is the better model).
- */
-function chooseSummarizer(): Summarize | undefined {
-  const wanted =
-    config.summaryProvider ??
-    (config.anthropicApiKey ? "claude" : config.geminiApiKey ? "gemini" : undefined);
-
-  if (wanted === "claude") {
-    if (config.anthropicApiKey) return createClaudeSummarizer(config.anthropicApiKey);
-    console.warn("SUMMARY_PROVIDER=claude but ANTHROPIC_API_KEY is not set");
-  } else if (wanted === "gemini") {
-    if (config.geminiApiKey) return createGeminiSummarizer(config.geminiApiKey);
-    console.warn("SUMMARY_PROVIDER=gemini but GEMINI_API_KEY is not set");
-  }
-  return undefined;
-}
-
-const summarize = chooseSummarizer();
+const summarize = chooseSummarizer(config);
 console.log(
   summarize
     ? `Summaries via ${config.summaryProvider ?? (config.anthropicApiKey ? "claude" : "gemini")}`

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { backfillSummaries } from "./summaryBackfill";
@@ -147,6 +147,68 @@ describe("backfillSummaries", () => {
 
     expect(readTranscript(dir, name)?.summary).toBe("A chat happened.");
     expect(result).toMatchObject({ summarized: 1, patched: 0 });
+  });
+
+  it("skips already-summarized transcripts by default", async () => {
+    const names = [
+      storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
+      storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
+      storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
+    ];
+    for (const name of names) writeSummary(dir, name, "already done");
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({ dir, summarize, delayMs: 0 });
+
+    expect(summarize).not.toHaveBeenCalled();
+    expect(result.summarized).toBe(0);
+    expect(result.skipped).toBe(3);
+  });
+
+  it("regenerates already-summarized transcripts under force", async () => {
+    const names = [
+      storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
+      storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
+      storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
+    ];
+    for (const name of names) writeSummary(dir, name, "already done");
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({ dir, force: true, summarize, delayMs: 0 });
+
+    expect(summarize).toHaveBeenCalledTimes(3);
+    expect(result.summarized).toBe(3);
+    expect(result.skipped).toBe(0);
+  });
+
+  it("under force with a limit, regenerates only up to the limit and leaves the rest untouched", async () => {
+    // backfillSummaries walks listTranscripts(dir).reverse() — since listTranscripts
+    // itself returns newest-first, that reversal makes the scan oldest-first, so a
+    // limit of 2 regenerates the two oldest transcripts here (aaa, bbb) and never
+    // reaches ccc/ddd/eee. Read listTranscripts(dir).slice(0, 3) (newest-first) to
+    // grab exactly the three left untouched.
+    const names = [
+      storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
+      storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
+      storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
+      storeSession(dir, "ddd", Date.UTC(2026, 6, 6, 4, 0, 0)),
+      storeSession(dir, "eee", Date.UTC(2026, 6, 6, 5, 0, 0)),
+    ];
+    for (const name of names) writeSummary(dir, name, "already done");
+
+    const result = await backfillSummaries({
+      dir,
+      force: true,
+      limit: 2,
+      summarize: async () => "Regenerated.",
+      delayMs: 0,
+    });
+
+    expect(result.summarized).toBe(2);
+    const untouched = listTranscripts(dir)
+      .slice(0, 3)
+      .map((t) => readFileSync(join(dir, `${t.name}.summary.md`), "utf8"));
+    expect(untouched).toEqual(["already done", "already done", "already done"]);
   });
 
   it("paces requests", async () => {

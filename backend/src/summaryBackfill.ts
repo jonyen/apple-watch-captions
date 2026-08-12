@@ -22,6 +22,11 @@ export interface SummaryBackfillOptions {
   delayMs?: number;
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Re-summarize transcripts that already have a summary. Off by default: the
+   * summary file is the done-marker, and the boot-time sweep must stay cheap.
+   */
+  force?: boolean;
 }
 
 export interface SummaryBackfillResult {
@@ -47,7 +52,7 @@ export async function backfillSummaries(
 
   for (const listed of listTranscripts(opts.dir).reverse()) {
     if (opts.limit !== undefined && result.summarized >= opts.limit) break;
-    if (listed.hasSummary) {
+    if (listed.hasSummary && !opts.force) {
       result.skipped++;
       continue;
     }

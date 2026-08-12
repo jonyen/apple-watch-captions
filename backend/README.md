@@ -43,6 +43,25 @@ With neither key set, transcripts are still saved; only summaries are skipped.
 Transcripts that never got a summary are picked up by a sweep on the next boot,
 so fixing a key or switching providers backfills the gap without manual steps.
 
+### Regenerating summaries
+
+Stored summaries are written once and never revisited — the `<name>.summary.md`
+file is the done-marker for the boot-time backfill. To re-summarize existing
+transcripts under a newer prompt:
+
+```sh
+npm run resummarize -- --last 20     # the 20 most recent transcripts
+npm run resummarize -- --last 9999   # the whole archive
+```
+
+`--last` is required; without it the script exits non-zero rather than
+regenerating everything by accident. Each transcript is a paid model call, and
+the script prints how many it will do before starting. Notion pages that were
+already exported have their Summary toggle replaced, not duplicated.
+
+This is deliberately **not** part of the boot-time sweep in `index.ts` — that
+runs on every restart.
+
 ## Notion export (optional)
 
 When `NOTION_TOKEN` and `NOTION_DATABASE_ID` are both set, each finished session

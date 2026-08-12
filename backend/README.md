@@ -57,7 +57,10 @@ npm run resummarize -- --last 9999   # the whole archive
 `--last` is required; without it the script exits non-zero rather than
 regenerating everything by accident. Each transcript is a paid model call, and
 the script prints how many it will do before starting. Notion pages that were
-already exported have their Summary toggle replaced, not duplicated.
+already exported have their Summary toggle replaced, not duplicated — but
+because Notion's API can only append, the replaced toggle lands after Full
+transcript, so regenerating a page that already had Summary first silently
+moves it below the transcript.
 
 This is deliberately **not** part of the boot-time sweep in `index.ts` — that
 runs on every restart.

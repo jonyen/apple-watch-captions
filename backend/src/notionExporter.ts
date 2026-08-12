@@ -88,7 +88,10 @@ export async function findToggles(
  * instead of creating a duplicate.
  *
  * The toggle lands after the transcript on these pages, since Notion's append
- * API has no prepend; freshly exported pages still get Summary first.
+ * API has no prepend. Freshly exported pages (see the exporter's normal
+ * write path) still get Summary first; this patch path does not — including
+ * on regeneration, where a page that already had its Summary toggle first
+ * has that toggle deleted and re-appended, moving it below Full transcript.
  */
 export function createNotionSummaryPatcher(
   opts: NotionExporterOptions,

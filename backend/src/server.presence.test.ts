@@ -55,7 +55,7 @@ describe("GET /v1/presence", () => {
     const res = await presence(port, "phone-audio");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ reader: false });
+    expect(await res.json()).toEqual({ reader: false, producer: false });
   });
 
   it("reports a reader once one has polled", async () => {
@@ -64,7 +64,7 @@ describe("GET /v1/presence", () => {
     await read(port, "phone-audio");
     const res = await presence(port, "phone-audio");
 
-    expect(await res.json()).toEqual({ reader: true });
+    expect(await res.json()).toEqual({ reader: true, producer: false });
   });
 
   it("does not report a reader for a different session", async () => {
@@ -73,7 +73,7 @@ describe("GET /v1/presence", () => {
     await read(port, "phone-audio");
     const res = await presence(port, "something-else");
 
-    expect(await res.json()).toEqual({ reader: false });
+    expect(await res.json()).toEqual({ reader: false, producer: false });
   });
 
   it("does not count a producer's post as a reader", async () => {
@@ -87,7 +87,18 @@ describe("GET /v1/presence", () => {
     });
     const res = await presence(port, "phone-audio");
 
-    expect(await res.json()).toEqual({ reader: false });
+    expect(await res.json()).toEqual({ reader: false, producer: true });
+  });
+
+  it("reports no producer until audio actually arrives", async () => {
+    const { port } = start();
+
+    // An empty post is a reader's poll, not a broadcast: it must not make the
+    // watch think the phone is playing something.
+    await read(port, "phone-audio");
+    const res = await presence(port, "phone-audio");
+
+    expect((await res.json()).producer).toBe(false);
   });
 
   it("never creates a session, so asking about an unknown one is free", async () => {
@@ -96,6 +107,6 @@ describe("GET /v1/presence", () => {
     await presence(port, "never-seen");
     const res = await presence(port, "never-seen");
 
-    expect(await res.json()).toEqual({ reader: false });
+    expect(await res.json()).toEqual({ reader: false, producer: false });
   });
 });

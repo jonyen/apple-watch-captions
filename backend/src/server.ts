@@ -8,6 +8,7 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { CurrentCall } from "./currentCall";
 import { ReaderPresence } from "./readerPresence";
+import { SettingsStore } from "./settingsStore";
 import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
@@ -36,6 +37,8 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
+  /** Optional path the phone-written settings persist to. Memory-only without it. */
+  settingsFile?: string;
 }
 
 export interface CaptionServer {
@@ -46,10 +49,17 @@ export interface CaptionServer {
 /** Cap on a single audio POST body (~512 KB ≈ 16 s of 16 kHz mono Int16). */
 const MAX_AUDIO_BYTES = 512 * 1024;
 const REAP_INTERVAL_MS = 5_000;
+/** Settings are a handful of scalars; anything larger is not a settings write. */
+const MAX_SETTINGS_BYTES = 4 * 1024;
 
 export function startServer(opts: StartServerOptions): CaptionServer {
+  const settings = new SettingsStore(opts.settingsFile);
   const store = new SessionStore({
-    createProvider: opts.createProvider,
+    // Read at session creation rather than captured at boot, so changing the
+    // provider on the phone takes effect on the next session instead of the
+    // next deploy.
+    createProvider: (providerOpts) =>
+      opts.createProvider({ ...providerOpts, provider: settings.get().provider }),
     transcripts: opts.transcripts,
   });
   const currentCall = new CurrentCall();
@@ -57,7 +67,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall, readers).catch(() => {
+    handleRequest(req, res, opts, store, currentCall, readers, settings).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -132,6 +142,7 @@ async function handleRequest(
   store: SessionStore,
   calls: CurrentCall,
   readers: ReaderPresence,
+  settings: SettingsStore,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -254,7 +265,41 @@ async function handleRequest(
       sendJSON(res, 400, { error: "missing session" });
       return;
     }
-    sendJSON(res, 200, { reader: readers.isPresent(session) });
+    sendJSON(res, 200, {
+      reader: readers.isPresent(session),
+      producer: readers.isProducing(session),
+    });
+    return;
+  }
+
+  // Settings the phone writes and the watch reads. They live here because the
+  // two apps cannot talk to each other: the watch app is standalone, so there
+  // is no paired-companion channel between them.
+  if (url.pathname === "/v1/settings" && (req.method === "GET" || req.method === "PUT")) {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (req.method === "GET") {
+      sendJSON(res, 200, settings.get());
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBody(req, MAX_SETTINGS_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    let patch: unknown;
+    try {
+      patch = JSON.parse(body.toString("utf8"));
+    } catch {
+      sendJSON(res, 400, { error: "invalid json" });
+      return;
+    }
+    sendJSON(res, 200, settings.update(patch));
     return;
   }
 
@@ -374,6 +419,10 @@ async function handleRequest(
       // round trip — and so presence expires by itself when the reading stops,
       // which is the only signal available when no connection stays open.
       if (url.searchParams.get("role") === "reader") readers.mark(session);
+
+      // Audio arriving is what "the phone is broadcasting" means. The watch
+      // asks about this to open straight into captions on launch.
+      if (body.length > 0) readers.markProducer(session);
 
       store.feed(session, body, ephemeral);
       const { events, seq } = store.drain(session, since);

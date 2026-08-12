@@ -14,11 +14,13 @@ targets:
       - path: PhoneCaptions
         excludes:
           - Icon      # editable vector source; the built icon is the asset catalog
+      # The app writes settings to the relay, so it needs the credentials; the
+      # uploading itself still happens only in the extension.
       - path: Shared
-        excludes:
-          - Secrets.example.swift
+        includes:
+          - Secrets.swift
     dependencies:
-      - package: CaptionCore
+      - target: PhoneCaptionsUpload
     info:
       path: PhoneCaptions/Info.plist
       properties:
@@ -26,12 +28,6 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        NSMicrophoneUsageDescription: "Captions what your phone is playing, read on your Apple Watch."
-        # The app is useful only while it keeps listening: captions have to
-        # start the moment you raise your wrist, and the phone is locked in a
-        # pocket by then. Without this the capture dies with the screen.
-        UIBackgroundModes:
-          - audio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions
@@ -46,3 +42,33 @@ targets:
         DEVELOPMENT_TEAM: "7PZN69YDL4"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  PhoneCaptionsUpload:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: PhoneCaptionsUpload
+      - path: Shared
+        excludes:
+          - Secrets.example.swift
+    dependencies:
+      - package: CaptionCore
+    info:
+      path: PhoneCaptionsUpload/Info.plist
+      properties:
+        CFBundleDisplayName: Watch Captions Relay
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          # Must be one of Apple's two literal modes. Anything else and the
+          # extension is silently filtered out of the broadcast picker — it
+          # installs, it registers, and it never appears.
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions.upload
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: "7PZN69YDL4"
+        CODE_SIGN_STYLE: Automatic

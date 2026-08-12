@@ -79,8 +79,25 @@ final class RelayUploader {
         }
     }
 
+    /// Counts flushes so the log can say what is happening without a line a
+    /// second: the first few posts, then one every ten.
+    private var flushes = 0
+
     private func flush() {
-        guard !stopped, !inFlight, !pending.isEmpty else { return }
+        guard !stopped, !inFlight else { return }
+        guard !pending.isEmpty else {
+            // Silence here is the failure that looks like success: the app
+            // reports it is streaming while the capture produces nothing.
+            flushes += 1
+            if flushes <= 3 || flushes % 10 == 0 {
+                UploadLog.append("nothing to post — capture produced no audio")
+            }
+            return
+        }
+        flushes += 1
+        if flushes <= 3 || flushes % 10 == 0 {
+            UploadLog.append("posting \(pending.count) bytes")
+        }
         inFlight = true
         let body = pending
         pending = Data()

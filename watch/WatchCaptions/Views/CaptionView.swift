@@ -29,6 +29,9 @@ enum CaptionIndicator {
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
     let indicator: CaptionIndicator
+    /// Set from the phone. A default here so previews and any future caller
+    /// need not thread it through to say "the usual size".
+    var textSize: Double = 16
     /// Absent when there is nothing for the user to stop — reading a call is
     /// not the same as hanging up, and offering Stop would imply it was.
     let onStop: (() -> Void)?
@@ -38,11 +41,11 @@ struct CaptionView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(store.paragraphs.enumerated()), id: \.element.id) { index, paragraph in
                     text(for: paragraph, isLast: index == store.paragraphs.count - 1)
-                        .font(.system(size: 16))
+                        .font(.system(size: textSize))
                 }
                 // Nothing final yet: the partial is all there is to show.
                 if store.paragraphs.isEmpty, !store.partial.isEmpty {
-                    Text(store.partial).font(.system(size: 16)).foregroundStyle(.secondary)
+                    Text(store.partial).font(.system(size: textSize)).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

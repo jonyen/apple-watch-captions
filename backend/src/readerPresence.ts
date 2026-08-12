@@ -25,6 +25,7 @@ export class ReaderPresence {
   private readonly windowMs: number;
   private readonly now: () => number;
   private readonly lastSeen = new Map<string, number>();
+  private readonly lastFed = new Map<string, number>();
 
   constructor(opts: ReaderPresenceOptions = {}) {
     this.windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS;
@@ -49,8 +50,31 @@ export class ReaderPresence {
     return true;
   }
 
+  /** Record that `sessionId` was just fed audio by whatever produces it. */
+  markProducer(sessionId: string): void {
+    this.lastFed.set(sessionId, this.now());
+  }
+
+  /**
+   * True when `sessionId` was fed within the window.
+   *
+   * The mirror of `isPresent`, and what lets the watch open straight into
+   * captions when the phone is already broadcasting — the same trick launching
+   * into a live call uses, pointed at the phone instead.
+   */
+  isProducing(sessionId: string): boolean {
+    const fed = this.lastFed.get(sessionId);
+    if (fed === undefined) return false;
+    if (this.now() - fed > this.windowMs) {
+      this.lastFed.delete(sessionId);
+      return false;
+    }
+    return true;
+  }
+
   /** Forget `sessionId` entirely, for a reader that has explicitly left. */
   clear(sessionId: string): void {
     this.lastSeen.delete(sessionId);
+    this.lastFed.delete(sessionId);
   }
 }

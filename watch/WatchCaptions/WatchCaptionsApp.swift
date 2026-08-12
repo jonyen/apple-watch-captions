@@ -88,6 +88,7 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: model.live ? .liveOnly : .recording,
+                textSize: model.settings.captionTextSize,
                 onStop: { model.stop() })
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })
@@ -104,7 +105,8 @@ private struct RootView: View {
             ErrorView(message: message,
                       onRetry: { Task { await model.startPhoneAudio() } })
         case .connecting, .listening:
-            CaptionView(store: store, indicator: .phone, onStop: nil)
+            CaptionView(store: store, indicator: .phone,
+                        textSize: model.settings.captionTextSize, onStop: nil)
         }
     }
 
@@ -122,6 +124,7 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
+                textSize: model.settings.captionTextSize,
                 onStop: nil)
         }
     }

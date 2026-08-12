@@ -59,7 +59,7 @@ for the full design.
 |------|------|
 | [`watch/`](watch/README.md) | The watchOS app (SwiftUI) + `CaptionCore` Swift package (pure logic, unit-tested). Built with XcodeGen. |
 | [`mac/`](mac/README.md) | The macOS menu-bar app (SwiftUI) for live captions on desktop. Shares `CaptionCore` with the watch app; listens to mic and system audio. |
-| [`ios/`](ios/README.md) | The iPhone app (SwiftUI): an always-listening mic that streams to the relay only while the Watch is reading, so captions start with nothing to press on the phone. |
+| [`ios/`](ios/README.md) | The iPhone app (SwiftUI) and its ReplayKit broadcast extension: captions whatever the phone plays, read on the Watch. Also where the Watch app's settings are edited. |
 | [`backend/`](backend/README.md) | The STT relay (Node/TypeScript), deployed on Fly.io. |
 | [`docs/`](docs/) | Design specs. |
 
@@ -78,7 +78,8 @@ Token auth via `?token=<AUTH_TOKEN>` on every request.
 | Endpoint | Request | Response |
 |----------|---------|----------|
 | `POST /v1/audio?session=<id>&since=<seq>` | raw 16 kHz mono Int16 PCM (may be empty) | `{ "events": [{seq,type,...}], "seq": <latest> }` |
-| `GET /v1/presence?session=<id>` | — | `{ "reader": true }` when something polled that session with `role=reader` in the last 10s. The phone asks before streaming, so audio nobody is watching never leaves the device. |
+| `GET /v1/presence?session=<id>` | — | `{ "reader": true, "producer": true }` — who polled with `role=reader`, and who fed audio, in the last 10s. The phone asks before streaming, so audio nobody is watching never leaves the device; the watch asks to open straight into captions when the phone is broadcasting. |
+| `GET`/`PUT /v1/settings` | JSON on `PUT` | Settings the phone writes and the watch reads (caption text size, auto-open, save transcripts, provider). They live here because the watch app is standalone: there is no paired-companion channel between the two apps. |
 | `POST /v1/stop?session=<id>` | empty | `{ "events": [...], "seq": <latest> }` |
 | `GET /healthz` | — | `200 ok` |
 | `WS /stream?token=…` | binary PCM frames | JSON caption messages — the mac app's production transport (WebSockets aren't restricted there the way they are on watchOS); accepts `?channels=2` for multichannel (mic + system audio), tagging captions with a `channel`. The watch still uses HTTP polling (see above). |
@@ -93,7 +94,7 @@ Event payloads: `{type:"ready"}`, `{type:"caption",text,isFinal}`, `{type:"error
 cd backend
 npm install
 AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
-npm test            # 302 tests, no API key needed
+npm test            # 323 tests, no API key needed
 ```
 
 **Watch app** (see [`watch/README.md`](watch/README.md)):

@@ -136,9 +136,19 @@ pass. Three constraints shape it:
    For the existing non-force path this is a no-op: there is no toggle to
    delete on a page that never had a summary.
 
-So: `backfillSummaries` gains `force?: boolean`, and the existing
-`listTranscripts(dir).reverse()` already yields newest-first, which the existing
-`limit` bounds. A separate `npm run resummarize -- --last N` entrypoint drives it,
+So: `backfillSummaries` gains `force?: boolean`, bounded by the existing `limit`.
+
+**Correction found during implementation.** The first draft of this spec claimed
+`listTranscripts(dir).reverse()` already yields newest-first. It does not.
+`transcriptStore.ts:151` sorts chronologically and reverses — that is already
+newest-first — and `summaryBackfill.ts:53` then reverses *again*, making the real
+iteration order oldest-first. Left alone, `--last N` would have regenerated the
+**oldest** N.
+
+The fix is to delete that second `.reverse()`. Order was never load-bearing for
+the boot sweep, which passes no `limit` and therefore processes every
+unsummarized transcript regardless of sequence; newest-first is also the better
+order there, since an interrupted run leaves the most recent transcripts done. A separate `npm run resummarize -- --last N` entrypoint drives it,
 outside the boot path. The script reports how many transcripts match before
 spending anything.
 

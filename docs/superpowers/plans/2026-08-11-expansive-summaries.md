@@ -473,7 +473,15 @@ git commit -m "fix(notion): replace the summary toggle instead of appending a se
 
 **Interfaces:**
 - Consumes: the replacing patcher from Task 4 (via `opts.patchPage`).
-- Produces: `SummaryBackfillOptions` gains `force?: boolean` (default `false`). `backfillSummaries` keeps its existing signature and `SummaryBackfillResult` shape (`{ summarized, skipped, failed, patched }`).
+- Produces: `SummaryBackfillOptions` gains `force?: boolean` (default `false`). `backfillSummaries` keeps its existing signature and `SummaryBackfillResult` shape (`{ summarized, skipped, failed, patched }`). Iteration is **newest-first** (see the ordering correction below), so `force` + `limit: N` regenerates the newest N.
+
+**Ordering correction (found during implementation).** An earlier draft of this
+plan said `listTranscripts(dir).reverse()` yields newest-first. It does not:
+`transcriptStore.ts:151` already sorts-and-reverses to newest-first, and
+`summaryBackfill.ts:53` reverses again, giving oldest-first. Delete that second
+`.reverse()` so line 53 reads `for (const listed of listTranscripts(opts.dir)) {`.
+The boot sweep passes no `limit`, so it processes every unsummarized transcript
+either way — only the sequence changes, and newest-first is better there too.
 
 - [ ] **Step 1: Write the failing test**
 

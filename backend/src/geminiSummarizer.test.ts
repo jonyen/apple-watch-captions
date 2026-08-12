@@ -188,4 +188,58 @@ describe("createGeminiSummarizer", () => {
 
     await expect(summarize(transcript())).resolves.toBe("A chat happened.");
   });
+
+  it("throws when the live-shaped response reports a non-completed status", async () => {
+    // Same shape as the "parses the shape the live API actually returns"
+    // fixture, but with status changed to something other than "completed" —
+    // the only signal on this shape that a generation didn't finish cleanly.
+    const live = {
+      id: "v1_Chd6U2Rr",
+      status: "incomplete",
+      object: "interaction",
+      model: "gemini-3.6-flash",
+      usage: { total_tokens: 16000, total_thought_tokens: 0 },
+      steps: [
+        { type: "model_output", content: [{ type: "text", text: "A chat that stops mid-" }] },
+      ],
+    };
+    const fetch = vi.fn(async () => json(live));
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await expect(summarize(transcript())).rejects.toThrow(/did not complete.*incomplete/i);
+  });
+
+  it("throws when live-shaped usage shows output tokens reaching the cap", async () => {
+    // status still says "completed", so this is the case status alone can't
+    // catch: total_tokens - total_thought_tokens derives the actual output
+    // length (usage covers thought + output, not input — see the captured
+    // fixture where 75 - 69 = 6, matching a six-token body).
+    const live = {
+      id: "v1_Chd6U2Rr",
+      status: "completed",
+      object: "interaction",
+      model: "gemini-3.6-flash",
+      usage: { total_tokens: 16069, total_thought_tokens: 69 },
+      steps: [
+        { type: "model_output", content: [{ type: "text", text: "A chat that stops mid-" }] },
+      ],
+    };
+    const fetch = vi.fn(async () => json(live));
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await expect(summarize(transcript())).rejects.toThrow(/truncated/i);
+  });
+
+  it("succeeds on a live-shaped response with no status or usage fields at all", async () => {
+    const fetch = vi.fn(async () =>
+      json({
+        id: "v1_x",
+        object: "interaction",
+        steps: [{ type: "model_output", content: [{ type: "text", text: "A chat happened." }] }],
+      }),
+    );
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await expect(summarize(transcript())).resolves.toBe("A chat happened.");
+  });
 });

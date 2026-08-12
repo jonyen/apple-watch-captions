@@ -4,6 +4,12 @@ import { SUMMARY_SYSTEM_PROMPT, summaryPrompt } from "./summaryPrompt";
 const API = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const DEFAULT_MODEL = "gemini-3.6-flash";
 
+/**
+ * Output cap shared between the request body and the truncation check below,
+ * so the two numbers can't drift apart.
+ */
+const MAX_OUTPUT_TOKENS = 16000;
+
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface GeminiSummarizerOptions {
@@ -43,7 +49,7 @@ export function createGeminiSummarizer(
         // the bill (69 thought tokens for a 2-token reply, measured).
         // The output cap matches the Claude path so the two providers produce
         // comparable lengths from the same prompt.
-        generation_config: { thinking_level: "low", max_output_tokens: 16000 },
+        generation_config: { thinking_level: "low", max_output_tokens: MAX_OUTPUT_TOKENS },
       }),
     } as RequestInit);
 
@@ -56,8 +62,9 @@ export function createGeminiSummarizer(
     // A truncated summary must not be stored: the summary file is the
     // done-marker, so a partial would never be revisited. Mirrors the Claude
     // path's stop_reason check (summarizer.ts).
-    if (isTruncated(payload)) {
-      throw new Error(`Gemini summary truncated at the token ceiling for ${transcript.name}`);
+    const truncation = truncationReason(payload);
+    if (truncation) {
+      throw new Error(`${truncation} for ${transcript.name}`);
     }
 
     const text = extractText(payload);
@@ -71,24 +78,52 @@ export function createGeminiSummarizer(
 }
 
 /**
- * Whether the response signals it was cut off at `max_output_tokens` rather
- * than finishing naturally. Checked defensively, like `extractText` below:
- * an absent or unrecognized marker means "not truncated", not an error, so
- * this can never break a currently-passing shape.
+ * Describes why the response looks incomplete/truncated, or returns
+ * `undefined` if it looks fine. Checked defensively, like `extractText`
+ * below: every field read here is optional-chained, so a payload missing
+ * all of them returns `undefined` rather than throwing or crashing — a
+ * truncated/unrecognized-shape response must never be mistaken for a normal
+ * one, but an absent field must never be mistaken for a problem either.
  *
- * Only the legacy `generateContent` shape's `candidates[0].finishReason ===
- * "MAX_TOKENS"` is handled with any confidence — that field is documented
- * and this file already has a captured example of the shape around it. The
- * newer `steps`/interactions shape (the one this summarizer actually calls)
- * has no confirmed finish-reason equivalent: no truncated example of it has
- * been captured, and the one live response on file (see the "parses the
- * shape the live API actually returns" test) carries only `status:
- * "completed"` with no hint of what a cut-off response would say. Rather
- * than guess a field name for that shape, it is left unchecked here — a
- * truncation on that path would currently slip through uncaught.
+ * Three signals, in the order checked:
+ *
+ * 1. Legacy `generateContent` shape: `candidates[0].finishReason ===
+ *    "MAX_TOKENS"`. Documented behavior, and the shape `extractText` above
+ *    already has a fallback branch for.
+ *
+ * 2. Live `steps`/interactions shape — the shape this summarizer actually
+ *    calls in production. `status` reads `"completed"` on every real
+ *    response captured so far (see the "parses the shape the live API
+ *    actually returns" test below). Any other value on an HTTP-ok payload
+ *    is treated as a generation that didn't finish.
+ *
+ * 3. Same live shape, derived from token accounting: `usage.total_tokens`
+ *    covers thought *and* output tokens together (not input) — confirmed by
+ *    the captured fixture, where `total_tokens(75) - total_thought_tokens(69)
+ *    = 6`, matching the six-token body "A chat happened." So
+ *    `total_tokens - total_thought_tokens` is the actual output length;
+ *    reaching the configured cap means the model was cut off even when
+ *    `status` doesn't say so (e.g. if the API marks a cut-off response
+ *    "completed" the way some providers do).
  */
-function isTruncated(payload: any): boolean {
-  return payload?.candidates?.[0]?.finishReason === "MAX_TOKENS";
+function truncationReason(payload: any): string | undefined {
+  if (payload?.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+    return "Gemini summary truncated at the token ceiling";
+  }
+
+  if (typeof payload?.status === "string" && payload.status !== "completed") {
+    return `Gemini summary generation did not complete (status: ${payload.status})`;
+  }
+
+  const usage = payload?.usage;
+  if (typeof usage?.total_tokens === "number" && typeof usage?.total_thought_tokens === "number") {
+    const outputTokens = usage.total_tokens - usage.total_thought_tokens;
+    if (outputTokens >= MAX_OUTPUT_TOKENS) {
+      return "Gemini summary truncated at the token ceiling";
+    }
+  }
+
+  return undefined;
 }
 
 /**

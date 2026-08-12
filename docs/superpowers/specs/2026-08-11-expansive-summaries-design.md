@@ -180,5 +180,32 @@ both exist and already inject fakes.
 - **Model migration.** The repo is on `claude-opus-4-8`; `claude-opus-5` is current.
   That migration carries its own prompt re-tuning and belongs on its own branch.
 - **Tiered summaries.** Rejected above.
-- **Viewer page layout.** `viewerPage.ts` renders whatever it is given; the richer
-  markdown needs no change there.
+
+## Known follow-ups
+
+Found by the final whole-branch review, deliberately not fixed on this branch.
+
+- **The web viewer shows raw markdown.** `viewerPage.ts:125` sets `textContent`
+  with `white-space: pre-wrap`, so the new `## ` headings render literally. An
+  earlier draft of this spec claimed the viewer "needs no change" — that was
+  wrong. It needs no change to keep *working*, but this branch fixed exactly
+  this problem on the watch and left the viewer showing the syntax characters.
+- **A truncation failure permanently costs the Notion page its title.** When
+  summarization fails, `finalizer.ts` still exports with `summary=null`, so
+  `pageTitle` falls back to `Captions <date> UTC`. The later summary backfill
+  patches the Summary toggle but never the title —
+  `createNotionTitlePatcher` has no caller in either backfill path. Pre-existing
+  for any summary failure, but this branch converts "truncated summary with a
+  good title" into "no summary, generic title, summary fixed later, title never".
+- **The watch re-parses the summary on every body evaluation.**
+  `TranscriptDetailView` calls `asSummaryMarkdown` inside `content(for:)`, which
+  does a split/map/join plus a full `AttributedString(markdown:)` parse each
+  time. `Text(String)` was previously free. Caching the parsed value on
+  `TranscriptDetail` alongside `title`/`summaryBody` would be cheap insurance
+  now that summaries are genuinely long.
+- **Gemini's non-`"completed"` statuses are unenumerated.** The truncation guard
+  treats any `status` other than `"completed"` as a failure. No other terminal
+  status has been observed. If a benign one exists, the transcript will be
+  retried every boot rather than silently mis-stored — a fail-closed mode that
+  names the offending status in its error, chosen deliberately over the
+  fail-open alternative.

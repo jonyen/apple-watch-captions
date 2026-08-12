@@ -118,8 +118,23 @@ pass. Three constraints shape it:
    *is* the marker. Regeneration needs a `force` mode; a re-run alone does nothing.
 2. `runBackfills()` executes on **every server boot**. Regeneration must not go
    there, or every Fly.io restart re-summarizes the whole archive and bills for it.
-3. Notion needs nothing new: `createNotionUpdater` already deletes the existing
-   summary toggle and rewrites it.
+3. **Notion does need one fix.** `createNotionUpdater` replaces the summary
+   toggle, but `backfillSummaries` does not use the updater — it uses
+   `opts.patchPage`, wired to `createNotionSummaryPatcher`, which calls
+   `appendToggle`. Today that is correct, because the patcher only ever sees
+   pages that lack a summary. Under `force` it would append a **second**
+   "Summary" toggle to a page that already has one.
+
+   The fix is to make the patcher replace rather than append: look for an
+   existing "Summary" toggle, `DELETE` it if present, then append. That logic
+   already exists as `findToggles` in `notionUpdater.ts`, but it is private
+   there, and `notionUpdater` imports from `notionExporter` — so importing it
+   the other way would create a cycle. Move `findToggles`, `SUMMARY_TOGGLE`,
+   and `TRANSCRIPT_TOGGLE` into `notionExporter.ts`, export them, and have
+   `notionUpdater.ts` import them from there. Import direction stays one-way.
+
+   For the existing non-force path this is a no-op: there is no toggle to
+   delete on a page that never had a summary.
 
 So: `backfillSummaries` gains `force?: boolean`, and the existing
 `listTranscripts(dir).reverse()` already yields newest-first, which the existing
@@ -147,6 +162,8 @@ both exist and already inject fakes.
 | Backfill default | Without `force`, transcripts with summaries are still skipped |
 | Backfill force | With `force` and `--last N`, exactly the newest N regenerate |
 | Backfill bounds | Transcripts outside the N are untouched on disk |
+| Patcher replaces | Patching a page that already has a "Summary" toggle deletes the old one before appending — exactly one toggle remains |
+| Patcher unchanged | Patching a page with no "Summary" toggle issues no DELETE and appends once |
 
 ## Out of scope
 

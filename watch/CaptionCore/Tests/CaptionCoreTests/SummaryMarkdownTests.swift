@@ -24,8 +24,9 @@ final class SummaryMarkdownTests: XCTestCase {
     /// This guards the preprocessing step that makes `testStripsBulletSyntaxFromRenderedText` pass.
     func testBulletBecomesADotNotJustDisappearing() {
         let rendered = String("- first\n- second".asSummaryMarkdown.characters)
-        XCTAssertTrue(rendered.contains("first"))
-        XCTAssertTrue(rendered.contains("second"),
+        XCTAssertTrue(rendered.contains("• first"),
+                       "bullet marker should become a plain dot, not just vanish")
+        XCTAssertTrue(rendered.contains("• second"),
                        "both bullet lines should survive, not just the first")
     }
 

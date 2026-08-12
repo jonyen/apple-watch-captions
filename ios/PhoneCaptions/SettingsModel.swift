@@ -15,9 +15,6 @@ final class SettingsModel: ObservableObject {
 
     @Published private(set) var loading = true
     @Published private(set) var error: String?
-    /// Set briefly after a successful write, so a change is visibly saved
-    /// rather than silently accepted.
-    @Published private(set) var saved = false
 
     static let providers = ["deepgram", "openai", "assemblyai"]
     static let textSizeRange: ClosedRange<Double> = 12...30
@@ -41,7 +38,6 @@ final class SettingsModel: ObservableObject {
 
     /// Queue a write. Debounced, so a slider drag posts once when it settles.
     func save() {
-        saved = false
         writeTask?.cancel()
         writeTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -66,7 +62,6 @@ final class SettingsModel: ObservableObject {
         // values, so this is where an out-of-range size visibly becomes the
         // one actually stored.
         apply(json)
-        saved = true
     }
 
     private func apply(_ json: [String: Any]) {

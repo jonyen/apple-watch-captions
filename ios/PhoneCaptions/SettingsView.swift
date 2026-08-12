@@ -6,6 +6,12 @@ struct SettingsView: View {
     @StateObject private var model = SettingsModel()
 
     var body: some View {
+        NavigationStack {
+            form
+        }
+    }
+
+    private var form: some View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
@@ -65,16 +71,9 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if model.loading {
-                    ProgressView()
-                } else if model.saved {
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(.secondary)
-                        .transition(.opacity)
-                }
+                if model.loading { ProgressView() }
             }
         }
-        .animation(.default, value: model.saved)
         .task { await model.load() }
     }
 }

@@ -1,7 +1,25 @@
 import SwiftUI
 import ReplayKit
 
+/// Two pages, swiped between: the thing you do, and the things you set.
+///
+/// Settings are a page rather than a pushed screen because they are a sibling
+/// of the broadcast control, not a detail of it — and because a swipe is one
+/// gesture where a push and a back tap are two.
 struct ContentView: View {
+    var body: some View {
+        TabView {
+            BroadcastView()
+            SettingsView()
+        }
+        .tabViewStyle(.page)
+        // Always visible, so the second page is discoverable rather than
+        // something you find by accident.
+        .indexViewStyle(.page(backgroundDisplayMode: .always))
+    }
+}
+
+private struct BroadcastView: View {
     private let picker = BroadcastPicker()
 
     var body: some View {
@@ -18,17 +36,11 @@ struct ContentView: View {
                 .controlSize(.large)
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Start the broadcast, then play anything. What the phone plays is captioned on your Watch — open iPhone audio there.")
+                    Text("Start the broadcast, then play anything. What the phone plays is captioned on your Watch — raise your wrist and it opens itself.")
                     Text("Audio is only sent while the Watch is reading. The broadcast ends when the phone locks.")
                         .foregroundStyle(.secondary)
                 }
                 .font(.footnote)
-
-                NavigationLink {
-                    SettingsView()
-                } label: {
-                    Label("Watch Settings", systemImage: "gearshape")
-                }
 
                 Spacer()
             }

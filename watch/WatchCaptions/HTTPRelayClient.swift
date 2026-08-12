@@ -142,6 +142,10 @@ final class HTTPRelayClient: Relay {
             URLQueryItem(name: "session", value: sessionID),
             URLQueryItem(name: "token", value: token),
         ]
+        // Joining someone else's session means reading it, never producing it.
+        // The relay uses this to tell an audience apart from a source, so the
+        // phone can stay silent until something is actually watching.
+        if fixedSessionID != nil { items.append(URLQueryItem(name: "role", value: "reader")) }
         if let since { items.append(URLQueryItem(name: "since", value: String(since))) }
         if let resumeName { items.append(URLQueryItem(name: "resume", value: resumeName)) }
         if ephemeral { items.append(URLQueryItem(name: "ephemeral", value: "1")) }

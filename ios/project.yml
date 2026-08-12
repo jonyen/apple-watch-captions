@@ -12,13 +12,11 @@ targets:
     platform: iOS
     sources:
       - path: PhoneCaptions
-        excludes:
-          - Secrets.example.swift
       - path: Shared
         excludes:
           - Secrets.example.swift
     dependencies:
-      - target: PhoneCaptionsUpload
+      - package: CaptionCore
     info:
       path: PhoneCaptions/Info.plist
       properties:
@@ -26,6 +24,12 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        NSMicrophoneUsageDescription: "Captions what your phone is playing, read on your Apple Watch."
+        # The app is useful only while it keeps listening: captions have to
+        # start the moment you raise your wrist, and the phone is locked in a
+        # pocket by then. Without this the capture dies with the screen.
+        UIBackgroundModes:
+          - audio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions
@@ -33,39 +37,9 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         # Signed by the free personal team, which is why there are no
-        # entitlements anywhere in this project: App Groups, push, and the rest
-        # are paid-membership capabilities, and free provisioning refuses a
-        # build that asks for one. That constraint is why the extension and the
-        # Watch agree on a fixed session id rather than negotiating one.
-        DEVELOPMENT_TEAM: "7PZN69YDL4"
-        CODE_SIGN_STYLE: Automatic
-
-  PhoneCaptionsUpload:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: PhoneCaptionsUpload
-      - path: Shared
-        excludes:
-          - Secrets.example.swift
-    dependencies:
-      - package: CaptionCore
-    info:
-      path: PhoneCaptionsUpload/Info.plist
-      properties:
-        CFBundleDisplayName: Phone Captions
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
-          # Must be one of Apple's two literal modes. Anything else and the
-          # extension is silently filtered out of the broadcast picker — it
-          # installs, it registers, and it never appears.
-          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions.upload
-        GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        # entitlements: App Groups, push, and the rest are paid-membership
+        # capabilities, and free provisioning refuses a build that asks for one.
+        # That constraint is why the phone and the Watch agree on a fixed
+        # session id rather than negotiating one.
         DEVELOPMENT_TEAM: "7PZN69YDL4"
         CODE_SIGN_STYLE: Automatic

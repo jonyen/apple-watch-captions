@@ -1,80 +1,73 @@
 # Phone Captions (iOS)
 
-Captions whatever is playing on the iPhone, read on the Apple Watch.
+Captions what your phone can hear, read on the Apple Watch — with nothing to
+press on the phone.
 
-A ReplayKit **broadcast upload extension** receives the playback audio of the app
-on screen, resamples it to the relay's wire format, and posts it into a fixed
-relay session. The Watch polls that same session under **iPhone audio** on its
-menu and shows the captions. Nothing is saved: the session is marked ephemeral,
-so the relay writes no transcript, runs no summary, and exports nothing.
+The app keeps the microphone running from launch, including with the phone
+locked in a pocket, but sends nothing until the Watch is actually reading.
+Opening **iPhone audio** on the Watch is what starts the stream; leaving that
+screen stops it a few seconds later.
 
 ```
- iPhone                                  Fly.io relay              Apple Watch
-┌──────────────────────┐  POST /v1/audio ┌──────────────┐  POST   ┌───────────┐
-│ app audio (44.1 kHz  │ ───────────────►│ session      │◄────────│ empty body│
-│ stereo Int16)        │  session=       │ "phone-audio"│  events │ captions  │
-│ → PCMConverter       │  phone-audio    │              │────────►│ on wrist  │
-│ → 16 kHz mono Int16  │                 └──────────────┘         └───────────┘
-└──────────────────────┘
+ iPhone (always running)                Fly.io relay              Apple Watch
+┌──────────────────────┐               ┌──────────────┐         ┌───────────┐
+│ mic → PCMConverter   │  POST /v1/audio│ session      │  POST   │ empty body│
+│ → 16 kHz mono Int16  │ ──────────────►│ "phone-audio"│◄────────│ role=     │
+│                      │  only while    │              │  events │ reader    │
+│ GET /v1/presence ────┼───────────────►│ reader seen  │────────►│ captions  │
+│ every 3s             │  reader: true? │ in last 10s  │         │ on wrist  │
+└──────────────────────┘               └──────────────┘         └───────────┘
 ```
 
-No relay change was needed: `feed` and `drain` are already keyed by session, with
-the cursor carried per request, so a producer and a reader share one session
-without either knowing about the other.
+## Why presence gating
 
-## Status: parked
+An always-on capture that always streamed would cost roughly 115 MB of data an
+hour, keep the cellular radio out of idle continuously, and — the part that
+actually decides it — bill streaming transcription by the minute around the
+clock, on the order of $200 a month to caption mostly silence.
 
-Built and building on both sides, **not yet tested end to end**. The reason is
-the user experience rather than the code: starting a broadcast takes three taps
-through Control Center, shows a red status bar throughout, and ends whenever the
-phone locks — and none of that is fixable, since iOS offers no way to start a
-broadcast programmatically.
+Gating on a reader turns all three into costs proportional to use, and it makes
+the user experience *better* rather than worse: there is nothing to start on the
+phone, because opening the Watch screen is the trigger.
 
-For audio playing out of the phone's speaker, the Watch's own microphone captions
-the same thing in one tap, with no phone app at all. The broadcast path earns its
-keep only when the audio never reaches the air (headphones) or the phone is out
-of earshot.
+Presence is a fading fact rather than a connection. watchOS allows no persistent
+connection here (TN3135), so there is no disconnect to observe — only polls that
+stop arriving. The relay's `ReaderPresence` answers "read within the last ten
+seconds", the Watch marks it on the request it was already making
+(`role=reader`), and the phone asks every three seconds.
 
 ## Why a separate phone app
 
-A broadcast upload extension can only ship inside an iOS app; there is no
-standalone extension. `PhoneCaptions.app` exists to host it and to offer the
-start button. After the first launch it need never be opened again — Control
-Center → long-press Screen Recording → Phone Captions works without it.
+The Watch app is `WKWatchOnly` — standalone, with no iPhone companion — so this
+is its own app rather than part of it. Converting to a companion would
+restructure bundle layout and provisioning for no gain.
 
-It is a separate app rather than part of the Watch app because that app is
-`WKWatchOnly` — standalone, with no iPhone companion. Adding an iOS extension
-needs an iOS app target, and converting to a companion app would restructure
-bundle layout and provisioning for no gain.
+You open it once. After that it runs on its own, and the Watch drives it.
 
-## What the spike established
+## What it can and cannot hear
 
-Before any of this was built, a throwaway version measured whether the idea was
-possible at all — because a broadcast extension might receive nothing, or receive
-buffers full of zeroes for protected content, which looks identical to success
-unless you check the samples.
+The microphone hears what is in the air: the phone's own speaker, and the room.
+It does not hear audio going to headphones, and it never hears a phone call —
+iOS gives no third-party app access to telephony audio at any price. That gap is
+what the Twilio watch-held-call design addresses instead.
 
-Findings (2026-08-12, iPhone 16, iOS 26.6):
+An earlier version of this app took a different route: a **ReplayKit broadcast
+upload extension**, which captures the playback audio of the app on screen
+digitally, headphones included. It worked — a spike confirmed the audio arrives
+and is not muted even for Apple Fitness+, which was the risk that could have
+killed it — but it was abandoned over how it felt to use:
 
-| Test | Result |
-|---|---|
-| YouTube | ~43 buffers/sec, `peak 1.000  rms 0.567` while playing, silence before |
-| Apple Fitness+ | Same — **not DRM-blocked**, the risk that could have killed the idea |
-| Format | 44.1 kHz, 2 ch, 16-bit int, interleaved |
-| Screen | Not blanked; ~61 video fps throughout, Fitness+ included |
-| Locking the phone | **Ends the broadcast** — `broadcastFinished()` right after the lock button, a clean system stop rather than a crash |
+- No API can start a broadcast; it takes three taps through Control Center every
+  single time.
+- A red status bar for the whole session.
+- **Locking the phone ends the broadcast** — measured: `broadcastFinished()`
+  fires immediately after the lock button, a clean system stop.
 
-Not tested: AirPods routing and Apple Music. Both would need running before
-relying on them.
-
-The measured levels are hot — `rms 0.567` with `peak 1.000` pinned every second is
-louder than normal program material should read — so treat the absolute numbers
-as approximate. The silence-to-signal transition is what carries the finding, and
-that is unambiguous.
+That last point is fatal for a phone in a pocket, which is the case this exists
+for. The broadcast version is in git history (`ios/PhoneCaptionsUpload`) if the
+headphone case ever becomes worth its ceremony.
 
 ## Build and run
-
-Requires a physical iPhone. Broadcast extensions do not work in the Simulator.
 
 ```bash
 cd ios
@@ -82,38 +75,38 @@ cp Shared/Secrets.example.swift Shared/Secrets.swift   # then edit relay URL + t
 xcodegen generate && open PhoneCaptions.xcodeproj
 ```
 
-This builds under a **free personal team**, which shapes two things:
+Requires a physical iPhone. Signed by a **free personal team**, which shapes two
+things:
 
 - **No entitlements.** App Groups, push, and the rest are paid-membership
   capabilities, and free provisioning refuses a build that requests one. That is
-  why the extension and the Watch agree on a fixed session id
-  (`PhoneAudio.sessionID`, in CaptionCore) rather than negotiating one — a
-  broadcast extension cannot reach its containing app without an App Group.
+  why the phone and the Watch agree on a fixed session id
+  (`PhoneAudio.sessionID`, in CaptionCore) rather than negotiating one.
 - **Seven days.** The build stops launching after a week; rebuild and reinstall.
+  An always-on utility that expires weekly is the strongest argument for paying
+  the $99.
 
 Trust the certificate on first install: Settings → General → VPN & Device
 Management.
 
 ## Using it
 
-1. Open Phone Captions once, tap **Start / Stop Broadcast**, choose Phone
-   Captions, then Start Broadcast. Afterwards Control Center → long-press Screen
-   Recording reaches it without opening the app.
+1. Open Phone Captions once and leave **Listening** on.
 2. On the Watch, open Captions and tap **iPhone audio**.
 
-Leaving the Watch screen stops reading but leaves the broadcast running — the
-same distinction as leaving call captions without hanging up.
+The phone shows which of three states it is in: off, listening with nothing
+sent, or streaming. Resting state is the middle one, and looking idle is the
+point — it means nothing is being spent.
 
 ## Diagnostics
 
-The extension has no UI, and without an App Group it cannot write anywhere the
-app can read, so it logs to the `com.jonyen.phonecaptions` subsystem at `notice`
-level — persisted to disk, so the phone can be away from the Mac and still have
-the record when it comes back.
+No App Group means the app cannot share a log file with anything, so it logs to
+the `com.jonyen.phonecaptions` subsystem at `notice` level — persisted to disk,
+so the phone can be away from the Mac and still have the record.
 
 ```bash
 sudo /usr/bin/log collect --device-name "Jon Yen iPhone" \
-  --start "2026-08-12 11:00:00" --output ~/phone.logarchive
+  --start "2026-08-12 12:00:00" --output ~/phone.logarchive
 sudo chown -R $(whoami) ~/phone.logarchive
 /usr/bin/log show ~/phone.logarchive \
   --predicate 'subsystem == "com.jonyen.phonecaptions"' --style compact
@@ -124,8 +117,9 @@ root; `log stream --device-name` no longer exists on macOS 26.
 
 ## Known limits
 
-- The broadcast ends when the phone locks.
-- It cannot be started programmatically: three taps, every time.
-- Telephony audio is out of reach — ReplayKit never sees a phone or FaceTime
-  call. That gap is what the Twilio watch-held-call design addresses instead.
+- **If iOS terminates the app, nothing on the Watch can restart it.** Mic capture
+  cannot begin from a background launch, so after a reboot or a memory kill the
+  phone app has to be opened once by hand.
+- Room audio, not a clean digital feed: distance and noise matter.
+- Nothing from headphones, and nothing from calls.
 - One session id means one phone. Fine for one person; not a design for two.

@@ -7,6 +7,7 @@ import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { CurrentCall } from "./currentCall";
+import { ReaderPresence } from "./readerPresence";
 import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
@@ -52,10 +53,11 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     transcripts: opts.transcripts,
   });
   const currentCall = new CurrentCall();
+  const readers = new ReaderPresence();
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall).catch(() => {
+    handleRequest(req, res, opts, store, currentCall, readers).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -129,6 +131,7 @@ async function handleRequest(
   opts: StartServerOptions,
   store: SessionStore,
   calls: CurrentCall,
+  readers: ReaderPresence,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -233,6 +236,25 @@ async function handleRequest(
     }
     const { events, seq } = store.drain(active.sessionId, since);
     sendJSON(res, 200, { active: true, events: flatten(events), seq });
+    return;
+  }
+
+  // Is anything reading this session? The phone asks before it streams, so
+  // audio nobody is watching never leaves the device — which is what keeps an
+  // always-running capture from costing battery, data and transcription around
+  // the clock. Read-only, and it never creates a session, so asking is cheap.
+  if (req.method === "GET" && url.pathname === "/v1/presence") {
+    const token = url.searchParams.get("token") ?? undefined;
+    if (!verifyToken(token, opts.authToken)) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const session = url.searchParams.get("session") ?? "";
+    if (!session) {
+      sendJSON(res, 400, { error: "missing session" });
+      return;
+    }
+    sendJSON(res, 200, { reader: readers.isPresent(session) });
     return;
   }
 
@@ -347,6 +369,12 @@ async function handleRequest(
         sendJSON(res, 413, { error: "body too large" });
         return;
       }
+      // A reader is watching this session rather than producing it. Marked
+      // here, on the request it was already making, so reading costs no extra
+      // round trip — and so presence expires by itself when the reading stops,
+      // which is the only signal available when no connection stays open.
+      if (url.searchParams.get("role") === "reader") readers.mark(session);
+
       store.feed(session, body, ephemeral);
       const { events, seq } = store.drain(session, since);
       sendJSON(res, 200, {

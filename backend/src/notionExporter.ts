@@ -58,6 +58,30 @@ export function createRequest(opts: NotionExporterOptions): Request {
   };
 }
 
+export const SUMMARY_TOGGLE = "Summary";
+export const TRANSCRIPT_TOGGLE = "Full transcript";
+
+/**
+ * Locate the page's Summary / Full transcript toggles by their titles, so a
+ * page exported before these existed is handled without migration.
+ */
+export async function findToggles(
+  request: Request,
+  pageId: string,
+): Promise<{ summary?: string; transcript?: string }> {
+  const page = await request(`/blocks/${pageId}/children?page_size=100`, "GET");
+  const found: { summary?: string; transcript?: string } = {};
+  for (const block of page?.results ?? []) {
+    if (block?.type !== "toggle") continue;
+    const text = (block.toggle?.rich_text ?? [])
+      .map((r: any) => r?.plain_text ?? r?.text?.content ?? "")
+      .join("");
+    if (text === SUMMARY_TOGGLE) found.summary ??= block.id;
+    if (text === TRANSCRIPT_TOGGLE) found.transcript ??= block.id;
+  }
+  return found;
+}
+
 /**
  * Adds a Summary toggle to a page that was exported before its summary
  * existed — used by the summary backfill so it updates the page in place
@@ -73,7 +97,11 @@ export function createNotionSummaryPatcher(
   return async (pageId, summary) => {
     const blocks = markdownToBlocks(parseSummary(summary).body);
     if (blocks.length === 0) return;
-    await appendToggle(request, pageId, "Summary", blocks);
+    // Replace rather than append: a regenerated summary must not leave the
+    // page carrying two "Summary" toggles.
+    const existing = await findToggles(request, pageId);
+    if (existing.summary) await request(`/blocks/${existing.summary}`, "DELETE");
+    await appendToggle(request, pageId, SUMMARY_TOGGLE, blocks);
   };
 }
 

@@ -50,7 +50,7 @@ export async function backfillSummaries(
   const delayMs = opts.delayMs ?? 1000;
   const result: SummaryBackfillResult = { summarized: 0, skipped: 0, failed: 0, patched: 0 };
 
-  for (const listed of listTranscripts(opts.dir).reverse()) {
+  for (const listed of listTranscripts(opts.dir)) {
     if (opts.limit !== undefined && result.summarized >= opts.limit) break;
     if (listed.hasSummary && !opts.force) {
       result.skipped++;

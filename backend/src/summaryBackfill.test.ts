@@ -181,20 +181,18 @@ describe("backfillSummaries", () => {
     expect(result.skipped).toBe(0);
   });
 
-  it("under force with a limit, regenerates only up to the limit and leaves the rest untouched", async () => {
-    // backfillSummaries walks listTranscripts(dir).reverse() — since listTranscripts
-    // itself returns newest-first, that reversal makes the scan oldest-first, so a
-    // limit of 2 regenerates the two oldest transcripts here (aaa, bbb) and never
-    // reaches ccc/ddd/eee. Read listTranscripts(dir).slice(0, 3) (newest-first) to
-    // grab exactly the three left untouched.
-    const names = [
+  it("under force with a limit, regenerates only the newest N", async () => {
+    // backfillSummaries walks listTranscripts(dir) directly, which is already
+    // newest-first, so a limit of 2 regenerates the two newest transcripts here
+    // (ddd, eee) and never reaches ccc/bbb/aaa.
+    const [aaa, bbb, ccc, ddd, eee] = [
       storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0)),
       storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0)),
       storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0)),
       storeSession(dir, "ddd", Date.UTC(2026, 6, 6, 4, 0, 0)),
       storeSession(dir, "eee", Date.UTC(2026, 6, 6, 5, 0, 0)),
     ];
-    for (const name of names) writeSummary(dir, name, "already done");
+    for (const name of [aaa, bbb, ccc, ddd, eee]) writeSummary(dir, name, "already done");
 
     const result = await backfillSummaries({
       dir,
@@ -205,10 +203,14 @@ describe("backfillSummaries", () => {
     });
 
     expect(result.summarized).toBe(2);
-    const untouched = listTranscripts(dir)
-      .slice(0, 3)
-      .map((t) => readFileSync(join(dir, `${t.name}.summary.md`), "utf8"));
-    expect(untouched).toEqual(["already done", "already done", "already done"]);
+    const readSummaryFile = (name: string) => readFileSync(join(dir, `${name}.summary.md`), "utf8");
+    // The two newest were regenerated.
+    expect(readSummaryFile(ddd)).toBe("Regenerated.");
+    expect(readSummaryFile(eee)).toBe("Regenerated.");
+    // The three oldest still hold their original summary text, byte-for-byte.
+    expect(readSummaryFile(aaa)).toBe("already done");
+    expect(readSummaryFile(bbb)).toBe("already done");
+    expect(readSummaryFile(ccc)).toBe("already done");
   });
 
   it("paces requests", async () => {

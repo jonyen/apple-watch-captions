@@ -11,12 +11,15 @@ enum CaptionIndicator {
     case call
     /// The call is over, or its captions are.
     case callEnded(CallEndReason)
+    /// Reading audio playing on the iPhone.
+    case phone
 
     var label: String {
         switch self {
         case .recording: return "Recording"
         case .liveOnly: return "Live only, not saved"
         case .call: return "Captioning a call"
+        case .phone: return "Reading iPhone audio"
         case .callEnded(.ended): return "Call ended"
         case .callEnded(.streamLost): return "Captions stopped"
         }
@@ -63,6 +66,10 @@ struct CaptionView: View {
                     Circle().strokeBorder(.green, lineWidth: 1.5)
                 case .call:
                     Circle().fill(.blue)
+                case .phone:
+                    // Blue like a call — audio arriving from elsewhere — but
+                    // hollow like live-only, since nothing is being saved.
+                    Circle().strokeBorder(.blue, lineWidth: 1.5)
                 case .callEnded:
                     Circle().fill(.secondary)
                 }

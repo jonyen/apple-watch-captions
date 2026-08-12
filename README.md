@@ -59,6 +59,7 @@ for the full design.
 |------|------|
 | [`watch/`](watch/README.md) | The watchOS app (SwiftUI) + `CaptionCore` Swift package (pure logic, unit-tested). Built with XcodeGen. |
 | [`mac/`](mac/README.md) | The macOS menu-bar app (SwiftUI) for live captions on desktop. Shares `CaptionCore` with the watch app; listens to mic and system audio. |
+| [`ios/`](ios/README.md) | The iPhone app (SwiftUI) and its ReplayKit broadcast extension, which captions audio playing on the phone and shows it on the Watch. Built, parked untested — see its README for why. |
 | [`backend/`](backend/README.md) | The STT relay (Node/TypeScript), deployed on Fly.io. |
 | [`docs/`](docs/) | Design specs. |
 

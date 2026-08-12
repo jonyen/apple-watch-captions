@@ -12,6 +12,8 @@ final class AppModel: ObservableObject {
         case detail(name: String)
         /// Reading a phone call the relay is captioning.
         case call
+        /// Reading audio playing on the iPhone.
+        case phone
     }
 
     /// Navigation stack above the menu.
@@ -49,6 +51,15 @@ final class AppModel: ObservableObject {
     /// never live at once.
     let callCaptions: CallCaptions
     private let callClient: RelayCallClient
+    /// Reads audio playing on the iPhone. Its own controller and transport,
+    /// because it joins a session the phone owns rather than starting one — but
+    /// it shares `store`, since only one thing is ever on screen.
+    private let phoneController: SessionController
+    /// True while the phone-audio screen is reading. Kept apart from
+    /// `capturing`, which means a mic session and drives Stop, resume and the
+    /// "Continue last" bookkeeping — none of which apply to reading a session
+    /// this Watch does not own.
+    @Published private(set) var readingPhone = false
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
@@ -71,6 +82,13 @@ final class AppModel: ObservableObject {
             // off HistoryStore, whose `detail` belongs to the history screen.
             history: historyClient
         )
+        phoneController = SessionController(
+            store: store,
+            relay: HTTPRelayClient(
+                base: base, token: Secrets.authToken,
+                fixedSessionID: PhoneAudio.sessionID),
+            audio: SilentCapture(),
+            permission: NoMicNeeded())
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
@@ -135,6 +153,28 @@ final class AppModel: ObservableObject {
     /// reading it.
     func leaveCall() {
         callCaptions.stop()
+        path = []
+    }
+
+    /// Read whatever is playing on the iPhone. The phone's broadcast extension
+    /// posts the audio; this only reads the captions back, so there is nothing
+    /// here to start, stop or save on the relay.
+    func startPhoneAudio() async {
+        currentTranscript = nil
+        readingPhone = true
+        path = [.phone]
+        // `.live` on both sides: the phone marks the session ephemeral, so the
+        // relay writes no transcript, runs no summary and exports nothing. A
+        // podcast does not belong in the transcript list.
+        await phoneController.start(mode: .live)
+    }
+
+    /// Stop reading the phone's audio. The phone keeps broadcasting — this is
+    /// the same distinction as leaving call captions without hanging up.
+    func leavePhoneAudio() {
+        guard readingPhone else { return }
+        readingPhone = false
+        phoneController.stop()
         path = []
     }
 

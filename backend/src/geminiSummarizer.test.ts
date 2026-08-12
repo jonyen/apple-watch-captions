@@ -142,4 +142,16 @@ describe("createGeminiSummarizer", () => {
       "gemini-3.6-flash-lite",
     );
   });
+
+  it("caps output tokens so both providers agree on length", async () => {
+    const fetch = vi.fn(async () => withOutputText("A chat happened."));
+    const summarize = createGeminiSummarizer("gk-123", { fetch: fetch as any });
+
+    await summarize(transcript());
+
+    const body = JSON.parse((fetch.mock.calls[0] as any)[1].body);
+    expect(body.generation_config.max_output_tokens).toBe(16000);
+    // The existing thinking_level must survive the edit.
+    expect(body.generation_config.thinking_level).toBe("low");
+  });
 });

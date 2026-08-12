@@ -41,7 +41,9 @@ export function createGeminiSummarizer(
         // Summarizing is not a reasoning-heavy task, and the free tier is
         // capped on daily tokens — thinking defaults high enough to dominate
         // the bill (69 thought tokens for a 2-token reply, measured).
-        generation_config: { thinking_level: "low" },
+        // The output cap matches the Claude path so the two providers produce
+        // comparable lengths from the same prompt.
+        generation_config: { thinking_level: "low", max_output_tokens: 16000 },
       }),
     } as RequestInit);
 

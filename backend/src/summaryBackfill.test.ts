@@ -213,6 +213,21 @@ describe("backfillSummaries", () => {
     expect(readSummaryFile(ccc)).toBe("already done");
   });
 
+  it("bounds attempts by limit even when every call fails, so a limited run cannot bill for the whole archive", async () => {
+    storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0));
+    storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0));
+    storeSession(dir, "ccc", Date.UTC(2026, 6, 6, 3, 0, 0));
+    storeSession(dir, "ddd", Date.UTC(2026, 6, 6, 4, 0, 0));
+    const summarize = vi.fn(async () => {
+      throw new Error("credit balance too low");
+    });
+
+    const result = await backfillSummaries({ dir, summarize, delayMs: 0, limit: 2 });
+
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ summarized: 0, failed: 2 });
+  });
+
   it("paces requests", async () => {
     storeSession(dir, "aaa", Date.UTC(2026, 6, 6, 1, 0, 0));
     storeSession(dir, "bbb", Date.UTC(2026, 6, 6, 2, 0, 0));

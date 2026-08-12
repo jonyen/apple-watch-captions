@@ -9,8 +9,11 @@ struct HomeView: View {
     let onLive: () -> Void
     let onContinue: () -> Void
     let onBrowse: () -> Void
-    /// Read audio playing on the iPhone.
+    /// Read audio playing on the iPhone. Offered only while the phone is
+    /// actually broadcasting — there is nothing to read otherwise, and the row
+    /// would only lead to a screen explaining its own uselessness.
     let onPhone: () -> Void
+    var phoneBroadcasting: Bool = false
     /// Which build this is, so a bug report can name one. Injectable for previews.
     var versionLabel: String = AppBuild.versionLabel
 
@@ -60,8 +63,10 @@ struct HomeView: View {
                     Label("Continue last", systemImage: "arrow.clockwise")
                 }
             }
-            Button(action: onPhone) {
-                Label("iPhone audio", systemImage: "iphone")
+            if phoneBroadcasting {
+                Button(action: onPhone) {
+                    Label("iPhone audio", systemImage: "iphone")
+                }
             }
             Button(action: onBrowse) {
                 Label("Transcripts", systemImage: "list.bullet")

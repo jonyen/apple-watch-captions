@@ -64,6 +64,16 @@ final class AppModel: ObservableObject {
     /// "Continue last" bookkeeping — none of which apply to reading a session
     /// this Watch does not own.
     @Published private(set) var readingPhone = false
+    /// Whether the phone has fed the shared session recently.
+    ///
+    /// Drives two things: whether the menu offers iPhone audio at all, and
+    /// whether that screen shows captions or the instructions for starting a
+    /// broadcast. A row that is only useful while the phone is broadcasting has
+    /// no business sitting on the menu the rest of the time — and with
+    /// auto-open on, it is rarely seen at all.
+    @Published private(set) var phoneBroadcasting = false
+    /// Watches for the broadcast starting while the screen is open.
+    private var phonePresencePoll: Task<Void, Never>?
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
@@ -138,10 +148,14 @@ final class AppModel: ObservableObject {
         // Then the phone: if it is broadcasting, reading it is almost certainly
         // why the app is being opened. Same shape as the call check, and off by
         // default is a setting rather than an argument.
-        if settings.autoOpenPhoneAudio, await phoneIsBroadcasting() {
+        phoneBroadcasting = await phoneIsBroadcasting()
+        if settings.autoOpenPhoneAudio, phoneBroadcasting {
             await startPhoneAudio()
             return
         }
+        // Keep asking while the app is on screen, so starting the broadcast on
+        // the phone makes the menu row appear without a trip out and back.
+        watchForBroadcast()
 
         switch launchAction(last: lastSession, now: Date(),
                             stoppedExplicitly: stoppedExplicitly) {
@@ -179,6 +193,7 @@ final class AppModel: ObservableObject {
         currentTranscript = nil
         readingPhone = true
         path = [.phone]
+        watchForBroadcast()
         // `.live` on both sides: the phone marks the session ephemeral, so the
         // relay writes no transcript, runs no summary and exports nothing. A
         // podcast does not belong in the transcript list.
@@ -190,8 +205,26 @@ final class AppModel: ObservableObject {
     func leavePhoneAudio() {
         guard readingPhone else { return }
         readingPhone = false
+        // The poll keeps running: back on the menu, the same answer decides
+        // whether the row is there.
         phoneController.stop()
         path = []
+    }
+
+    /// Poll while the phone screen is open, so starting the broadcast on the
+    /// phone replaces the instructions here without anything to tap. Three
+    /// seconds is well inside the relay's ten-second presence window, and one
+    /// small request costs far less than the captions it is waiting for.
+    private func watchForBroadcast() {
+        phonePresencePoll?.cancel()
+        phonePresencePoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let producing = await self.phoneIsBroadcasting()
+                if self.phoneBroadcasting != producing { self.phoneBroadcasting = producing }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
     }
 
     /// True when the phone has fed the shared session recently.

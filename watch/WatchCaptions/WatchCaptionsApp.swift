@@ -51,7 +51,8 @@ private struct RootView: View {
                     onLive: { Task { await model.startLive() } },
                     onContinue: { Task { await model.continueLast() } },
                     onBrowse: { Task { await model.showHistory() } },
-                    onPhone: { Task { await model.startPhoneAudio() } })
+                    onPhone: { Task { await model.startPhoneAudio() } },
+                    phoneBroadcasting: model.phoneBroadcasting)
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -105,8 +106,15 @@ private struct RootView: View {
             ErrorView(message: message,
                       onRetry: { Task { await model.startPhoneAudio() } })
         case .connecting, .listening:
-            CaptionView(store: store, indicator: .phone,
-                        textSize: model.settings.captionTextSize, onStop: nil)
+            // Captions win the moment any arrive, even if the presence poll has
+            // not caught up — what is on screen is better evidence than what
+            // the relay said three seconds ago.
+            if model.phoneBroadcasting || store.hasCaptions {
+                CaptionView(store: store, indicator: .phone,
+                            textSize: model.settings.captionTextSize, onStop: nil)
+            } else {
+                PhoneWaitingView()
+            }
         }
     }
 

@@ -28,7 +28,7 @@ struct ContentView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("Phone Captions")
+            .navigationTitle("Watch Captions Relay")
             .navigationBarTitleDisplayMode(.inline)
         }
         // Starts on launch, so the app is useful without being opened again.

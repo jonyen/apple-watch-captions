@@ -98,6 +98,21 @@ The phone shows which of three states it is in: off, listening with nothing
 sent, or streaming. Resting state is the middle one, and looking idle is the
 point — it means nothing is being spent.
 
+## Icon
+
+`PhoneCaptions/Icon/AppIcon.svg` is the editable source; the asset catalog holds
+the render. Same gradient and caption bubble as the watch app — these are
+siblings — with arcs for the half this app does, which is passing audio on.
+
+```bash
+qlmanage -t -s 1024 -o /tmp/icon PhoneCaptions/Icon/AppIcon.svg
+cp /tmp/icon/AppIcon.svg.png PhoneCaptions/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+```
+
+QuickLook rather than ImageMagick: `magick` renders this SVG with the gradient
+dropped and the arcs missing entirely, and it fails silently — check the PNG,
+not the exit code.
+
 ## Diagnostics
 
 No App Group means the app cannot share a log file with anything, so it logs to

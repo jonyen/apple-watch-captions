@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3D8BFF"/>
+      <stop offset="1" stop-color="#1452D6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Same gradient as the watch app: these are siblings, not strangers. -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- The caption bubble, shifted left to make room for the arcs that say
+       this one relays rather than reads. -->
+  <path d="M179 300 h425
+           a68 68 0 0 1 68 68
+           v226
+           a68 68 0 0 1 -68 68
+           H392
+           l-113 100
+           v-100
+           H179
+           a68 68 0 0 1 -68 -68
+           V368
+           a68 68 0 0 1 68 -68
+           z" fill="#ffffff"/>
+
+  <!-- Caption lines, descending in width and shade like the watch icon. -->
+  <rect x="207" y="371" width="371" height="44" rx="22" fill="#1452D6"/>
+  <rect x="207" y="459" width="304" height="44" rx="22" fill="#3D8BFF"/>
+  <rect x="207" y="547" width="213" height="44" rx="22" fill="#9DBEFF"/>
+
+  <!-- Sending it on. Three arcs, brightening outward, so the icon reads as a
+       relay at a glance rather than as a second captions app. -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M699 405 a136 136 0 0 1 0 214" stroke="#1452D6" stroke-width="42"/>
+    <path d="M778 344 a232 232 0 0 1 0 336" stroke="#3D8BFF" stroke-width="42"/>
+    <path d="M857 283 a328 328 0 0 1 0 458" stroke="#9DBEFF" stroke-width="42"/>
+  </g>
+</svg>

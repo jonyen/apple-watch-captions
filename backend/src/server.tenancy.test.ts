@@ -206,6 +206,41 @@ describe("cross-tenant isolation", () => {
     expect(aliceBody.transcripts[0].preview).toBe("alice's private conversation");
   });
 
+  it("does not report one user's presence as another's", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const alice = identity.registerDevice("watch");
+    const mallory = identity.registerDevice("watch");
+    server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => new FakeTranscriptionProvider(),
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    // Alice marks herself present as both reader and producer on a session id
+    // Mallory also knows, since ids are client-chosen and not secret.
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=shared-id&role=reader&ephemeral=1`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${alice.token}` },
+      body: Buffer.alloc(320),
+    });
+
+    const malloryRes = await fetch(
+      `http://127.0.0.1:${port}/v1/presence?session=shared-id`,
+      { headers: { authorization: `Bearer ${mallory.token}` } },
+    );
+    expect(await malloryRes.json()).toEqual({ reader: false, producer: false });
+
+    // And Alice must still see her own presence — proving this is isolation,
+    // not just everything being broken.
+    const aliceRes = await fetch(
+      `http://127.0.0.1:${port}/v1/presence?session=shared-id`,
+      { headers: { authorization: `Bearer ${alice.token}` } },
+    );
+    expect(await aliceRes.json()).toEqual({ reader: true, producer: true });
+  });
+
   // The tests above append directly through TranscriptStore or check
   // isolation at a single route; none of them drive a caption all the way
   // from a live session through SessionStore into TranscriptStore and check

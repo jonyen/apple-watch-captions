@@ -434,12 +434,12 @@ async function handleRequest(
     }
     if (req.method === "POST") {
       const role = url.searchParams.get("role");
-      if (role === "producer") readers.markProducer(session);
-      if (role === "reader") readers.mark(session);
+      if (role === "producer") readers.markProducer(principal.userId, session);
+      if (role === "reader") readers.mark(principal.userId, session);
     }
     sendJSON(res, 200, {
-      reader: readers.isPresent(session),
-      producer: readers.isProducing(session),
+      reader: readers.isPresent(principal.userId, session),
+      producer: readers.isProducing(principal.userId, session),
     });
     return;
   }
@@ -593,11 +593,11 @@ async function handleRequest(
       // here, on the request it was already making, so reading costs no extra
       // round trip — and so presence expires by itself when the reading stops,
       // which is the only signal available when no connection stays open.
-      if (url.searchParams.get("role") === "reader") readers.mark(session);
+      if (url.searchParams.get("role") === "reader") readers.mark(principal.userId, session);
 
       // Audio arriving is what "the phone is broadcasting" means. The watch
       // asks about this to open straight into captions on launch.
-      if (body.length > 0) readers.markProducer(session);
+      if (body.length > 0) readers.markProducer(principal.userId, session);
 
       store.feed(principal.userId, session, body, ephemeral);
       const { events, seq } = store.drain(principal.userId, session, since);

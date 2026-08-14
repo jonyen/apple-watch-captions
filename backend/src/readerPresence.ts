@@ -1,6 +1,19 @@
 /** How recently a session must have been read to count as being watched. */
 const DEFAULT_WINDOW_MS = 10_000;
 
+/**
+ * Presence is per user as well as per session, for the same reason
+ * `SessionStore` is keyed that way: session ids are client-chosen and not
+ * secret, so keying on id alone would let one user's presence answer another
+ * user's question.
+ *
+ * Length-prefixed rather than a plain `${userId}:${sessionId}` join — see
+ * `sessionKey` in `sessionStore.ts` for why a plain join is not injective.
+ */
+function presenceKey(userId: string, sessionId: string): string {
+  return `${userId.length}:${userId}:${sessionId}`;
+}
+
 export interface ReaderPresenceOptions {
   /** How long a mark counts for. */
   windowMs?: number;
@@ -32,49 +45,52 @@ export class ReaderPresence {
     this.now = opts.now ?? (() => Date.now());
   }
 
-  /** Record that `sessionId` was just read. */
-  mark(sessionId: string): void {
-    this.lastSeen.set(sessionId, this.now());
+  /** Record that `userId` just read `sessionId`. */
+  mark(userId: string, sessionId: string): void {
+    this.lastSeen.set(presenceKey(userId, sessionId), this.now());
   }
 
-  /** True when `sessionId` was read within the window. */
-  isPresent(sessionId: string): boolean {
-    const seen = this.lastSeen.get(sessionId);
+  /** True when `userId` read `sessionId` within the window. */
+  isPresent(userId: string, sessionId: string): boolean {
+    const key = presenceKey(userId, sessionId);
+    const seen = this.lastSeen.get(key);
     if (seen === undefined) return false;
     if (this.now() - seen > this.windowMs) {
       // Drop it on the way past rather than sweeping on a timer: this is asked
       // about once a session, so entries expire exactly when someone looks.
-      this.lastSeen.delete(sessionId);
+      this.lastSeen.delete(key);
       return false;
     }
     return true;
   }
 
-  /** Record that `sessionId` was just fed audio by whatever produces it. */
-  markProducer(sessionId: string): void {
-    this.lastFed.set(sessionId, this.now());
+  /** Record that `userId` just fed `sessionId` audio by whatever produces it. */
+  markProducer(userId: string, sessionId: string): void {
+    this.lastFed.set(presenceKey(userId, sessionId), this.now());
   }
 
   /**
-   * True when `sessionId` was fed within the window.
+   * True when `userId` fed `sessionId` within the window.
    *
    * The mirror of `isPresent`, and what lets the watch open straight into
    * captions when the phone is already broadcasting — the same trick launching
    * into a live call uses, pointed at the phone instead.
    */
-  isProducing(sessionId: string): boolean {
-    const fed = this.lastFed.get(sessionId);
+  isProducing(userId: string, sessionId: string): boolean {
+    const key = presenceKey(userId, sessionId);
+    const fed = this.lastFed.get(key);
     if (fed === undefined) return false;
     if (this.now() - fed > this.windowMs) {
-      this.lastFed.delete(sessionId);
+      this.lastFed.delete(key);
       return false;
     }
     return true;
   }
 
-  /** Forget `sessionId` entirely, for a reader that has explicitly left. */
-  clear(sessionId: string): void {
-    this.lastSeen.delete(sessionId);
-    this.lastFed.delete(sessionId);
+  /** Forget `userId`'s presence on `sessionId`, for a reader that has explicitly left. */
+  clear(userId: string, sessionId: string): void {
+    const key = presenceKey(userId, sessionId);
+    this.lastSeen.delete(key);
+    this.lastFed.delete(key);
   }
 }

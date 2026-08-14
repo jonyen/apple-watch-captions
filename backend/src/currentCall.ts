@@ -5,6 +5,12 @@ export interface ActiveCall {
   /** The SessionStore session carrying this call's captions. */
   sessionId: string;
   callSid: string;
+  /**
+   * The principal that authorised the Twilio media-stream WebSocket. This
+   * call's captions belong to them, whoever later polls for them — see
+   * `SessionStore`, which is now keyed by user as well as session id.
+   */
+  userId: string;
 }
 
 /**
@@ -20,8 +26,8 @@ export class CurrentCall {
   private active: ActiveCall | null = null;
   private reason: CallEndReason | null = null;
 
-  begin(sessionId: string, callSid: string): void {
-    this.active = { sessionId, callSid };
+  begin(sessionId: string, callSid: string, userId: string): void {
+    this.active = { sessionId, callSid, userId };
     this.reason = null;
   }
 

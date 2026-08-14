@@ -10,13 +10,13 @@ describe("CurrentCall", () => {
 
   it("holds the call it was given", () => {
     const calls = new CurrentCall();
-    calls.begin("CA1", "CA1");
-    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
+    calls.begin("CA1", "CA1", "user-a");
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
   });
 
   it("records how the call ended", () => {
     const calls = new CurrentCall();
-    calls.begin("CA1", "CA1");
+    calls.begin("CA1", "CA1", "user-a");
 
     expect(calls.end("CA1", "ended")).toBe(true);
 
@@ -28,21 +28,21 @@ describe("CurrentCall", () => {
   // call that replaced it.
   it("ignores an end from a call that is no longer current", () => {
     const calls = new CurrentCall();
-    calls.begin("CA1", "CA1");
-    calls.begin("CA2", "CA2");
+    calls.begin("CA1", "CA1", "user-a");
+    calls.begin("CA2", "CA2", "user-a");
 
     expect(calls.end("CA1", "stream_lost")).toBe(false);
 
-    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2" });
+    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-a" });
     expect(calls.lastReason()).toBeNull();
   });
 
   it("clears a stale end reason when a new call begins", () => {
     const calls = new CurrentCall();
-    calls.begin("CA1", "CA1");
+    calls.begin("CA1", "CA1", "user-a");
     calls.end("CA1", "stream_lost");
 
-    calls.begin("CA2", "CA2");
+    calls.begin("CA2", "CA2", "user-a");
 
     expect(calls.lastReason()).toBeNull();
   });

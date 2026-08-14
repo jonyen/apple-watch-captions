@@ -34,7 +34,7 @@ function harness() {
   });
   const calls = new CurrentCall();
   const ws = new FakeSocket();
-  handleTwilioStream(ws, store, calls);
+  handleTwilioStream(ws, store, calls, "user-a");
   return { ws, store, calls, providers, seen };
 }
 
@@ -55,7 +55,7 @@ describe("handleTwilioStream", () => {
 
     ws.send(startFrame("CA1"));
 
-    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
     expect(seen).toEqual([{ telephony: true }]);
   });
 
@@ -115,7 +115,7 @@ describe("handleTwilioStream", () => {
 
     ws.send({ event: "dtmf", dtmf: { digit: "1" } });
 
-    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1" });
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
   });
 
   // A replaced call is driven by a *second* socket/handler, so its old
@@ -138,8 +138,8 @@ describe("handleTwilioStream", () => {
     const calls = new CurrentCall();
     const wsA = new FakeSocket();
     const wsB = new FakeSocket();
-    handleTwilioStream(wsA, store, calls);
-    handleTwilioStream(wsB, store, calls);
+    handleTwilioStream(wsA, store, calls, "user-a");
+    handleTwilioStream(wsB, store, calls, "user-a");
 
     wsA.send(startFrame("CA1"));
     wsB.send(startFrame("CA2"));
@@ -156,7 +156,7 @@ describe("handleTwilioStream", () => {
     // leak anything — no third provider, and CA2 is untouched.
     wsA.close();
     expect(providers).toHaveLength(2);
-    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2" });
+    expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-a" });
 
     // CA2 is still genuinely live and ends normally, closing its provider —
     // confirming the fix did not also break the happy path.

@@ -195,13 +195,19 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
         ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
         : undefined;
-      if (!resolveToken(opts.identity, fromPath ?? token)) {
+      const principal = resolveToken(opts.identity, fromPath ?? token);
+      if (!principal) {
         console.log("twilio upgrade rejected: token missing or wrong");
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) =>
-        handleTwilioStream(ws as unknown as TwilioSocketLike, store, currentCall));
+        handleTwilioStream(
+          ws as unknown as TwilioSocketLike,
+          store,
+          currentCall,
+          principal.userId,
+        ));
       return;
     }
 
@@ -373,7 +379,7 @@ async function handleRequest(
     // only its captions died — so this is `stream_lost`, not `ended`:
     // reporting "ended" here would tell the watch the call is over while you
     // may still be talking.
-    if (active && !store.has(active.sessionId)) {
+    if (active && !store.has(active.userId, active.sessionId)) {
       sendJSON(res, 200, { active: false, reason: "stream_lost", events: [], seq: since });
       return;
     }
@@ -387,7 +393,7 @@ async function handleRequest(
       });
       return;
     }
-    const { events, seq } = store.drain(active.sessionId, since);
+    const { events, seq } = store.drain(active.userId, active.sessionId, since);
     sendJSON(res, 200, { active: true, events: flatten(events), seq });
     return;
   }
@@ -557,7 +563,7 @@ async function handleRequest(
       // a new one. Only meaningful before the session exists; later posts for
       // the same session carry the param but must not re-bind it.
       const resume = url.searchParams.get("resume");
-      if (resume && !ephemeral && !store.has(session)) {
+      if (resume && !ephemeral && !store.has(principal.userId, session)) {
         opts.transcripts?.reopen(session, resume);
       }
 
@@ -578,8 +584,8 @@ async function handleRequest(
       // asks about this to open straight into captions on launch.
       if (body.length > 0) readers.markProducer(session);
 
-      store.feed(session, body, ephemeral);
-      const { events, seq } = store.drain(session, since);
+      store.feed(principal.userId, session, body, ephemeral);
+      const { events, seq } = store.drain(principal.userId, session, since);
       sendJSON(res, 200, {
         events: flatten(events),
         seq,
@@ -588,7 +594,7 @@ async function handleRequest(
         // and always absent for a live session, which creates none. Asking the
         // store rather than the query string keeps the answer stable for the
         // whole session, even if a later post drops the flag.
-        transcript: store.isEphemeral(session)
+        transcript: store.isEphemeral(principal.userId, session)
           ? undefined
           : opts.transcripts?.activeName(session),
       });
@@ -596,8 +602,8 @@ async function handleRequest(
     }
 
     // /v1/stop — drain any remaining events, then tear the session down.
-    const { events, seq } = store.drain(session, since);
-    store.stop(session);
+    const { events, seq } = store.drain(principal.userId, session, since);
+    store.stop(principal.userId, session);
     sendJSON(res, 200, { events: flatten(events), seq });
     return;
   }

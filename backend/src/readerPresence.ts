@@ -39,14 +39,18 @@ export class ReaderPresence {
   private readonly now: () => number;
   private readonly lastSeen = new Map<string, number>();
   private readonly lastFed = new Map<string, number>();
+  /** When `evictStale` last walked the maps; see there for why it is throttled. */
+  private lastSweep: number;
 
   constructor(opts: ReaderPresenceOptions = {}) {
     this.windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS;
     this.now = opts.now ?? (() => Date.now());
+    this.lastSweep = this.now();
   }
 
   /** Record that `userId` just read `sessionId`. */
   mark(userId: string, sessionId: string): void {
+    this.evictStale();
     this.lastSeen.set(presenceKey(userId, sessionId), this.now());
   }
 
@@ -66,6 +70,7 @@ export class ReaderPresence {
 
   /** Record that `userId` just fed `sessionId` audio by whatever produces it. */
   markProducer(userId: string, sessionId: string): void {
+    this.evictStale();
     this.lastFed.set(presenceKey(userId, sessionId), this.now());
   }
 
@@ -85,6 +90,40 @@ export class ReaderPresence {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Drop every entry that has already expired, whether or not anyone ever
+   * asks about it again.
+   *
+   * `isPresent`/`isProducing` delete on the way past, but only the one key
+   * they were handed — so a key nobody queries a second time was immortal,
+   * and `POST /v1/audio?session=<random>&role=reader` mints one per request.
+   * Nothing swept, nothing capped, on a 256 MB machine that Fly never
+   * restarts (`auto_stop_machines = "off"`). The same shape as
+   * `RegistrationLimiter.evictStale`, for the same reason.
+   *
+   * Swept from the write paths only — a read is already self-cleaning — and
+   * at most once per window, because unlike registration these run about once
+   * a second per device while captioning and this is an O(n) walk. That
+   * throttle is what bounds the maps: entries can only accumulate for one
+   * window before the next sweep clears whatever went stale.
+   */
+  private evictStale(): void {
+    const now = this.now();
+    if (now - this.lastSweep < this.windowMs) return;
+    this.lastSweep = now;
+    const cutoff = now - this.windowMs;
+    for (const map of [this.lastSeen, this.lastFed]) {
+      for (const [key, at] of map) {
+        if (at < cutoff) map.delete(key);
+      }
+    }
+  }
+
+  /** How many keys are held across both maps. Exposed for testing eviction. */
+  size(): number {
+    return this.lastSeen.size + this.lastFed.size;
   }
 
   /** Forget `userId`'s presence on `sessionId`, for a reader that has explicitly left. */

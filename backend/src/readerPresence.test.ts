@@ -71,6 +71,38 @@ describe("ReaderPresence", () => {
     expect(presence.isPresent("u1", "phone-audio")).toBe(false);
   });
 
+  // Entries used to be dropped only when that same key was queried again
+  // after expiring — so `POST /v1/audio?session=<random>&role=reader`, which
+  // nobody ever queries, left a key behind forever. Nothing swept, nothing
+  // capped, on a 256 MB machine that never restarts.
+  it("evicts stale entries nobody asks about again", () => {
+    const clock = { t: 0 };
+    const presence = at(clock);
+    for (let i = 0; i < 50; i += 1) presence.mark("u1", `never-read-${i}`);
+    presence.markProducer("u1", "never-asked-about");
+    expect(presence.size()).toBe(51);
+
+    // Long enough after that every one of those entries is dead.
+    clock.t = 10_001;
+    presence.mark("u1", "phone-audio");
+
+    expect(presence.size()).toBe(1);
+    expect(presence.isPresent("u1", "phone-audio")).toBe(true);
+  });
+
+  it("does not evict entries that are still within the window", () => {
+    const clock = { t: 0 };
+    const presence = at(clock);
+    presence.mark("u1", "reading");
+    presence.markProducer("u1", "producing");
+
+    clock.t = 10_000;
+    presence.mark("u1", "another");
+
+    expect(presence.isPresent("u1", "reading")).toBe(true);
+    expect(presence.isProducing("u1", "producing")).toBe(true);
+  });
+
   // Isolation: each assertion below is paired with a check that the other
   // user's own answer is unaffected, so a store that merely lost every entry
   // could not pass by accident.

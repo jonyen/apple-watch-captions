@@ -144,9 +144,12 @@ recorded in access logs, proxy logs, and `Referer` headers, which is
 unacceptable once the token is a real user's credential rather than a
 single shared development secret.
 
-The `/app` viewer is the one exception — a browser cannot set headers on a
-top-level navigation. It keeps a URL-borne token, which is a known weakness; a
-real session cookie is deferred to a later spec.
+The `/app` viewer needs no exception. The page itself is unauthenticated static
+HTML containing no user data; the user pastes a token into `localStorage` and
+the page's own JavaScript fetches data with it at `viewerPage.ts:70`. Because
+that is a `fetch` rather than a top-level navigation, it can set an
+`Authorization` header, so the viewer moves to bearer tokens along with
+everything else.
 
 ### Out of scope, flagged
 
@@ -163,7 +166,7 @@ addressed here.
 | `readerPresence.ts`, `/v1/presence` | Scoped by `userId`, or one user's phone opens another user's watch. |
 | `/v1/usage` | Reports the operator's Deepgram and Fly bill, not a per-user figure. Gated behind a new `ADMIN_TOKEN` env var; no longer reachable with a device token. |
 | `settings.ts`, `settingsStore.ts`, `/v1/settings` | **Deleted.** Settings move to WatchConnectivity and their canonical shape moves to `CaptionCore` (section 7). See the provider note below. |
-| `viewerPage.ts`, `/app` | Scoped by the device token in the URL, per section 4. |
+| `viewerPage.ts`, `/app` | Page stays unauthenticated static HTML; its `fetch` at line 70 moves the token to an `Authorization` header and the data it reads is scoped by the resolved `userId`. |
 
 ### Provider selection after settings leave the relay
 
@@ -388,7 +391,9 @@ Then the client, once membership is active:
   reference implementation is `mac/MacCaptions/LocalSpeechRelay.swift`.
 - Per-user bring-your-own transcription API keys.
 - Twilio webhook signature validation.
-- A real session cookie for `/app`.
+- Replacing the `/app` viewer's pasted-token-in-`localStorage` login with a real
+  session. Bearer headers make it no worse than today, but it remains a weak
+  authentication story.
 - Google Drive and Dropbox destinations. Google's Drive scopes are restricted
   and carry a recurring OAuth verification review that is not worth the overhead
   at this stage.

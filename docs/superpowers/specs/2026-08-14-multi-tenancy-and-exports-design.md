@@ -162,8 +162,24 @@ addressed here.
 | `transcriptStore.ts` | Every method takes `userId`; paths become `<root>/<userId>/`. `FinalizedTranscript` gains `userId`. File logic is otherwise unchanged. |
 | `readerPresence.ts`, `/v1/presence` | Scoped by `userId`, or one user's phone opens another user's watch. |
 | `/v1/usage` | Reports the operator's Deepgram and Fly bill, not a per-user figure. Gated behind a new `ADMIN_TOKEN` env var; no longer reachable with a device token. |
-| `settingsStore.ts`, `/v1/settings` | **Deleted.** Settings move to WatchConnectivity (section 7). |
+| `settings.ts`, `settingsStore.ts`, `/v1/settings` | **Deleted.** Settings move to WatchConnectivity and their canonical shape moves to `CaptionCore` (section 7). See the provider note below. |
 | `viewerPage.ts`, `/app` | Scoped by the device token in the URL, per section 4. |
+
+### Provider selection after settings leave the relay
+
+`server.ts:62` currently reads `settings.get().provider` to choose the
+transcription provider for each new session. Deleting the relay's settings
+therefore removes provider selection unless it is replaced.
+
+The provider moves to a per-session parameter, which is what the WebSocket path
+already does: `/stream` accepts `?provider=` and validates it against
+`PROVIDER_NAMES` at `server.ts:111`. `POST /v1/audio` gains the same parameter
+with the same validation, read only when a session is created so that changing
+the provider mid-conversation cannot swap engines partway through — matching the
+behavior the existing comment at `server.ts:59` describes.
+
+An absent or unrecognized parameter falls back to the relay's configured default
+provider rather than failing the request.
 
 ## 6. Export destinations
 
@@ -262,6 +278,36 @@ coalesces intermediate ones, which matches settings semantics exactly — only t
 current value matters. Values written while the watch is unreachable are
 delivered when it reconnects.
 
+The `Settings` shape, its defaults, and its validation move from
+`backend/src/settings.ts` into the `CaptionCore` package. `CaptionCore` is
+already a dependency of the watch, phone, and mac targets, so this makes it
+impossible for the three to disagree about a default or a valid range — which
+was previously guaranteed only by the relay being the single copy.
+
+### Caption legibility
+
+The target audience skews older, and the current presentation serves it poorly
+in two independent ways.
+
+**Dynamic Type is ignored.** `CaptionView.swift:44` renders with
+`.font(.system(size: textSize))`, a fixed point size. A user who has already
+raised Text Size in watchOS Settings sees no effect here. Captions switch to
+`@ScaledMetric` so the system accessibility setting scales the configured size,
+making the in-app slider an adjustment on top of the system preference rather
+than a replacement for it. This is the more important of the two fixes, because
+it helps users who never open the app's settings screen.
+
+**The default is too small.** `captionTextSize` moves from 16 to **22**, and
+`MAX_TEXT_SIZE` rises from 30 to **40**; `MIN_TEXT_SIZE` stays at 12.
+
+22pt is chosen as the largest size that still keeps roughly three to four words
+per line on a 41 mm case. Larger defaults read more easily in isolation but drop
+to two or three words per line, at which point a reader loses the thread of a
+fast speaker across line breaks. The raised ceiling exists because the range is
+the user's choice to make; capping it at 30 decides for someone with more vision
+loss than the default anticipates. With Dynamic Type scaling applied on top, the
+effective ceiling is higher still.
+
 ### Export configuration UI
 
 One `ExportDestination` protocol with local implementations for Files and share
@@ -319,7 +365,8 @@ Backend first, since none of it is blocked on the paid membership:
 3. Scope `sessionStore.ts` — the live-caption breach.
 4. Scope `transcriptStore.ts` and `readerPresence.ts`; write the boot migration.
 5. Pairing endpoints.
-6. Delete `settingsStore.ts` and `/v1/settings`.
+6. Thread `provider` per session onto `POST /v1/audio`; delete `settings.ts`,
+   `settingsStore.ts`, and `/v1/settings`.
 7. `export_destinations` table; convert the Notion exporter to per-user tokens.
 8. Email destination with confirmation flow.
 
@@ -328,7 +375,9 @@ Then the client, once membership is active:
 9. Watch target relocation and `WKRunsIndependentlyOfCompanionApp`.
 10. `DeviceIdentity.swift` and Keychain storage in both apps.
 11. Pairing UI on both.
-12. Settings over WatchConnectivity; delete `RelaySettingsClient.swift`.
+12. Move `Settings` into `CaptionCore`; settings over WatchConnectivity; delete
+    `RelaySettingsClient.swift`. Raise the caption default to 22pt, the ceiling
+    to 40, and switch `CaptionView` to `@ScaledMetric`.
 13. Export configuration UI; Files and share sheet destinations.
 
 ## 11. Out of scope

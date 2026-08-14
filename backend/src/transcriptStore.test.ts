@@ -302,6 +302,11 @@ describe("userDir", () => {
     expect(() => userDir(root, "a\\b")).toThrow();
     expect(() => userDir(root, "a\0b")).toThrow();
     expect(() => userDir(root, "")).toThrow();
+    // A denylist of ".." + separators + null bytes still lets a bare "."
+    // through, which `join(root, ".")` resolves to `root` itself — mapping
+    // this user onto the shared legacy directory rather than escaping it,
+    // but breaking the one-directory-per-user invariant all the same.
+    expect(() => userDir(root, ".")).toThrow();
   });
 });
 

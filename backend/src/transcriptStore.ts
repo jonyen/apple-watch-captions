@@ -53,26 +53,20 @@ interface ActiveTranscript {
  * Where one user's transcripts live.
  *
  * `userId` reaches the filesystem as a path segment, so it is validated the
- * same way `isSafeName` guards transcript names one level down: no `..`, no
- * path separator, no null byte. User ids are server-generated UUIDs today —
- * this rejection path is not reachable in practice — but the check must not
- * depend on that remaining true.
+ * same way `isSafeName` guards transcript names one level down: an
+ * allowlist, not a denylist of specific bad substrings. A denylist of `..`,
+ * path separators, and null bytes still lets a bare `.` through — which
+ * resolves to `root` itself and maps every such user onto the shared
+ * legacy directory rather than merely failing to escape it — plus Unicode
+ * separator look-alikes and percent-encoded forms. User ids are
+ * server-generated UUIDs today — this rejection path is not reachable in
+ * practice — but the check must not depend on that remaining true.
  */
 export function userDir(root: string, userId: string): string {
-  if (!isSafeUserId(userId)) {
+  if (!isSafeName(userId)) {
     throw new Error(`unsafe userId for transcript directory: ${JSON.stringify(userId)}`);
   }
   return join(root, userId);
-}
-
-function isSafeUserId(userId: string): boolean {
-  return (
-    userId.length > 0 &&
-    !userId.includes("..") &&
-    !userId.includes("/") &&
-    !userId.includes("\\") &&
-    !userId.includes("\0")
-  );
 }
 
 /**
@@ -375,6 +369,12 @@ export function readExportMarker(dir: string, name: string): ExportMarker | null
  * directory handed to them by their caller (Task 12 moves them onto
  * per-user directories) and have no user to attribute a rebuilt transcript
  * to. Callers that do know the owner should pass it.
+ *
+ * That default is a stopgap, not a value meant to travel further: `""` is
+ * exactly what `userDir` rejects, so a `FinalizedTranscript` built this way
+ * must not be handed to `finalizer.ts`'s `run()` (which resolves a directory
+ * from `t.userId`) until Task 12 gives the backfill sweeps real per-user
+ * transcripts to rebuild from.
  */
 export function rebuildFinalized(
   name: string,

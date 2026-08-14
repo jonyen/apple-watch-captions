@@ -7,7 +7,7 @@ import { startServer, CaptionServer } from "./server";
 import { IdentityStore } from "./identityStore";
 import { openDb } from "./db";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
-import { TranscriptStore } from "./transcriptStore";
+import { TranscriptStore, listTranscripts, userDir } from "./transcriptStore";
 
 let server: CaptionServer | undefined;
 afterEach(async () => {
@@ -204,5 +204,53 @@ describe("cross-tenant isolation", () => {
     const aliceBody = (await aliceRes.json()) as { transcripts: { preview: string }[] };
     expect(aliceBody.transcripts).toHaveLength(1);
     expect(aliceBody.transcripts[0].preview).toBe("alice's private conversation");
+  });
+
+  // The tests above append directly through TranscriptStore or check
+  // isolation at a single route; none of them drive a caption all the way
+  // from a live session through SessionStore into TranscriptStore and check
+  // where it actually lands on disk. That gap would miss a regression where
+  // any of SessionStore's four transcript call sites, or the legacy /stream
+  // WebSocket path, passed the wrong id where userId belongs — silently
+  // misattributing (or leaking) a transcript with no test failing.
+  it("writes a live session's transcript under the streaming user's own directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wc-"));
+    const identity = new IdentityStore(openDb(":memory:"));
+    const alice = identity.registerDevice("watch");
+    const mallory = identity.registerDevice("watch");
+    const providers: FakeTranscriptionProvider[] = [];
+    const transcripts = new TranscriptStore({ root });
+    server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => {
+        const p = new FakeTranscriptionProvider();
+        providers.push(p);
+        return p;
+      },
+      transcripts,
+      transcriptsRoot: root,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    // The real production path: stream audio as Alice, drive a final caption
+    // through the fake provider, then stop the session — not a direct
+    // `store.append()` call.
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${alice.token}` },
+      body: Buffer.alloc(3200),
+    });
+    providers[0].emitTranscript({ text: "alice's real session", isFinal: true });
+    await fetch(`http://127.0.0.1:${port}/v1/stop?session=s1`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+
+    expect(listTranscripts(userDir(root, mallory.userId))).toEqual([]);
+    const aliceTranscripts = listTranscripts(userDir(root, alice.userId));
+    expect(aliceTranscripts).toHaveLength(1);
+    expect(aliceTranscripts[0].preview).toBe("alice's real session");
   });
 });

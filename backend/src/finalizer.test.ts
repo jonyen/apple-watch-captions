@@ -215,4 +215,27 @@ describe("createFinalizer", () => {
     expect(() => finalize(transcript(LONG))).not.toThrow();
     await settle();
   });
+
+  // `createFinalizer` invokes `run` fire-and-forget (`void run(opts, t)`), so
+  // a throw inside it becomes an unhandled promise rejection — which by
+  // default kills the whole process — rather than a caught error. A
+  // transcript with an unresolvable `userId` (here: the "" that
+  // `rebuildFinalized` defaults to) is exactly what would trigger that, since
+  // `userDir` throws for it.
+  it("does not produce an unhandled rejection when the directory cannot be resolved", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (err: unknown) => rejections.push(err);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const finalize = createFinalizer({
+        root,
+        export: async () => ({ pageId: "p1", url: "u1" }),
+      });
+      expect(() => finalize({ ...transcript(LONG), userId: "" })).not.toThrow();
+      await settle();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections).toEqual([]);
+  });
 });

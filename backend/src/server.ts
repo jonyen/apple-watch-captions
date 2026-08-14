@@ -36,6 +36,15 @@ export interface StartServerOptions {
   authToken?: string;
   /** Users, devices, and pairing codes. */
   identity?: IdentityStore;
+  /**
+   * Trust `Fly-Client-IP`/`X-Forwarded-For` for the registration rate
+   * limiter's address key, instead of the raw socket address. Off by
+   * default. Only turn this on when the relay genuinely sits behind a proxy
+   * that overwrites these headers on the way in (as Fly's `http_service`
+   * does) — otherwise any caller can forge a fresh header per request and
+   * evade the limit entirely.
+   */
+  trustProxyHeaders?: boolean;
   /** Factory for a fresh provider per connection/session (Deepgram in prod, fake in tests). */
   createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Optional transcript persistence; also enables the /v1/transcripts endpoints. */
@@ -75,13 +84,19 @@ const REGISTRATION_WINDOW_MS = 60 * 60_000;
  * table row today; this must be revisited before a free account grants any
  * metered cloud usage.
  */
-class RegistrationLimiter {
+export class RegistrationLimiter {
   private readonly hits = new Map<string, number[]>();
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
   allow(address: string): boolean {
     const cutoff = this.now() - REGISTRATION_WINDOW_MS;
+    // Opportunistic eviction: an address that registers once and never
+    // returns would otherwise hold its key forever — this process never
+    // restarts to clear it (Fly runs it with auto_stop_machines off). Swept
+    // on every call rather than on a timer, since registrations are rare
+    // enough that this stays cheap.
+    this.evictStale(cutoff);
     const recent = (this.hits.get(address) ?? []).filter((at) => at > cutoff);
     if (recent.length >= REGISTRATIONS_PER_WINDOW) {
       this.hits.set(address, recent);
@@ -91,6 +106,44 @@ class RegistrationLimiter {
     this.hits.set(address, recent);
     return true;
   }
+
+  /** How many addresses currently hold a bucket. Exposed for testing eviction. */
+  size(): number {
+    return this.hits.size;
+  }
+
+  private evictStale(cutoff: number): void {
+    for (const [address, hits] of this.hits) {
+      if (hits.every((at) => at <= cutoff)) this.hits.delete(address);
+    }
+  }
+}
+
+/**
+ * The client address to key the registration rate limiter on.
+ *
+ * Fly's `http_service` proxy terminates the real TCP connection, so
+ * `req.socket.remoteAddress` is the proxy's address, not the caller's — but
+ * a client can send `X-Forwarded-For` itself, so trusting it unconditionally
+ * would let any caller forge a fresh identity per request and evade the
+ * limit entirely. Proxy headers are read only when `trustProxyHeaders` is
+ * on, which must be true only when a proxy that overwrites them genuinely
+ * sits in front of this process.
+ */
+function clientAddress(req: IncomingMessage, trustProxyHeaders: boolean): string {
+  if (trustProxyHeaders) {
+    const fly = req.headers["fly-client-ip"];
+    const flyValue = Array.isArray(fly) ? fly[0] : fly;
+    if (flyValue?.trim()) return flyValue.trim();
+
+    const forwarded = req.headers["x-forwarded-for"];
+    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    // Left-most entry is the original client; the rest are hops added by
+    // intermediate proxies.
+    const first = forwardedValue?.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress ?? "unknown";
 }
 
 export function startServer(opts: StartServerOptions): CaptionServer {
@@ -211,7 +264,7 @@ async function handleRequest(
       return;
     }
     const identity = opts.identity;
-    const address = req.socket.remoteAddress ?? "unknown";
+    const address = clientAddress(req, opts.trustProxyHeaders ?? false);
     if (!limiter.allow(address)) {
       sendJSON(res, 429, { error: "too many registrations" });
       return;

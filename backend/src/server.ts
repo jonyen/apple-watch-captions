@@ -37,12 +37,13 @@ export interface StartServerOptions {
   /** Users, devices, and pairing codes. */
   identity?: IdentityStore;
   /**
-   * Trust `Fly-Client-IP`/`X-Forwarded-For` for the registration rate
-   * limiter's address key, instead of the raw socket address. Off by
-   * default. Only turn this on when the relay genuinely sits behind a proxy
-   * that overwrites these headers on the way in (as Fly's `http_service`
-   * does) — otherwise any caller can forge a fresh header per request and
-   * evade the limit entirely.
+   * Trust the `Fly-Client-IP` header for the registration rate limiter's
+   * address key, instead of the raw socket address. `X-Forwarded-For` is
+   * never consulted, flag on or off — see `clientAddress`. Off by default.
+   * Only turn this on when the relay genuinely sits behind a proxy that
+   * overwrites `Fly-Client-IP` on the way in (as Fly's `http_service` does)
+   * — otherwise a caller could forge the header and evade the limit
+   * entirely.
    */
   trustProxyHeaders?: boolean;
   /** Factory for a fresh provider per connection/session (Deepgram in prod, fake in tests). */
@@ -135,10 +136,22 @@ export class RegistrationLimiter {
  * address per request and evade the limit entirely. A proxy with different,
  * replace-not-append semantics would need its own explicit support here —
  * this must not inherit that assumption.
+ *
+ * `Fly-Client-IP` is trusted verbatim, with no further parsing, on the same
+ * assumption: Fly's edge *replaces* rather than appends, so only one value
+ * ever reaches this process. (Node itself would join two same-named headers
+ * into one comma-separated string — it only arrays `Set-Cookie` — so a
+ * proxy that appended this header instead would silently poison the key.
+ * That case cannot occur on this deployment; a proxy without the
+ * replace guarantee would need its own handling here, not a defensive
+ * parse bolted onto this one.)
  */
 function clientAddress(req: IncomingMessage, trustProxyHeaders: boolean): string {
   if (trustProxyHeaders) {
     const fly = req.headers["fly-client-ip"];
+    // Node never arrays this header (only Set-Cookie), so `fly` is already
+    // a single string or undefined; the array check is belt-and-braces
+    // against Node ever changing that, and costs nothing to keep.
     const flyValue = Array.isArray(fly) ? fly[0] : fly;
     if (flyValue?.trim()) return flyValue.trim();
   }

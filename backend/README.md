@@ -66,6 +66,16 @@ the merge has moved on. The transcript up to the moment of pairing moves
 correctly; only captions appended afterward are affected, and they are not
 automatically recovered. Not fixed by this relay today.
 
+**Known gap:** a pairing commits in the database — including deleting the
+emptied-out user row — *before* the transcripts move on disk. If a move fails
+(or the process dies in between), the old user's directory is left holding
+files that belong to a user id no device resolves to anymore: intact, but
+unreachable through every API, and nothing sweeps or re-adopts them. The relay
+logs one line beginning `PAIRING LEFT TRANSCRIPTS STRANDED` naming the
+directory and both user ids when this happens (`fly logs`), because moving
+those files by hand into the surviving user's directory is currently the only
+recovery. Boot-time re-adoption of such a directory is not built.
+
 ## Protocol
 
 - Connect: `ws://<host>:<port>/stream?token=<device-token>`

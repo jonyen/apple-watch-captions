@@ -19,6 +19,7 @@ import {
   readExportStatus,
   deleteTranscript,
   userDir,
+  TRANSCRIPT_SUFFIXES,
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
@@ -442,7 +443,11 @@ async function handleRequest(
       try {
         moveTranscripts(opts.transcriptsRoot, result.fromUserId, result.toUserId);
       } catch (err) {
+        // `moveTranscripts` handles its own failures and warns about what it
+        // leaves behind; anything escaping it is unexpected, and leaves the
+        // same mess with none of that reporting done.
         console.error("transcript move failed during pairing:", err);
+        warnStranded(opts.transcriptsRoot, result.fromUserId, result.toUserId);
       }
     }
     sendJSON(res, 200, { userId: result.toUserId });
@@ -647,7 +652,14 @@ async function handleRequest(
     }
     // This reports the operator's Deepgram and Fly bill, not a per-user
     // figure, so a device token must not reach it.
-    const token = bearerToken(req.headers.authorization) ?? url.searchParams.get("token");
+    //
+    // Header only — no `?token=` fallback, unlike every other route here. The
+    // admin token is the one shared secret left in the system, and a query
+    // string is written to access logs, proxy logs and browser history all
+    // the way along. The fallback exists elsewhere for callers that cannot
+    // set a header (Twilio's webhooks); nothing calls this one but tools that
+    // can.
+    const token = bearerToken(req.headers.authorization);
     if (!opts.adminToken || !token || !constantTimeEquals(token, opts.adminToken)) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
@@ -838,11 +850,19 @@ function moveTranscripts(root: string, fromUserId: string, toUserId: string): vo
     entries = readdirSync(from);
   } catch (err) {
     console.error("could not prepare transcript move during pairing:", err);
+    warnStranded(root, fromUserId, toUserId);
     return;
   }
 
   let stranded = 0;
   for (const entry of entries) {
+    // Only what a transcript is actually made of, matching
+    // `tenantMigration.ts`'s allowlist rather than moving whatever is found.
+    // Both sides are per-user directories today, so this changes nothing —
+    // but the two functions do the same job and disagreeing about what a
+    // transcript is invites the day a `DB_PATH` (or anything else) is pointed
+    // inside one and gets carried off by a pairing.
+    if (!TRANSCRIPT_SUFFIXES.some((suffix) => entry.endsWith(suffix))) continue;
     const dest = join(to, entry);
     if (existsSync(dest)) {
       console.error(`could not move ${entry} during pairing: ${dest} already exists`);
@@ -857,13 +877,59 @@ function moveTranscripts(root: string, fromUserId: string, toUserId: string): vo
     }
   }
 
-  if (stranded > 0) return;
+  if (stranded > 0) {
+    warnStranded(root, fromUserId, toUserId, stranded);
+    return;
+  }
   try {
     rmdirSync(from);
   } catch {
     // Non-empty (something landed here after the loop above finished) or
     // otherwise unremovable — not worth failing the pairing over either way.
   }
+}
+
+/**
+ * Tell the operator, in terms they can act on, that a pairing left files
+ * behind.
+ *
+ * `claimPairingCode` commits — and deletes the emptied `users` row — before
+ * any file moves. So by the time a move fails, the directory left on disk
+ * belongs to a user id no device resolves to anymore: the transcripts are
+ * intact but unreachable through every API, and nothing sweeps or re-adopts
+ * them. Recovering them means moving the files by hand.
+ *
+ * Deliberately one loud line naming both directories and both user ids,
+ * rather than only the per-file errors above (which say what failed but not
+ * what it costs, or where to look). Boot-time re-adoption of a directory in
+ * this state is the real fix and is not built; until it is, this log is the
+ * only thing standing between a failed rename and someone's transcripts being
+ * lost in practice.
+ */
+function warnStranded(
+  root: string,
+  fromUserId: string,
+  toUserId: string,
+  count?: number,
+): void {
+  // Resolving can itself throw on an id that fails `userDir`'s allowlist —
+  // and this runs from `catch` blocks on a request whose pairing already
+  // succeeded, so it must not become the thing that fails that request.
+  let from = `<${fromUserId}'s directory under ${root}>`;
+  let to = `<${toUserId}'s directory under ${root}>`;
+  try {
+    from = userDir(root, fromUserId);
+    to = userDir(root, toUserId);
+  } catch {
+    // Keep the descriptive placeholders; the ids below are the load-bearing part.
+  }
+  const what = count === undefined ? "transcripts" : `${count} transcript file(s)`;
+  console.error(
+    `PAIRING LEFT TRANSCRIPTS STRANDED: ${what} remain in ${from}, which belongs to user ` +
+      `${fromUserId} — a user retired by this pairing, so no device resolves to it and nothing ` +
+      `reads that directory anymore. The files are intact on disk but unreachable until an ` +
+      `operator moves them into ${to} (user ${toUserId}) by hand. Nothing retries this.`,
+  );
 }
 
 function sendJSON(res: ServerResponse, status: number, body: unknown): void {

@@ -202,6 +202,48 @@ describe("pairing", () => {
     expect(stranded[0].preview).toContain("watch's recording");
   });
 
+  // The claim commits — and deletes the emptied user row — before the files
+  // move. If the move then fails, the transcripts belong to a user id no
+  // device resolves to and nothing ever sweeps them. Transcripts are
+  // irreplaceable, so the one thing this must not do is fail quietly: an
+  // operator has to be able to find them from the logs alone.
+  it("names the stranded directory, and both user ids, when a transcript cannot be moved", async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), "wc-"));
+    const { port, identity, transcripts } = start(root);
+    const phone = identity.registerDevice("phone");
+    const watch = identity.registerDevice("watch");
+    transcripts.append(watch.userId, "s1", "recorded before pairing");
+    transcripts.finalize(watch.userId, "s1");
+
+    vi.mocked(fs.renameSync).mockImplementationOnce(() => {
+      throw new Error("read-only file system");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const issued = await issueCode(port, phone.token);
+    const { code } = (await issued.json()) as { code: string };
+    const claimed = await claimCode(port, watch.token, code);
+    // The pairing itself succeeded; only the files are behind.
+    expect(claimed.status).toBe(200);
+
+    const logged = errorSpy.mock.calls
+      .map((args) => args.map((a) => String(a)).join(" "))
+      .join("\n");
+    errorSpy.mockRestore();
+
+    // Everything an operator needs to find the files by hand: where they are,
+    // who they belonged to, who they should now belong to, and that they are
+    // intact but out of reach.
+    expect(logged).toContain(userDir(root, watch.userId));
+    expect(logged).toContain(watch.userId);
+    expect(logged).toContain(phone.userId);
+    expect(logged).toMatch(/unreachable/i);
+    expect(logged).toMatch(/intact/i);
+
+    // And the transcript really is still there to be recovered.
+    expect(listTranscripts(userDir(root, watch.userId))).toHaveLength(1);
+  });
+
   it("never deletes a source directory a late write reaches after the move but before the removal (TOCTOU)", async () => {
     const root = fs.mkdtempSync(join(tmpdir(), "wc-"));
     const { port, identity, transcripts } = start(root);

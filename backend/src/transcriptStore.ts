@@ -243,6 +243,20 @@ export function readTranscript(dir: string, name: string): TranscriptDetail | nu
 }
 
 /**
+ * Every suffix a stored transcript is made of — its captions, its summary,
+ * and its Notion export marker.
+ *
+ * Exported because three places need to agree on what a transcript file
+ * looks like: deleting one (below), adopting pre-tenancy files
+ * (`tenantMigration.ts`), and carrying a merged-away user's files to their
+ * new owner (`moveTranscripts` in `server.ts`). The latter two use it as an
+ * allowlist rather than skipping a denylist of known non-transcripts —
+ * `identity.db` and its sidecars can sit in the same tree, and an allowlist
+ * cannot be outgrown by whatever file SQLite invents next.
+ */
+export const TRANSCRIPT_SUFFIXES = [".jsonl", ".summary.md", ".notion.json"];
+
+/**
  * Forget a stored transcript: its captions, its summary, and its export
  * marker. False when the name is unsafe or no transcript is there. The Notion
  * page, if one was exported, is left alone — it is the archive, and the only
@@ -254,7 +268,7 @@ export function deleteTranscript(dir: string, name: string): boolean {
   if (!existsSync(file)) return false;
   // Dropping the marker with the captions keeps the export backfill sweep from
   // seeing a half-deleted transcript.
-  for (const suffix of [".jsonl", ".summary.md", ".notion.json"]) {
+  for (const suffix of TRANSCRIPT_SUFFIXES) {
     rmSync(join(dir, `${name}${suffix}`), { force: true });
   }
   return true;

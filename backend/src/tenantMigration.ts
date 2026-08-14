@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "fs";
 import { join } from "path";
 import { IdentityStore } from "./identityStore";
-import { userDir } from "./transcriptStore";
+import { userDir, TRANSCRIPT_SUFFIXES } from "./transcriptStore";
 
 export interface MigrationResult {
   userId: string;
@@ -9,25 +9,6 @@ export interface MigrationResult {
   token: string;
   moved: number;
 }
-
-/**
- * Suffixes a transcript ever writes, per `transcriptStore.ts`'s own delete
- * path (`deleteTranscript`'s `[".jsonl", ".summary.md", ".notion.json"]`).
- *
- * This is an allowlist, not a denylist, on purpose: the earlier version of
- * this migration excluded only `settings.json` by name and swept up
- * everything else loose at the root — which silently included
- * `identity.db` itself. `index.ts` opens the identity database (creating
- * the file) before running this migration, so an exclusion list has to name
- * every non-transcript file that can legitimately sit at the root, and that
- * list grows the moment SQLite's on-disk shape changes (e.g. `-journal` file
- * mid-transaction, or `-wal`/`-shm` sidecars if journal mode ever changes
- * from the default). An allowlist of what a transcript actually looks like
- * needs no such list: `identity.db` and every one of its possible sidecars
- * simply never match a transcript suffix, so they can never be swept,
- * regardless of what shape SQLite's on-disk files take.
- */
-const TRANSCRIPT_SUFFIXES = [".jsonl", ".summary.md", ".notion.json"];
 
 /**
  * Move transcripts written before the relay was multi-tenant under a user of

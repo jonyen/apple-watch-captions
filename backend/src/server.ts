@@ -3,6 +3,7 @@ import { createServer, Server, IncomingMessage, ServerResponse } from "http";
 import { AddressInfo } from "net";
 import { randomUUID } from "crypto";
 import { verifyToken } from "./auth";
+import { IdentityStore, DeviceKind } from "./identityStore";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
@@ -26,7 +27,15 @@ export * from "./providerOptions";
 
 export interface StartServerOptions {
   port: number;
-  authToken: string;
+  /**
+   * Superseded shared-secret credential — every device used to present this
+   * same token. Every route still reads it via `verifyToken`; Task 6 moves
+   * them all onto `identity`'s per-device tokens via `resolveToken`, at
+   * which point this is deleted.
+   */
+  authToken?: string;
+  /** Users, devices, and pairing codes. */
+  identity?: IdentityStore;
   /** Factory for a fresh provider per connection/session (Deepgram in prod, fake in tests). */
   createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Optional transcript persistence; also enables the /v1/transcripts endpoints. */
@@ -51,6 +60,38 @@ const MAX_AUDIO_BYTES = 512 * 1024;
 const REAP_INTERVAL_MS = 5_000;
 /** Settings are a handful of scalars; anything larger is not a settings write. */
 const MAX_SETTINGS_BYTES = 4 * 1024;
+/** A registration body is `{"kind":"watch"}`; anything larger is not one. */
+const MAX_REGISTRATION_BYTES = 1024;
+const DEVICE_KINDS: DeviceKind[] = ["watch", "phone", "mac"];
+/** Registrations allowed per address per window, and the window itself. */
+const REGISTRATIONS_PER_WINDOW = 10;
+const REGISTRATION_WINDOW_MS = 60 * 60_000;
+
+/**
+ * Per-address registration limiter.
+ *
+ * Registration cannot require a credential — an app has none before it
+ * registers — so the only backstop is a rate limit. A junk account costs one
+ * table row today; this must be revisited before a free account grants any
+ * metered cloud usage.
+ */
+class RegistrationLimiter {
+  private readonly hits = new Map<string, number[]>();
+
+  constructor(private readonly now: () => number = () => Date.now()) {}
+
+  allow(address: string): boolean {
+    const cutoff = this.now() - REGISTRATION_WINDOW_MS;
+    const recent = (this.hits.get(address) ?? []).filter((at) => at > cutoff);
+    if (recent.length >= REGISTRATIONS_PER_WINDOW) {
+      this.hits.set(address, recent);
+      return false;
+    }
+    recent.push(this.now());
+    this.hits.set(address, recent);
+    return true;
+  }
+}
 
 export function startServer(opts: StartServerOptions): CaptionServer {
   const settings = new SettingsStore(opts.settingsFile);
@@ -64,10 +105,11 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   });
   const currentCall = new CurrentCall();
   const readers = new ReaderPresence();
+  const limiter = new RegistrationLimiter();
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall, readers, settings).catch(() => {
+    handleRequest(req, res, opts, store, currentCall, readers, settings, limiter).catch(() => {
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
@@ -89,7 +131,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
         ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
         : undefined;
-      if (!verifyToken(fromPath ?? token, opts.authToken)) {
+      if (!verifyToken(fromPath ?? token, opts.authToken ?? "")) {
         console.log("twilio upgrade rejected: token missing or wrong");
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
@@ -103,7 +145,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       socket.destroy();
       return;
     }
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
       return;
     }
@@ -143,6 +185,7 @@ async function handleRequest(
   calls: CurrentCall,
   readers: ReaderPresence,
   settings: SettingsStore,
+  limiter: RegistrationLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -160,11 +203,47 @@ async function handleRequest(
     return;
   }
 
+  // An app registers itself on first launch. Unauthenticated by necessity:
+  // there is no credential to present until this call issues one.
+  if (req.method === "POST" && url.pathname === "/v1/devices") {
+    if (!opts.identity) {
+      sendJSON(res, 503, { error: "device registration not configured" });
+      return;
+    }
+    const identity = opts.identity;
+    const address = req.socket.remoteAddress ?? "unknown";
+    if (!limiter.allow(address)) {
+      sendJSON(res, 429, { error: "too many registrations" });
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBody(req, MAX_REGISTRATION_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body.toString("utf8"));
+    } catch {
+      sendJSON(res, 400, { error: "invalid json" });
+      return;
+    }
+    const kind = (parsed as { kind?: unknown } | null)?.kind;
+    if (!DEVICE_KINDS.includes(kind as DeviceKind)) {
+      sendJSON(res, 400, { error: "unknown device kind" });
+      return;
+    }
+    sendJSON(res, 200, identity.registerDevice(kind as DeviceKind));
+    return;
+  }
+
   // Twilio asks what to do with an inbound call. Answer: fork the caller's
   // audio to this relay, then bridge the call onward.
   if (req.method === "POST" && url.pathname === "/twilio/voice") {
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -192,7 +271,7 @@ async function handleRequest(
   // and `StreamError` carries the reason the alert log omits.
   if (req.method === "POST" && url.pathname === "/twilio/stream-status") {
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -218,7 +297,7 @@ async function handleRequest(
   // a session, so polling when no call exists costs nothing upstream.
   if (req.method === "GET" && url.pathname === "/v1/call") {
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -261,7 +340,7 @@ async function handleRequest(
   // producer does, so neither would ever go first.
   if (url.pathname === "/v1/presence" && (req.method === "GET" || req.method === "POST")) {
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -287,7 +366,7 @@ async function handleRequest(
   // is no paired-companion channel between them.
   if (url.pathname === "/v1/settings" && (req.method === "GET" || req.method === "PUT")) {
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -319,7 +398,7 @@ async function handleRequest(
       return;
     }
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -360,7 +439,7 @@ async function handleRequest(
       return;
     }
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -379,7 +458,7 @@ async function handleRequest(
       return;
     }
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -393,7 +472,7 @@ async function handleRequest(
 
   if (req.method === "POST" && (url.pathname === "/v1/audio" || url.pathname === "/v1/stop")) {
     const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken)) {
+    if (!verifyToken(token, opts.authToken ?? "")) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }

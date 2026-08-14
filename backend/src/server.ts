@@ -1,5 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer, Server, IncomingMessage, ServerResponse } from "http";
+import { mkdirSync, readdirSync, renameSync, existsSync, rmSync } from "fs";
+import { join } from "path";
 import { AddressInfo } from "net";
 import { randomUUID, timingSafeEqual } from "crypto";
 import { bearerToken, resolveToken } from "./auth";
@@ -305,6 +307,61 @@ async function handleRequest(
       return;
     }
     sendJSON(res, 200, identity.registerDevice(kind as DeviceKind));
+    return;
+  }
+
+  // The phone issues a code; the watch claims it. Pairing exists because the
+  // two apps register independently and would otherwise be two accounts.
+  if (req.method === "POST" && url.pathname === "/v1/pair/code") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    sendJSON(res, 200, opts.identity.issuePairingCode(principal.userId));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/pair/claim") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBody(req, MAX_REGISTRATION_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    let code: unknown;
+    try {
+      code = (JSON.parse(body.toString("utf8")) as { code?: unknown } | null)?.code;
+    } catch {
+      sendJSON(res, 400, { error: "invalid json" });
+      return;
+    }
+    if (typeof code !== "string") {
+      sendJSON(res, 400, { error: "missing code" });
+      return;
+    }
+    const result = opts.identity.claimPairingCode(code, principal);
+    if (!result.ok) {
+      sendJSON(res, 409, { error: result.reason });
+      return;
+    }
+    // The claim already committed in the database by this point, so a
+    // filesystem problem below must never turn into a failure response —
+    // that would tell the caller a pairing didn't happen when it did.
+    if (result.fromUserId !== result.toUserId && opts.transcriptsRoot) {
+      try {
+        moveTranscripts(opts.transcriptsRoot, result.fromUserId, result.toUserId);
+      } catch (err) {
+        console.error("transcript move failed during pairing:", err);
+      }
+    }
+    sendJSON(res, 200, { userId: result.toUserId });
     return;
   }
 
@@ -675,6 +732,74 @@ function constantTimeEquals(a: string, b: string): boolean {
   const bufB = Buffer.from(b, "utf8");
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Carry a merged-away user's transcripts to their new owner.
+ *
+ * Files are moved individually rather than by renaming the directory, because
+ * the destination usually already exists. A failure here leaves the transcript
+ * where it was rather than losing it — pairing has already succeeded in the
+ * database, and a stranded file is recoverable in a way a deleted one is not.
+ *
+ * Two further failure modes get the same treatment:
+ *  - A name already present on the destination side (both users happened to
+ *    record a same-named transcript) is left where it is rather than
+ *    silently overwritten by `renameSync`, which would otherwise clobber the
+ *    destination user's file with no way to notice.
+ *  - The old directory is only removed once every entry has actually moved.
+ *    If anything was left behind — a collision or any other per-file
+ *    failure — the directory (and the stranded file inside it) is left on
+ *    disk rather than deleted out from under the very files this function
+ *    just decided not to lose.
+ */
+function moveTranscripts(root: string, fromUserId: string, toUserId: string): void {
+  let from: string;
+  let to: string;
+  try {
+    from = userDir(root, fromUserId);
+    to = userDir(root, toUserId);
+  } catch (err) {
+    // userDir throws on a userId that fails its allowlist. Real ids are
+    // server-generated UUIDs, so this should not fire in practice — but the
+    // pairing already committed in the database, so this must not escape as
+    // an unhandled rejection or a 500 for a claim that already succeeded.
+    console.error("could not resolve transcript directories during pairing:", err);
+    return;
+  }
+  if (!existsSync(from)) return;
+
+  let entries: string[];
+  try {
+    mkdirSync(to, { recursive: true });
+    entries = readdirSync(from);
+  } catch (err) {
+    console.error("could not prepare transcript move during pairing:", err);
+    return;
+  }
+
+  let stranded = 0;
+  for (const entry of entries) {
+    const dest = join(to, entry);
+    if (existsSync(dest)) {
+      console.error(`could not move ${entry} during pairing: ${dest} already exists`);
+      stranded += 1;
+      continue;
+    }
+    try {
+      renameSync(join(from, entry), dest);
+    } catch (err) {
+      console.error(`could not move ${entry} during pairing:`, err);
+      stranded += 1;
+    }
+  }
+
+  if (stranded > 0) return;
+  try {
+    rmSync(from, { recursive: true });
+  } catch {
+    // A directory that would not go is not worth failing the pairing over.
+  }
 }
 
 function sendJSON(res: ServerResponse, status: number, body: unknown): void {

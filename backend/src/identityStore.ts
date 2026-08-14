@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes, createHash } from "crypto";
+import { randomUUID, randomBytes, createHash, randomInt } from "crypto";
 import { Db } from "./db";
 
 export interface Principal {
@@ -19,6 +19,13 @@ export interface IdentityStoreOptions {
   /** Injectable clock (tests). Defaults to Date.now. */
   now?: () => number;
 }
+
+export type ClaimResult =
+  | { ok: true; fromUserId: string; toUserId: string }
+  | { ok: false; reason: "unknown" | "expired" | "consumed" };
+
+/** How long a pairing code stays claimable. */
+export const PAIRING_CODE_TTL_MS = 10 * 60_000;
 
 /**
  * Users, devices, and the pairing codes that merge them.
@@ -74,6 +81,87 @@ export class IdentityStore {
       .prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?")
       .run(this.timestamp(), row.id);
     return { userId: row.user_id, deviceId: row.id };
+  }
+
+  /**
+   * A short code the user reads off the phone and types on the watch.
+   *
+   * Six digits rather than something longer because it is entered with a
+   * Digital Crown, one digit at a time. The short TTL is what makes that
+   * length safe: 10 minutes of a single-use code is not a guessable target.
+   */
+  issuePairingCode(userId: string): { code: string; expiresAt: string } {
+    const expiresAt = new Date(this.now() + PAIRING_CODE_TTL_MS).toISOString();
+    // Retry on the astronomically unlikely collision with a live code rather
+    // than letting the unique constraint surface as a 500.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      const existing = this.db
+        .prepare("SELECT code FROM pairing_codes WHERE code = ?")
+        .get(code);
+      if (existing) continue;
+      this.db
+        .prepare("INSERT INTO pairing_codes (code, user_id, expires_at) VALUES (?,?,?)")
+        .run(code, userId, expiresAt);
+      return { code, expiresAt };
+    }
+    throw new Error("could not allocate a pairing code");
+  }
+
+  /**
+   * Move the claiming device onto the code's user and retire the user it came
+   * from. The device's token is untouched — only what it resolves to changes,
+   * so a watch mid-pairing never has to accept a new credential over a channel
+   * it cannot report a failure on.
+   *
+   * Returns the two user ids so the caller can move the abandoned user's
+   * transcripts. This store does no filesystem work.
+   */
+  claimPairingCode(code: string, claimant: Principal): ClaimResult {
+    const row = this.db
+      .prepare("SELECT user_id, expires_at, consumed_at FROM pairing_codes WHERE code = ?")
+      .get(code) as
+      | { user_id: string; expires_at: string; consumed_at: string | null }
+      | undefined;
+
+    if (!row) return { ok: false, reason: "unknown" };
+    if (row.consumed_at) return { ok: false, reason: "consumed" };
+    if (Date.parse(row.expires_at) <= this.now()) return { ok: false, reason: "expired" };
+
+    const toUserId = row.user_id;
+    const fromUserId = claimant.userId;
+    const stamp = this.timestamp();
+
+    if (fromUserId === toUserId) {
+      this.db
+        .prepare("UPDATE pairing_codes SET consumed_at = ? WHERE code = ?")
+        .run(stamp, code);
+      return { ok: true, fromUserId, toUserId };
+    }
+
+    this.db.exec("BEGIN");
+    try {
+      this.db
+        .prepare("UPDATE devices SET user_id = ? WHERE id = ?")
+        .run(toUserId, claimant.deviceId);
+      this.db
+        .prepare("UPDATE pairing_codes SET consumed_at = ? WHERE code = ?")
+        .run(stamp, code);
+      // Any device still on the old user keeps it alive; only a user with
+      // nothing left pointing at it is deleted.
+      const remaining = this.db
+        .prepare("SELECT count(*) AS n FROM devices WHERE user_id = ?")
+        .get(fromUserId) as { n: number };
+      if (remaining.n === 0) {
+        this.db.prepare("DELETE FROM users WHERE id = ?").run(fromUserId);
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+
+    return { ok: true, fromUserId, toUserId };
   }
 
   protected timestamp(): string {

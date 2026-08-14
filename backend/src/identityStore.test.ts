@@ -99,3 +99,97 @@ describe("devices table constraints", () => {
     ).toThrow();
   });
 });
+
+describe("IdentityStore pairing", () => {
+  it("issues a six-digit code", () => {
+    const s = store();
+    const phone = s.registerDevice("phone");
+    const { code } = s.issuePairingCode(phone.userId);
+    expect(code).toMatch(/^\d{6}$/);
+  });
+
+  it("moves the claiming device to the issuing user", () => {
+    const s = store();
+    const phone = s.registerDevice("phone");
+    const watch = s.registerDevice("watch");
+    const { code } = s.issuePairingCode(phone.userId);
+
+    const result = s.claimPairingCode(code, {
+      userId: watch.userId,
+      deviceId: watch.deviceId,
+    });
+
+    expect(result).toEqual({ ok: true, fromUserId: watch.userId, toUserId: phone.userId });
+    expect(s.resolve(watch.token)).toEqual({
+      userId: phone.userId,
+      deviceId: watch.deviceId,
+    });
+  });
+
+  it("keeps the claiming device's token working after the merge", () => {
+    const s = store();
+    const phone = s.registerDevice("phone");
+    const watch = s.registerDevice("watch");
+    s.claimPairingCode(s.issuePairingCode(phone.userId).code, {
+      userId: watch.userId,
+      deviceId: watch.deviceId,
+    });
+    expect(s.resolve(watch.token)).not.toBeNull();
+  });
+
+  it("deletes the orphaned user", () => {
+    const db = openDb(":memory:");
+    const s = new IdentityStore(db);
+    const phone = s.registerDevice("phone");
+    const watch = s.registerDevice("watch");
+    s.claimPairingCode(s.issuePairingCode(phone.userId).code, {
+      userId: watch.userId,
+      deviceId: watch.deviceId,
+    });
+    const remaining = db.prepare("SELECT id FROM users").all();
+    expect(remaining).toHaveLength(1);
+    expect((remaining[0] as { id: string }).id).toBe(phone.userId);
+  });
+
+  it("rejects an unknown code", () => {
+    const s = store();
+    const watch = s.registerDevice("watch");
+    expect(
+      s.claimPairingCode("000000", { userId: watch.userId, deviceId: watch.deviceId }),
+    ).toEqual({ ok: false, reason: "unknown" });
+  });
+
+  it("rejects a code that was already claimed", () => {
+    const s = store();
+    const phone = s.registerDevice("phone");
+    const first = s.registerDevice("watch");
+    const second = s.registerDevice("mac");
+    const { code } = s.issuePairingCode(phone.userId);
+    s.claimPairingCode(code, { userId: first.userId, deviceId: first.deviceId });
+    expect(
+      s.claimPairingCode(code, { userId: second.userId, deviceId: second.deviceId }),
+    ).toEqual({ ok: false, reason: "consumed" });
+  });
+
+  it("rejects an expired code", () => {
+    let clock = 1_000_000;
+    const s = new IdentityStore(openDb(":memory:"), { now: () => clock });
+    const phone = s.registerDevice("phone");
+    const watch = s.registerDevice("watch");
+    const { code } = s.issuePairingCode(phone.userId);
+    clock += 11 * 60_000;
+    expect(
+      s.claimPairingCode(code, { userId: watch.userId, deviceId: watch.deviceId }),
+    ).toEqual({ ok: false, reason: "expired" });
+  });
+
+  it("treats claiming one's own code as a no-op success", () => {
+    const s = store();
+    const phone = s.registerDevice("phone");
+    const { code } = s.issuePairingCode(phone.userId);
+    expect(
+      s.claimPairingCode(code, { userId: phone.userId, deviceId: phone.deviceId }),
+    ).toEqual({ ok: true, fromUserId: phone.userId, toUserId: phone.userId });
+    expect(s.resolve(phone.token)).not.toBeNull();
+  });
+});

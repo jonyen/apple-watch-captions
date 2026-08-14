@@ -1,9 +1,14 @@
+import { join } from "path";
 
 export interface Config {
   port: number;
   deepgramApiKey: string;
   /** Where session transcripts are persisted (a Fly volume in prod). */
   transcriptsDir: string;
+  /** Operator-only token for /v1/usage. */
+  adminToken?: string;
+  /** Where the identity database lives (beside the transcripts, on the volume). */
+  dbPath: string;
   /** Optional; when set, transcripts are summarized with Claude on session end. */
   anthropicApiKey?: string;
   /** Optional; the free-tier alternative to Claude for summaries. */
@@ -41,6 +46,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     port,
     deepgramApiKey,
     transcriptsDir,
+    adminToken: env.ADMIN_TOKEN || undefined,
+    dbPath: env.DB_PATH || join(transcriptsDir, "identity.db"),
     anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
     geminiApiKey: env.GEMINI_API_KEY || undefined,
     summaryProvider: loadSummaryProvider(env),

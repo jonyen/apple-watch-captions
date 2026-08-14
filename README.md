@@ -73,7 +73,11 @@ The watch notifies you when the page is ready. The export finishes well after th
 
 ## Transport API
 
-Token auth via `?token=<AUTH_TOKEN>` on every request.
+Each app self-registers a device with `POST /v1/devices` on first launch and
+gets its own bearer token back; every other request carries it, either as
+`Authorization: Bearer <token>` or `?token=<token>`. See
+[`backend/README.md`](backend/README.md#authentication) for the full model
+(pairing, the admin token, etc.).
 
 | Endpoint | Request | Response |
 |----------|---------|----------|
@@ -93,8 +97,8 @@ Event payloads: `{type:"ready"}`, `{type:"caption",text,isFinal}`, `{type:"error
 ```bash
 cd backend
 npm install
-AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
-npm test            # 323 tests, no API key needed
+DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
+npm test            # no API key needed
 ```
 
 **Watch app** (see [`watch/README.md`](watch/README.md)):
@@ -114,8 +118,12 @@ The relay runs on Fly.io:
 ```bash
 cd backend
 fly deploy
-fly secrets set AUTH_TOKEN=<token> DEEPGRAM_API_KEY=<key>
+fly secrets set DEEPGRAM_API_KEY=<key>
+# Optional: ADMIN_TOKEN gates GET /v1/usage (the operator cost/usage endpoint).
+fly secrets set ADMIN_TOKEN=$(openssl rand -hex 32)
 ```
+
+See [`backend/DEPLOY.md`](backend/DEPLOY.md) for the full deploy walkthrough.
 
 ## Tech
 

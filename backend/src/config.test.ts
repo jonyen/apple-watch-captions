@@ -11,9 +11,27 @@ describe("loadConfig", () => {
       port: 8080,
       deepgramApiKey: "dg-key",
       transcriptsDir: "./data/transcripts",
+      adminToken: undefined,
+      dbPath: "data/transcripts/identity.db",
       anthropicApiKey: undefined,
       deepgramPhoneModel: "phonecall",
     });
+  });
+
+  it("defaults dbPath beside the transcripts dir and leaves adminToken unset", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRANSCRIPTS_DIR: "/data/transcripts" });
+    expect(cfg.dbPath).toBe("/data/transcripts/identity.db");
+    expect(cfg.adminToken).toBeUndefined();
+  });
+
+  it("reads DB_PATH and ADMIN_TOKEN when set", () => {
+    const cfg = loadConfig({
+      DEEPGRAM_API_KEY: "dg-key",
+      DB_PATH: "/data/identity.db",
+      ADMIN_TOKEN: "admin-secret",
+    });
+    expect(cfg.dbPath).toBe("/data/identity.db");
+    expect(cfg.adminToken).toBe("admin-secret");
   });
 
   it("reads transcript dir and anthropic key when set", () => {

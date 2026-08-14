@@ -3,9 +3,49 @@
 WebSocket service that relays a live PCM audio stream to Deepgram and streams
 caption text back to the client.
 
+## Authentication
+
+There is no shared secret and no sign-in. Each app instance registers itself
+on first launch:
+
+```
+POST /v1/devices   {"kind":"watch"|"phone"|"mac"}
+→ {"deviceId":"...","userId":"...","token":"..."}
+```
+
+The response's `token` is a bearer credential for that one device — keep it
+(the client apps persist it locally) and send it on every subsequent request,
+either as `Authorization: Bearer <token>` or `?token=<token>` (the query form
+exists for the handful of clients, like Twilio's media-stream, that cannot
+send a header). Registering multiple devices creates independent accounts;
+**pairing** (`POST /v1/pair/code` on one device, `POST /v1/pair/claim` on the
+other) merges a second device — and its transcripts — onto the first
+device's account, which is how the watch and phone end up sharing one
+account.
+
+`ADMIN_TOKEN`, set as a relay-wide secret (not per device), separately gates
+the operator-only `GET /v1/usage` endpoint — see
+[MONITORING.md](./MONITORING.md).
+
+Users, devices, and pairing codes live in a small SQLite database at
+`DB_PATH` (defaults to `identity.db` beside the transcripts, so both survive
+a redeploy on the same volume). On an install that predates multi-tenancy,
+the relay adopts any transcripts left at the flat transcripts root into a
+new user the first time it boots on this code, and logs that user's token
+once — save it, since it is the only way to reach those pre-existing
+transcripts afterward. This is a no-op on every later boot.
+
+**Known gap:** if a pairing merges two accounts while a session is still
+mid-conversation, captions appended to that session *after* the merge keep
+landing in the old (pre-pairing) account's directory — the in-flight session
+holds the principal it started with, and nothing sweeps that directory once
+the merge has moved on. The transcript up to the moment of pairing moves
+correctly; only captions appended afterward are affected, and they are not
+automatically recovered. Not fixed by this relay today.
+
 ## Protocol
 
-- Connect: `ws://<host>:<port>/stream?token=<AUTH_TOKEN>`
+- Connect: `ws://<host>:<port>/stream?token=<device-token>`
 - Send: binary frames of raw PCM — 16-bit signed little-endian, 16 kHz, mono.
 - Receive (JSON text):
   - `{"type":"ready"}`
@@ -19,7 +59,13 @@ caption text back to the client.
 ```bash
 cd backend
 npm install
-AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
+DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
+```
+
+Register a device to get a token for manual testing:
+
+```bash
+curl -X POST http://localhost:8080/v1/devices -d '{"kind":"mac"}'
 ```
 
 ## Test
@@ -149,7 +195,10 @@ Setup (Twilio console; nothing else in this repo needs to change):
 1. Create a Twilio account and get off the trial — trial accounts restrict
    outbound calls to verified numbers and play a notice on every call.
 2. Buy a phone number.
-3. Set its **Voice webhook** to `POST https://<your-relay-host>/twilio/voice?token=<AUTH_TOKEN>`.
+3. Set its **Voice webhook** to `POST https://<your-relay-host>/twilio/voice?token=<device-token>`,
+   using the token for whichever account should receive the call's captions
+   (register one with `POST /v1/devices` if you don't already have one — see
+   "Authentication" above).
 4. Set its **fallback URL** to a static TwiML bin that only `<Dial>`s your real
    phone. This is the entire mitigation for the relay being down when a call
    arrives: with no fallback, Twilio gets no TwiML and the caller hears a
@@ -171,8 +220,8 @@ Streams a 16 kHz mono PCM file to the running server and prints captions.
    ```bash
    ffmpeg -i sample.mp3 -ac 1 -ar 16000 -f s16le sample.pcm
    ```
-3. Run the smoke test:
+3. Run the smoke test with a registered device's token (see "Authentication" above):
    ```bash
-   node scripts/smoke-test.mjs ws://127.0.0.1:8080/stream dev-secret sample.pcm
+   node scripts/smoke-test.mjs ws://127.0.0.1:8080/stream <device-token> sample.pcm
    ```
    Expected: a stream of `caption` lines ending with finalized text matching the audio.

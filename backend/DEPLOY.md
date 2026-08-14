@@ -1,8 +1,11 @@
 # Deploying the STT Relay to Fly.io
 
 The service runs via `tsx` (see README). Fly builds the `Dockerfile` and runs it.
-Config lives in `fly.toml`. The two secrets (`AUTH_TOKEN`, `DEEPGRAM_API_KEY`) are NOT in
-git — they are set with `fly secrets`.
+Config lives in `fly.toml`. Secrets — `DEEPGRAM_API_KEY` and (optionally)
+`ADMIN_TOKEN` — are NOT in git; they are set with `fly secrets`. There is no
+`AUTH_TOKEN`: devices authenticate by self-registering with `POST /v1/devices`
+and getting their own bearer token back — see backend/README.md
+"Authentication".
 
 ## Prerequisites
 
@@ -22,10 +25,15 @@ fly auth login
 #    edit `app = "..."` in fly.toml to something unique, then re-run.
 fly apps create watch-captions-relay
 
-# 3. Generate a strong auth token and set both secrets.
-AUTH_TOKEN=$(openssl rand -hex 32)
-echo "Save this token — the Watch/iOS app will use it: $AUTH_TOKEN"
-fly secrets set AUTH_TOKEN="$AUTH_TOKEN" DEEPGRAM_API_KEY="<your-deepgram-key>"
+# 3. Set the Deepgram key. There is no relay-wide auth secret to generate —
+#    devices self-register at runtime and get their own token.
+fly secrets set DEEPGRAM_API_KEY="<your-deepgram-key>"
+
+# 3a. (Optional) Set an admin token that gates GET /v1/usage — the
+#     operator-only cost/usage endpoint. Without it, /v1/usage stays closed.
+ADMIN_TOKEN=$(openssl rand -hex 32)
+echo "Save this — it's what you'll pass to GET /v1/usage: $ADMIN_TOKEN"
+fly secrets set ADMIN_TOKEN="$ADMIN_TOKEN"
 
 # 4. Create the volume that stores transcripts (mounted at /data, see fly.toml).
 fly volumes create transcripts --size 1
@@ -48,13 +56,11 @@ cd backend
 fly deploy
 ```
 
-When it finishes, your relay is at:
-
-```
-wss://<app-name>.fly.dev/stream?token=<AUTH_TOKEN>
-```
-
-(e.g. `wss://watch-captions-relay.fly.dev/stream?token=...`)
+When it finishes, your relay is at `wss://<app-name>.fly.dev/stream`
+(e.g. `wss://watch-captions-relay.fly.dev/stream`). Each app registers its own
+device and token against it on first launch — see backend/README.md
+"Authentication" — there's no fixed connection URL with a baked-in token
+anymore.
 
 ## Verify the live deployment
 
@@ -62,19 +68,29 @@ wss://<app-name>.fly.dev/stream?token=<AUTH_TOKEN>
 # Health check (should print: ok)
 curl https://<app-name>.fly.dev/healthz
 
+# Register a device to get a token:
+curl -X POST https://<app-name>.fly.dev/v1/devices -d '{"kind":"mac"}'
+
 # Full transcription smoke test (needs a 16kHz mono PCM file — see README):
-node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "$AUTH_TOKEN" sample.pcm
+node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "<device-token>" sample.pcm
 ```
 
 ## Transcripts & summaries
 
-- Final captions are appended per-session as JSONL under `/data/transcripts` on the
-  volume; a markdown summary is generated with Claude when a session ends (if
-  `ANTHROPIC_API_KEY` is set).
-- View them in a browser at `https://<app-name>.fly.dev/app` (paste the `AUTH_TOKEN`
-  once; it is kept in the browser's localStorage).
-- JSON API: `GET /v1/transcripts?token=...` and `GET /v1/transcripts/<name>?token=...`.
+- Final captions are appended per-session as JSONL under a per-user directory
+  in `/data/transcripts` on the volume; a markdown summary is generated with
+  Claude when a session ends (if `ANTHROPIC_API_KEY` is set).
+- The users/devices/pairing-codes database lives at `DB_PATH` (defaults to
+  `/data/transcripts/identity.db`, so it rides the same volume).
+- View them in a browser at `https://<app-name>.fly.dev/app` (paste a device
+  token once; it is kept in the browser's localStorage).
+- JSON API: `GET /v1/transcripts?token=...` and `GET /v1/transcripts/<name>?token=...`
+  — with the calling device's own token, scoped to that device's account.
 - Old installs: unset the retired mail secrets with `fly secrets unset MAIL_USERNAME MAIL_PASSWORD NOTIFY_EMAIL_TO`.
+- Pre-existing installs: any transcripts written before the relay had
+  accounts are adopted into a fresh user on first boot of this version, with
+  the adoption token logged once (`fly logs`) — see backend/README.md
+  "Authentication".
 
 ## Notes
 
@@ -83,4 +99,6 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "$AUTH_TOKEN" sample
 - Weekly cost/usage monitoring (Deepgram + Fly, posted as a GitHub issue every
   Monday) is set up in [MONITORING.md](./MONITORING.md).
 - To view logs: `fly logs`. To update after code changes: `fly deploy` again.
-- Rotate the auth token any time with `fly secrets set AUTH_TOKEN=<new>` (then update the app).
+- Rotate the admin token any time with `fly secrets set ADMIN_TOKEN=<new>`. Per-device
+  tokens have no rotation command — re-registering (`POST /v1/devices`) mints a new one
+  for that device.

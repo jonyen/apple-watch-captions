@@ -137,6 +137,7 @@ const server = startServer({
   transcriptsRoot: config.transcriptsDir,
   usage: createUsageService({ env: process.env }),
   callForwardTo: config.twilioForwardTo,
+  trustProxyHeaders: config.trustProxyHeaders,
 });
 
 const addr = server.address();

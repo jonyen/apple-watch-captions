@@ -15,7 +15,34 @@ describe("loadConfig", () => {
       dbPath: "data/transcripts/identity.db",
       anthropicApiKey: undefined,
       deepgramPhoneModel: "phonecall",
+      trustProxyHeaders: false,
     });
+  });
+
+  // Off by default because the relay may be exposed directly, where a
+  // forgeable `Fly-Client-IP` would let any caller evade the registration
+  // rate limit entirely.
+  it("leaves proxy headers untrusted unless asked", () => {
+    expect(loadConfig({ DEEPGRAM_API_KEY: "dg-key" }).trustProxyHeaders).toBe(false);
+  });
+
+  it("trusts proxy headers when TRUST_PROXY_HEADERS is set", () => {
+    const base = { DEEPGRAM_API_KEY: "dg-key" };
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "true" }).trustProxyHeaders).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "1" }).trustProxyHeaders).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "false" }).trustProxyHeaders).toBe(false);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "0" }).trustProxyHeaders).toBe(false);
+  });
+
+  // A typo here would silently either open the limiter to forged headers or
+  // collapse every caller into one bucket, depending on which way it fell.
+  // Fail closed and say so.
+  it("warns and stays off for a TRUST_PROXY_HEADERS value it does not recognize", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRUST_PROXY_HEADERS: "yes please" });
+    expect(cfg.trustProxyHeaders).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("defaults dbPath beside the transcripts dir and leaves adminToken unset", () => {

@@ -96,6 +96,15 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "<device-token>" sam
 
 - `auto_stop_machines = "off"` + `min_machines_running = 1` keep the relay always up so it
   can accept incoming connections. This is the ~$2–5/month fixed cost from the design spec.
+- `TRUST_PROXY_HEADERS = "true"` in `fly.toml`'s `[env]` is what makes the
+  registration rate limit work on Fly: `http_service` terminates the client's
+  connection, so without it every caller shares one 10-per-hour bucket and any
+  ten registrations would close registration — the only way to get a device
+  token — for everyone, for an hour. Only ever set it where a proxy
+  **overwrites** `Fly-Client-IP` on the way in (Fly's edge does). If you run
+  this relay anywhere the port is reachable directly, unset it: the header is
+  caller-supplied there, and trusting it removes the limit entirely. See
+  backend/README.md "Rate limiting".
 - Weekly cost/usage monitoring (Deepgram + Fly, posted as a GitHub issue every
   Monday) is set up in [MONITORING.md](./MONITORING.md).
 - To view logs: `fly logs`. To update after code changes: `fly deploy` again.

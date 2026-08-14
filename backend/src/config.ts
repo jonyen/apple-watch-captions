@@ -25,6 +25,13 @@ export interface Config {
   deepgramPhoneModel: string;
   /** Optional; the number Twilio bridges an inbound captioned call to. */
   twilioForwardTo?: string;
+  /**
+   * Trust `Fly-Client-IP` as the caller's address when rate-limiting
+   * registrations, instead of the raw socket address. Must only be on when
+   * the relay genuinely sits behind a proxy that overwrites that header —
+   * see `clientAddress` in `server.ts`.
+   */
+  trustProxyHeaders: boolean;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -60,7 +67,32 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     // use. Defaulting to a Flux model would fail the first real call.
     deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
     twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
+    trustProxyHeaders: loadTrustProxyHeaders(env),
   };
+}
+
+/**
+ * Whether to believe `Fly-Client-IP`.
+ *
+ * Defaults to **off**, which is the safe answer when the relay is exposed
+ * directly: a forgeable address header would let one caller pick a fresh key
+ * per request and evade the registration limiter entirely. Behind Fly's
+ * `http_service` it must be on instead — there, every request arrives from
+ * the proxy's address, so leaving it off collapses every caller in the world
+ * into a single 10-per-hour bucket and ten requests from anyone would refuse
+ * registration (the only way to get a credential) to everyone.
+ *
+ * An unrecognized value falls back to off and warns rather than being coerced
+ * silently: this is the kind of flag whose typo is only ever discovered in
+ * production, in one of the two failure modes above.
+ */
+function loadTrustProxyHeaders(env: NodeJS.ProcessEnv): boolean {
+  const value = env.TRUST_PROXY_HEADERS;
+  if (!value) return false;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  console.warn(`Ignoring TRUST_PROXY_HEADERS="${value}" — expected "true" or "false"`);
+  return false;
 }
 
 /** Only the backends we actually implement; anything else is a typo. */

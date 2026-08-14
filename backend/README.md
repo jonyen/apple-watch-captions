@@ -35,6 +35,29 @@ new user the first time it boots on this code, and logs that user's token
 once — save it, since it is the only way to reach those pre-existing
 transcripts afterward. This is a no-op on every later boot.
 
+### Rate limiting and `TRUST_PROXY_HEADERS`
+
+`POST /v1/devices` takes no credential — there is none to present yet — so a
+sliding-window rate limit (10 registrations per address per hour) is the only
+backstop. Which address that is depends on `TRUST_PROXY_HEADERS`:
+
+| `TRUST_PROXY_HEADERS` | Address used | Use when |
+|-----------------------|--------------|----------|
+| unset / `false` (default) | `req.socket.remoteAddress` | The relay is exposed directly. |
+| `true` | The `Fly-Client-IP` header, falling back to the socket address | The relay sits behind a proxy that **overwrites** that header — Fly's `http_service` does, and `fly.toml` sets this. |
+
+Getting this wrong breaks in one of two ways, neither of them noisy:
+
+- **On, without such a proxy in front:** the header is caller-supplied, so an
+  attacker picks a fresh value per request and the limit stops applying at all.
+  Only enable it when something upstream is guaranteed to overwrite the header.
+- **Off, behind one:** every request arrives from the proxy's address, so all
+  registrations share a single bucket — any ten of them close registration for
+  *everyone* for an hour, and registration is the only way to get a credential.
+
+`X-Forwarded-For` is never consulted either way: Fly's edge appends to it
+rather than replacing it, so a client-chosen entry survives to this process.
+
 **Known gap:** if a pairing merges two accounts while a session is still
 mid-conversation, captions appended to that session *after* the merge keep
 landing in the old (pre-pairing) account's directory — the in-flight session

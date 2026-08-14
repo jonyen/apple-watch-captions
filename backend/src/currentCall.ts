@@ -34,10 +34,13 @@ export class CurrentCall {
   /**
    * End `sessionId` if it is the current call. Returns false when it is not —
    * a socket dying for a call that was already replaced must not clear its
-   * replacement.
+   * replacement. `userId` is matched too: Twilio `callSid`s (today's session
+   * ids) are globally unique, so this is theoretical, but session ids are in
+   * principle chosen by the caller of this method, not guaranteed unique
+   * across users on their own.
    */
-  end(sessionId: string, reason: CallEndReason): boolean {
-    if (this.active?.sessionId !== sessionId) return false;
+  end(sessionId: string, userId: string, reason: CallEndReason): boolean {
+    if (this.active?.sessionId !== sessionId || this.active?.userId !== userId) return false;
     this.active = null;
     this.reason = reason;
     return true;

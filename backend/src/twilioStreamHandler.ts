@@ -34,7 +34,7 @@ export function handleTwilioStream(
     // `store.stop` must run unconditionally: this handler's session may have
     // been recreated (e.g. by a stray `media` frame after replacement) and
     // still needs closing even though CurrentCall has moved on.
-    calls.end(ending, reason);
+    calls.end(ending, userId, reason);
     store.stop(userId, ending);
   };
 
@@ -46,7 +46,7 @@ export function handleTwilioStream(
         // a session SessionStore has already dropped.
         const previous = calls.current();
         if (previous) {
-          calls.end(previous.sessionId, "ended");
+          calls.end(previous.sessionId, previous.userId, "ended");
           store.stop(previous.userId, previous.sessionId);
         }
         sessionId = frame.callSid;

@@ -108,9 +108,28 @@ describe("SessionStore", () => {
   });
 
   it("does not drain another user's events", () => {
-    const store = new SessionStore({ createProvider: () => new FakeTranscriptionProvider() });
+    const providers: FakeTranscriptionProvider[] = [];
+    const store = new SessionStore({
+      createProvider: () => {
+        const p = new FakeTranscriptionProvider();
+        providers.push(p);
+        return p;
+      },
+    });
     store.feed("user-a", "shared-id", Buffer.from([1, 2, 3, 4]));
+    // A real event, driven explicitly — FakeTranscriptionProvider emits
+    // nothing on its own, so an assertion of `[]` here would pass whether or
+    // not isolation actually holds unless something was really emitted.
+    providers[0].emitTranscript({ text: "secret", isFinal: true });
+
     expect(store.drain("user-b", "shared-id", 0).events).toEqual([]);
+
+    // And user A must still see it — proving this is isolation, not just
+    // everything being broken.
+    const own = store.drain("user-a", "shared-id", 0);
+    expect(
+      own.events.some((e) => e.payload.type === "caption" && e.payload.text === "secret"),
+    ).toBe(true);
   });
 
   it("does not stop another user's session", () => {

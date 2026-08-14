@@ -14,9 +14,16 @@ export interface SeqEvent {
  * Session ids are chosen by clients and are not secret — the phone and the
  * watch agree on a fixed one. Keyed by id alone, anyone who guessed one would
  * read that conversation's captions.
+ *
+ * Length-prefixed rather than a plain `${userId}:${id}` join: `userId` is
+ * server-generated today (so this collision is not reachable in practice),
+ * but `id` is client-chosen, and a plain join would let
+ * `("alice", "x:evil")` collide with `("alice:x", "evil")`. Prefixing
+ * `userId` with its own length makes the split point unambiguous no matter
+ * what characters either half contains.
  */
 function sessionKey(userId: string, id: string): string {
-  return `${userId}:${id}`;
+  return `${userId.length}:${userId}:${id}`;
 }
 
 interface Session {

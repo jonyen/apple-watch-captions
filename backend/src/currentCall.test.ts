@@ -18,7 +18,7 @@ describe("CurrentCall", () => {
     const calls = new CurrentCall();
     calls.begin("CA1", "CA1", "user-a");
 
-    expect(calls.end("CA1", "ended")).toBe(true);
+    expect(calls.end("CA1", "user-a", "ended")).toBe(true);
 
     expect(calls.current()).toBeNull();
     expect(calls.lastReason()).toBe("ended");
@@ -31,16 +31,28 @@ describe("CurrentCall", () => {
     calls.begin("CA1", "CA1", "user-a");
     calls.begin("CA2", "CA2", "user-a");
 
-    expect(calls.end("CA1", "stream_lost")).toBe(false);
+    expect(calls.end("CA1", "user-a", "stream_lost")).toBe(false);
 
     expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-a" });
+    expect(calls.lastReason()).toBeNull();
+  });
+
+  // Same sessionId, different owner — must not happen with today's globally
+  // unique Twilio callSids, but the check must not trust sessionId alone.
+  it("ignores an end whose userId does not match the current call's owner", () => {
+    const calls = new CurrentCall();
+    calls.begin("CA1", "CA1", "user-a");
+
+    expect(calls.end("CA1", "user-b", "ended")).toBe(false);
+
+    expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
     expect(calls.lastReason()).toBeNull();
   });
 
   it("clears a stale end reason when a new call begins", () => {
     const calls = new CurrentCall();
     calls.begin("CA1", "CA1", "user-a");
-    calls.end("CA1", "stream_lost");
+    calls.end("CA1", "user-a", "stream_lost");
 
     calls.begin("CA2", "CA2", "user-a");
 

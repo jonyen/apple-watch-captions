@@ -116,9 +116,12 @@ export class IdentityStore {
     // SQLite's own time functions, so test clock injection still governs
     // expiry — which also means every row left afterward is live, so the
     // plain lookup below only ever matches a real collision.
-    this.db
-      .prepare("DELETE FROM pairing_codes WHERE consumed_at IS NOT NULL OR expires_at <= ?")
-      .run(this.timestamp());
+    // Two statements rather than one `... WHERE consumed_at IS NOT NULL OR
+    // expires_at <= ?`: SQLite plans that OR as a full scan regardless of
+    // indexing (see `db.ts`), and this runs on the single writer every other
+    // request queues behind. Split, each half is an indexed search.
+    this.db.prepare("DELETE FROM pairing_codes WHERE consumed_at IS NOT NULL").run();
+    this.db.prepare("DELETE FROM pairing_codes WHERE expires_at <= ?").run(this.timestamp());
     // Retry on the astronomically unlikely collision with a still-live code
     // rather than letting the unique constraint surface as a 500.
     for (let attempt = 0; attempt < 5; attempt += 1) {

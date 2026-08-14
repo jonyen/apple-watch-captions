@@ -88,6 +88,24 @@ const REGISTRATION_WINDOW_MS = 60 * 60_000;
  */
 const PAIR_CLAIM_ATTEMPTS_PER_WINDOW = 5;
 const PAIR_CLAIM_WINDOW_MS = 10 * 60_000;
+/**
+ * Pairing codes a device may issue per window, and the window.
+ *
+ * Issuing looks read-only and is not: `issuePairingCode` first sweeps
+ * `pairing_codes` for dead rows, on the one SQLite writer every other request
+ * queues behind, and then writes a row. Left unrated, a single token could
+ * drive that indefinitely — and at saturation the allocator exhausts its
+ * retries and throws, which surfaces as a 500 and breaks pairing for
+ * everyone.
+ *
+ * Ten per hour is far above the human act this serves (open the phone app,
+ * read six digits off it, key them into the watch) while leaving no useful
+ * room to hammer the writer. Its own budget and window, like the claim side:
+ * a device that has been retyping codes must not thereby lose its ability to
+ * issue one, and vice versa.
+ */
+const PAIR_CODE_ISSUES_PER_WINDOW = 10;
+const PAIR_CODE_WINDOW_MS = 60 * 60_000;
 
 /**
  * Per-key sliding-window limiter. Used both for `/v1/devices` registrations
@@ -202,10 +220,25 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     PAIR_CLAIM_ATTEMPTS_PER_WINDOW,
     PAIR_CLAIM_WINDOW_MS,
   );
+  const codeLimiter = new RegistrationLimiter(
+    undefined,
+    PAIR_CODE_ISSUES_PER_WINDOW,
+    PAIR_CODE_WINDOW_MS,
+  );
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall, readers, limiter, claimLimiter).catch(
+    handleRequest(
+      req,
+      res,
+      opts,
+      store,
+      currentCall,
+      readers,
+      limiter,
+      claimLimiter,
+      codeLimiter,
+    ).catch(
       () => {
         if (!res.headersSent) res.writeHead(500);
         res.end();
@@ -292,6 +325,7 @@ async function handleRequest(
   readers: ReaderPresence,
   limiter: RegistrationLimiter,
   claimLimiter: RegistrationLimiter,
+  codeLimiter: RegistrationLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -347,6 +381,13 @@ async function handleRequest(
     const principal = principalFor(req, url, opts);
     if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    // Every issue does real work — a sweep and a write on the single SQLite
+    // writer — so unlike the claim side, each attempt spends budget whether
+    // or not it succeeds.
+    if (!codeLimiter.allow(principal.deviceId)) {
+      sendJSON(res, 429, { error: "too many pairing codes" });
       return;
     }
     sendJSON(res, 200, opts.identity.issuePairingCode(principal.userId));

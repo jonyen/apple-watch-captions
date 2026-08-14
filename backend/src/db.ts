@@ -55,5 +55,22 @@ function migrate(db: Db): void {
       expires_at  TEXT NOT NULL,
       consumed_at TEXT
     );
+    -- Support the purge that issuePairingCode runs before allocating:
+    -- unindexed it is a full-table scan, on the single SQLite writer every
+    -- other request queues behind, driven by a client-callable endpoint.
+    --
+    -- Two indexes, one per predicate, because the purge is two statements
+    -- rather than one "consumed_at IS NOT NULL OR expires_at <= ?". Verified
+    -- with EXPLAIN QUERY PLAN: SQLite plans the OR form as a plain SCAN
+    -- whatever indexes exist, unless ANALYZE has been run (which nothing
+    -- here does) — so a single index against the OR would have been
+    -- decorative. Split, each half is an indexed SEARCH with no stats.
+    --
+    -- IF NOT EXISTS (like every statement here) so a database created before
+    -- these indexes picks them up on its next boot.
+    CREATE INDEX IF NOT EXISTS pairing_codes_purge
+      ON pairing_codes(consumed_at, expires_at);
+    CREATE INDEX IF NOT EXISTS pairing_codes_expires
+      ON pairing_codes(expires_at);
   `);
 }

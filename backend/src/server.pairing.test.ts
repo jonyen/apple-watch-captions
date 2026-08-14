@@ -296,6 +296,42 @@ describe("pairing", () => {
   });
 });
 
+describe("pairing code rate limiting", () => {
+  // Issuing is not free: each one first sweeps `pairing_codes` for dead rows,
+  // on the single SQLite writer every other request shares. Unlimited, one
+  // token could drive that forever and pairing would start 500ing for
+  // everyone as `issuePairingCode` exhausted its retries.
+  it("refuses a device that issues more codes than its budget, while a different device is unaffected", async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), "wc-"));
+    const { port, identity } = start(root);
+    const attacker = identity.registerDevice("phone");
+    const bystander = identity.registerDevice("phone");
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i += 1) {
+      statuses.push((await issueCode(port, attacker.token)).status);
+    }
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429]);
+
+    // Its own budget — the attacker's exhaustion does not leak onto it.
+    expect((await issueCode(port, bystander.token)).status).toBe(200);
+  });
+
+  it("keeps the code budget separate from the failed-claim budget", async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), "wc-"));
+    const { port, identity } = start(root);
+    const device = identity.registerDevice("phone");
+
+    // Five failed claims exhausts the claim budget entirely.
+    for (let i = 0; i < 5; i += 1) await claimCode(port, device.token, "000000");
+    expect((await claimCode(port, device.token, "000000")).status).toBe(429);
+
+    // The same device can still issue a code: a burst of pairing typos must
+    // not lock the device out of the other half of pairing.
+    expect((await issueCode(port, device.token)).status).toBe(200);
+  });
+});
+
 describe("pairing claim rate limiting", () => {
   it("refuses a device after 5 failed attempts within the window, with 429 distinct from 409, while a different device is unaffected", async () => {
     const root = fs.mkdtempSync(join(tmpdir(), "wc-"));

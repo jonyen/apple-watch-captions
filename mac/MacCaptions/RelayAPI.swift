@@ -75,7 +75,12 @@ struct RelayAPI {
     private func get<T: Codable>(path: String, as type: T.Type) async throws -> T {
         var c = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         c.queryItems = [URLQueryItem(name: "token", value: token)]
-        let (data, response) = try await URLSession.shared.data(from: c.url!)
+        var request = URLRequest(url: c.url!)
+        // `/v1/usage` accepts the admin token in the header only — a query
+        // string would put the one shared secret in the relay's access logs.
+        // The other routes take either; sending both keeps one code path.
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }

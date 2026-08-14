@@ -51,7 +51,12 @@ describe("backfillNotion", () => {
     const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
     const exportTranscript = ok();
 
-    const result = await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     expect(exportTranscript).toHaveBeenCalledOnce();
     expect(result.exported).toBe(1);
@@ -62,12 +67,21 @@ describe("backfillNotion", () => {
     storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3), [LONG, "second line"]);
     const exportTranscript = ok();
 
-    await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     const sent = exportTranscript.mock.calls[0][0];
     expect(sent.sessionId).toBe("abc");
     expect(sent.segments.map((s) => s.text)).toEqual([LONG, "second line"]);
     expect(sent.startedAt).toBe("2026-07-06T01:02:03.000Z");
+    // The sweep runs per user directory, so it knows the owner. Rebuilding
+    // without one leaves `userId` empty — harmless while nothing downstream
+    // reads it, and a trap for the per-user export work that will.
+    expect(sent.userId).toBe(U);
   });
 
   it("passes the stored summary along", async () => {
@@ -75,7 +89,12 @@ describe("backfillNotion", () => {
     writeSummary(scoped(root), name, "A chat happened.");
     const exportTranscript = ok();
 
-    await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     expect(exportTranscript.mock.calls[0][1]).toBe("A chat happened.");
   });
@@ -85,7 +104,12 @@ describe("backfillNotion", () => {
     writeExportMarker(scoped(root), name, { pageId: "old", url: "u" });
     const exportTranscript = ok();
 
-    const result = await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     expect(exportTranscript).not.toHaveBeenCalled();
     expect(result.skipped).toBe(1);
@@ -95,7 +119,12 @@ describe("backfillNotion", () => {
     storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3), ["hi"]);
     const exportTranscript = ok();
 
-    const result = await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     expect(exportTranscript).not.toHaveBeenCalled();
     expect(result.skipped).toBe(1);
@@ -110,7 +139,12 @@ describe("backfillNotion", () => {
       return { pageId: "p2", url: "u2" };
     });
 
-    const result = await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     expect(exportTranscript).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ exported: 1, failed: 1 });
@@ -121,7 +155,12 @@ describe("backfillNotion", () => {
     storeSession(root, "older", Date.UTC(2026, 6, 6, 1, 0, 0));
     const exportTranscript = ok();
 
-    await backfillNotion({ dir: scoped(root), export: exportTranscript, delayMs: 0 });
+    await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      export: exportTranscript,
+      delayMs: 0,
+    });
 
     const ids = exportTranscript.mock.calls.map((c) => c[0].sessionId);
     expect(ids).toEqual(["older", "newer"]);
@@ -135,6 +174,7 @@ describe("backfillNotion", () => {
 
     const result = await backfillNotion({
       dir: scoped(root),
+      userId: U,
       export: exportTranscript,
       delayMs: 0,
       limit: 2,
@@ -149,6 +189,7 @@ describe("backfillNotion", () => {
 
     const result = await backfillNotion({
       dir: join(scoped(root), "missing"),
+      userId: U,
       export: exportTranscript,
       delayMs: 0,
     });
@@ -164,6 +205,7 @@ describe("backfillNotion", () => {
 
     await backfillNotion({
       dir: scoped(root),
+      userId: U,
       export: ok(),
       delayMs: 400,
       sleep: async (ms) => {

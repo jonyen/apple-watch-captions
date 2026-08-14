@@ -10,6 +10,13 @@ import { isSubstantial } from "./finalizer";
 
 export interface SummaryBackfillOptions {
   dir: string;
+  /**
+   * Who owns `dir`. Required rather than defaulted: the sweep runs once per
+   * user directory and always knows the answer, and a rebuilt transcript with
+   * an empty `userId` is exactly what `finalizer.run` (and the per-user
+   * export work that will read it) cannot use.
+   */
+  userId: string;
   summarize: Summarize;
   /**
    * Optional: add the freshly generated summary to a Notion page that was
@@ -56,7 +63,7 @@ export async function backfillSummaries(
       result.skipped++;
       continue;
     }
-    const transcript = rebuildFinalized(listed.name, detail.segments);
+    const transcript = rebuildFinalized(listed.name, detail.segments, opts.userId);
     if (!isSubstantial(transcript)) {
       result.skipped++;
       continue;

@@ -45,6 +45,16 @@ describe("GET /v1/usage", () => {
     expect(await res.json()).toEqual(REPORT);
   });
 
+  // The admin token is the system's only shared secret, and a query string
+  // lands in every access log, proxy log and browser history between here and
+  // the caller. Nothing on this route needs the query form — unlike the
+  // Twilio webhooks, this one is called by tools that can set a header.
+  it("refuses the admin token in the query string", async () => {
+    const base = start({ getUsage: async () => REPORT });
+    const res = await fetch(`${base}/v1/usage?token=admin-secret`);
+    expect(res.status).toBe(401);
+  });
+
   it("rejects a bad token", async () => {
     const base = start({ getUsage: async () => REPORT });
     const res = await fetch(`${base}/v1/usage`, {

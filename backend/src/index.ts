@@ -1,4 +1,4 @@
-import { join } from "path";
+import { join, dirname } from "path";
 import { mkdirSync, readdirSync, statSync, existsSync } from "fs";
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
@@ -109,6 +109,11 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
 // transcripts on the same persistent volume, so identities survive a
 // redeploy; an in-memory store here would force every device to re-register.
 mkdirSync(config.transcriptsDir, { recursive: true });
+// And the database's own directory, which is only the same one by default: a
+// DB_PATH pointed anywhere else (a sibling directory on the volume, say) that
+// does not exist yet fails with SQLITE_CANTOPEN at import time, which on Fly
+// is a boot loop rather than an error anyone reads.
+mkdirSync(dirname(config.dbPath), { recursive: true });
 const identity = new IdentityStore(openDb(config.dbPath));
 
 // One-time (per install) adoption of transcripts written before the relay was
@@ -151,11 +156,14 @@ console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app`);
  * migration has run) flat root, since transcripts live under
  * `userDir(root, userId)` rather than directly in `root`.
  */
-function userDirs(root: string): string[] {
+function userDirs(root: string): { dir: string; userId: string }[] {
   if (!existsSync(root)) return [];
   return readdirSync(root)
     .filter((entry) => statSync(join(root, entry)).isDirectory())
-    .map((entry) => join(root, entry));
+    // The directory name *is* the user id — `userDir` joins it verbatim — so
+    // the sweeps below can attribute what they rebuild instead of handing
+    // downstream an ownerless transcript.
+    .map((entry) => ({ dir: join(root, entry), userId: entry }));
 }
 
 /**
@@ -174,9 +182,10 @@ async function runBackfills(): Promise<void> {
 
   if (summarize) {
     const totals = { summarized: 0, patched: 0, failed: 0 };
-    for (const dir of dirs) {
+    for (const { dir, userId } of dirs) {
       const r = await backfillSummaries({
         dir,
+        userId,
         summarize,
         patchPage: config.notion ? createNotionSummaryPatcher(config.notion) : undefined,
       });
@@ -192,8 +201,8 @@ async function runBackfills(): Promise<void> {
   }
   if (exportTranscript) {
     const totals = { exported: 0, failed: 0 };
-    for (const dir of dirs) {
-      const r = await backfillNotion({ dir, export: exportTranscript });
+    for (const { dir, userId } of dirs) {
+      const r = await backfillNotion({ dir, userId, export: exportTranscript });
       totals.exported += r.exported;
       totals.failed += r.failed;
     }

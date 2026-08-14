@@ -47,7 +47,7 @@ describe("backfillSummaries", () => {
     const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
     const summarize = summarizer();
 
-    const result = await backfillSummaries({ dir: scoped(root), summarize, delayMs: 0 });
+    const result = await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
 
     expect(summarize).toHaveBeenCalledOnce();
     expect(result.summarized).toBe(1);
@@ -58,11 +58,15 @@ describe("backfillSummaries", () => {
     storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3), [LONG, "second line"]);
     const summarize = summarizer();
 
-    await backfillSummaries({ dir: scoped(root), summarize, delayMs: 0 });
+    await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
 
     const sent = summarize.mock.calls[0][0];
     expect(sent.sessionId).toBe("abc");
     expect(sent.segments.map((s) => s.text)).toEqual([LONG, "second line"]);
+    // The sweep runs per user directory, so it knows the owner. Rebuilding
+    // without one leaves `userId` empty — harmless while nothing downstream
+    // reads it, and a trap for the per-user export work that will.
+    expect(sent.userId).toBe(U);
   });
 
   it("skips transcripts that already have a summary", async () => {
@@ -70,7 +74,7 @@ describe("backfillSummaries", () => {
     writeSummary(scoped(root), name, "already done");
     const summarize = summarizer();
 
-    const result = await backfillSummaries({ dir: scoped(root), summarize, delayMs: 0 });
+    const result = await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
 
     expect(summarize).not.toHaveBeenCalled();
     expect(result.skipped).toBe(1);
@@ -81,7 +85,7 @@ describe("backfillSummaries", () => {
     storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3), ["hi"]);
     const summarize = summarizer();
 
-    const result = await backfillSummaries({ dir: scoped(root), summarize, delayMs: 0 });
+    const result = await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
 
     expect(summarize).not.toHaveBeenCalled();
     expect(result.skipped).toBe(1);
@@ -96,7 +100,7 @@ describe("backfillSummaries", () => {
       return "A chat happened.";
     });
 
-    const result = await backfillSummaries({ dir: scoped(root), summarize, delayMs: 0 });
+    const result = await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
 
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ summarized: 1, failed: 1 });
@@ -106,7 +110,7 @@ describe("backfillSummaries", () => {
     const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
     const summarize = vi.fn(async () => "");
 
-    const result = await backfillSummaries({ dir: scoped(root), summarize, delayMs: 0 });
+    const result = await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
 
     expect(readTranscript(scoped(root), name)?.summary).toBeNull();
     expect(result.failed).toBe(1);
@@ -120,6 +124,7 @@ describe("backfillSummaries", () => {
 
     const result = await backfillSummaries({
       dir: scoped(root),
+      userId: U,
       summarize,
       delayMs: 0,
       limit: 2,
@@ -136,6 +141,7 @@ describe("backfillSummaries", () => {
 
     const result = await backfillSummaries({
       dir: scoped(root),
+      userId: U,
       summarize: summarizer(),
       delayMs: 0,
       patchPage,
@@ -151,6 +157,7 @@ describe("backfillSummaries", () => {
 
     const result = await backfillSummaries({
       dir: scoped(root),
+      userId: U,
       summarize: summarizer(),
       delayMs: 0,
       patchPage,
@@ -169,6 +176,7 @@ describe("backfillSummaries", () => {
 
     const result = await backfillSummaries({
       dir: scoped(root),
+      userId: U,
       summarize: summarizer(),
       delayMs: 0,
       patchPage,
@@ -185,6 +193,7 @@ describe("backfillSummaries", () => {
 
     await backfillSummaries({
       dir: scoped(root),
+      userId: U,
       summarize: summarizer(),
       delayMs: 500,
       sleep: async (ms: number) => {

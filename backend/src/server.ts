@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer, Server, IncomingMessage, ServerResponse } from "http";
 import { AddressInfo } from "net";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 import { bearerToken, resolveToken } from "./auth";
 import { IdentityStore, DeviceKind, Principal } from "./identityStore";
 import { CaptionSession, OutboundMessage } from "./captionSession";
@@ -523,7 +523,7 @@ async function handleRequest(
     // This reports the operator's Deepgram and Fly bill, not a per-user
     // figure, so a device token must not reach it.
     const token = bearerToken(req.headers.authorization) ?? url.searchParams.get("token");
-    if (!opts.adminToken || token !== opts.adminToken) {
+    if (!opts.adminToken || !token || !constantTimeEquals(token, opts.adminToken)) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -638,6 +638,22 @@ function principalFor(
   const header = bearerToken(req.headers.authorization);
   const token = header ?? url.searchParams.get("token") ?? undefined;
   return resolveToken(opts.identity, token);
+}
+
+/**
+ * Constant-time string comparison. `adminToken` is the one shared secret
+ * left in the system now that every other route resolves a per-device
+ * principal, which makes it the one comparison worth closing the timing
+ * side-channel on. `timingSafeEqual` throws on a length mismatch rather than
+ * returning false, so lengths are compared first — a length check does leak
+ * length, but not any byte of the secret, and comparing lengths up front
+ * fails closed rather than throwing past the caller.
+ */
+function constantTimeEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 function sendJSON(res: ServerResponse, status: number, body: unknown): void {

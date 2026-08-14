@@ -1,4 +1,5 @@
 import { join } from "path";
+import { mkdirSync } from "fs";
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
 import { startServer, ProviderOptions } from "./server";
@@ -104,6 +105,11 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
 // onto a proper `DB_PATH`/`ADMIN_TOKEN` config surface; this is the minimal
 // wiring that keeps identities alive across deploys in the meantime — an
 // in-memory store here would force every device to re-register on restart.
+// The directory has to exist before `openDb` runs: nothing else creates it
+// this early (TranscriptStore only creates it lazily, on the first write),
+// so on a fresh volume `openDb` would otherwise throw SQLITE_CANTOPEN at
+// import time and boot-loop the process.
+mkdirSync(config.transcriptsDir, { recursive: true });
 const identity = new IdentityStore(openDb(join(config.transcriptsDir, "identity.db")));
 
 const server = startServer({

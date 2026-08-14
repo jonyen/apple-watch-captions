@@ -46,8 +46,8 @@ export const VIEWER_HTML = `<!doctype html>
 <body>
 <h1>Watch Captions — Transcripts</h1>
 <div id="auth" style="display:none">
-  <p>Enter the relay auth token to view transcripts.</p>
-  <input id="token" type="password" placeholder="auth token" autocomplete="off">
+  <p>Enter your device token to view transcripts.</p>
+  <input id="token" type="password" placeholder="device token" autocomplete="off">
   <button id="save">Save</button>
 </div>
 <button id="back">&larr; All transcripts</button>

@@ -89,7 +89,11 @@ export class IdentityStore {
       .get(hashToken(token)) as { id: string; user_id: string; last_seen_at: string | null } | undefined;
     if (!row) return null;
     const staleSince = this.now() - LAST_SEEN_THROTTLE_MS;
-    if (!row.last_seen_at || Date.parse(row.last_seen_at) <= staleSince) {
+    const lastSeen = row.last_seen_at ? Date.parse(row.last_seen_at) : NaN;
+    // An unparseable stored value (corrupt row, hand-edited data) must count
+    // as stale rather than as fresh — otherwise a NaN comparison against
+    // `staleSince` is always false and the row would never refresh again.
+    if (Number.isNaN(lastSeen) || lastSeen <= staleSince) {
       this.db
         .prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?")
         .run(this.timestamp(), row.id);

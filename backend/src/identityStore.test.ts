@@ -74,6 +74,10 @@ describe("last_seen_at throttling", () => {
 
     s.resolve(registered.token);
     const first = lastSeenOf(db, registered.deviceId);
+    // A newly-created device has no prior `last_seen_at`, so the first
+    // resolve must stamp one — otherwise this test would also pass against
+    // a store that never wrote it at all.
+    expect(first).not.toBeNull();
 
     clock += 60_000; // 1 minute later, well inside the 5-minute window
     s.resolve(registered.token);

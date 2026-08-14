@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer, Server, IncomingMessage, ServerResponse } from "http";
-import { mkdirSync, readdirSync, renameSync, existsSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, renameSync, existsSync, rmdirSync } from "fs";
 import { join } from "path";
 import { AddressInfo } from "net";
 import { randomUUID, timingSafeEqual } from "crypto";
@@ -78,9 +78,26 @@ const DEVICE_KINDS: DeviceKind[] = ["watch", "phone", "mac"];
 /** Registrations allowed per address per window, and the window itself. */
 const REGISTRATIONS_PER_WINDOW = 10;
 const REGISTRATION_WINDOW_MS = 60 * 60_000;
+/**
+ * Failed `/v1/pair/claim` attempts allowed per claiming device before it is
+ * refused outright, and the window they're counted over.
+ *
+ * `/v1/devices` registers with no credential by design, so an attacker can
+ * mint a device for free and brute-force a six-digit code inside its
+ * 10-minute window — the code space is only 1,000,000 and a hit hands over
+ * the victim's whole account. Five is ample for a human keying six digits on
+ * a Digital Crown, and cuts an attacker with ten devices an hour to a
+ * negligible number of guesses. Kept as its own budget and window, separate
+ * from `REGISTRATIONS_PER_WINDOW`, so a burst of pairing typos can't lock a
+ * device out of registering.
+ */
+const PAIR_CLAIM_ATTEMPTS_PER_WINDOW = 5;
+const PAIR_CLAIM_WINDOW_MS = 10 * 60_000;
 
 /**
- * Per-address registration limiter.
+ * Per-key sliding-window limiter. Used both for `/v1/devices` registrations
+ * (keyed by address) and for failed `/v1/pair/claim` attempts (keyed by
+ * device) — same mechanism, different key, budget, and window.
  *
  * Registration cannot require a credential — an app has none before it
  * registers — so the only backstop is a rate limit. A junk account costs one
@@ -90,34 +107,51 @@ const REGISTRATION_WINDOW_MS = 60 * 60_000;
 export class RegistrationLimiter {
   private readonly hits = new Map<string, number[]>();
 
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  constructor(
+    private readonly now: () => number = () => Date.now(),
+    private readonly limit: number = REGISTRATIONS_PER_WINDOW,
+    private readonly windowMs: number = REGISTRATION_WINDOW_MS,
+  ) {}
 
-  allow(address: string): boolean {
-    const cutoff = this.now() - REGISTRATION_WINDOW_MS;
-    // Opportunistic eviction: an address that registers once and never
-    // returns would otherwise hold its key forever — this process never
-    // restarts to clear it (Fly runs it with auto_stop_machines off). Swept
-    // on every call rather than on a timer, since registrations are rare
-    // enough that this stays cheap.
+  allow(key: string): boolean {
+    const cutoff = this.now() - this.windowMs;
+    // Opportunistic eviction: a key that hits once and never returns would
+    // otherwise hold its bucket forever — this process never restarts to
+    // clear it (Fly runs it with auto_stop_machines off). Swept on every
+    // call rather than on a timer, since both registrations and pairing
+    // attempts are rare enough that this stays cheap.
     this.evictStale(cutoff);
-    const recent = (this.hits.get(address) ?? []).filter((at) => at > cutoff);
-    if (recent.length >= REGISTRATIONS_PER_WINDOW) {
-      this.hits.set(address, recent);
+    const recent = (this.hits.get(key) ?? []).filter((at) => at > cutoff);
+    if (recent.length >= this.limit) {
+      this.hits.set(key, recent);
       return false;
     }
     recent.push(this.now());
-    this.hits.set(address, recent);
+    this.hits.set(key, recent);
     return true;
   }
 
-  /** How many addresses currently hold a bucket. Exposed for testing eviction. */
+  /**
+   * Whether `key` currently has budget, without spending any of it. Lets a
+   * caller refuse outright — before doing any real work — once a key is
+   * exhausted, rather than merely relabeling the response after the fact:
+   * for `/v1/pair/claim`, that distinction is what stops an exhausted device
+   * from still getting a real guess against the database.
+   */
+  peek(key: string): boolean {
+    const cutoff = this.now() - this.windowMs;
+    const recent = (this.hits.get(key) ?? []).filter((at) => at > cutoff);
+    return recent.length < this.limit;
+  }
+
+  /** How many keys currently hold a bucket. Exposed for testing eviction. */
   size(): number {
     return this.hits.size;
   }
 
   private evictStale(cutoff: number): void {
-    for (const [address, hits] of this.hits) {
-      if (hits.every((at) => at <= cutoff)) this.hits.delete(address);
+    for (const [key, hits] of this.hits) {
+      if (hits.every((at) => at <= cutoff)) this.hits.delete(key);
     }
   }
 }
@@ -173,13 +207,20 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const currentCall = new CurrentCall();
   const readers = new ReaderPresence();
   const limiter = new RegistrationLimiter();
+  const claimLimiter = new RegistrationLimiter(
+    undefined,
+    PAIR_CLAIM_ATTEMPTS_PER_WINDOW,
+    PAIR_CLAIM_WINDOW_MS,
+  );
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall, readers, settings, limiter).catch(() => {
-      if (!res.headersSent) res.writeHead(500);
-      res.end();
-    });
+    handleRequest(req, res, opts, store, currentCall, readers, settings, limiter, claimLimiter).catch(
+      () => {
+        if (!res.headersSent) res.writeHead(500);
+        res.end();
+      },
+    );
   });
 
   // The WebSocket endpoint is retained for testing from a real computer; the
@@ -261,6 +302,7 @@ async function handleRequest(
   readers: ReaderPresence,
   settings: SettingsStore,
   limiter: RegistrationLimiter,
+  claimLimiter: RegistrationLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -328,6 +370,15 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
+    // Refused before any real work happens — including before the pairing
+    // lookup — so an exhausted device cannot land a lucky guess either. A
+    // check applied only to the response after the fact would still let
+    // every guess reach the database; only refusing outright actually caps
+    // how many guesses a brute-forcing device gets.
+    if (!claimLimiter.peek(principal.deviceId)) {
+      sendJSON(res, 429, { error: "too many attempts" });
+      return;
+    }
     let body: Buffer;
     try {
       body = await readBody(req, MAX_REGISTRATION_BYTES);
@@ -348,6 +399,9 @@ async function handleRequest(
     }
     const result = opts.identity.claimPairingCode(code, principal);
     if (!result.ok) {
+      // Only a failed guess spends budget: a device that already claimed
+      // successfully must not be penalized for it on some later pairing.
+      claimLimiter.allow(principal.deviceId);
       sendJSON(res, 409, { error: result.reason });
       return;
     }
@@ -751,7 +805,15 @@ function constantTimeEquals(a: string, b: string): boolean {
  *    If anything was left behind — a collision or any other per-file
  *    failure — the directory (and the stranded file inside it) is left on
  *    disk rather than deleted out from under the very files this function
- *    just decided not to lose.
+ *    just decided not to lose. The removal itself uses the non-recursive
+ *    `rmdirSync`, not `rmSync(..., { recursive: true })`, so this is a
+ *    filesystem-enforced invariant rather than something the `stranded`
+ *    count merely has to get right: a session still in flight under the old
+ *    userId can call `TranscriptStore.append`, which recreates this very
+ *    directory and writes into it — if that happens to land between the
+ *    `stranded` count settling at zero and the removal, `rmdirSync` fails
+ *    with `ENOTEMPTY` (caught below) instead of deleting the file that just
+ *    arrived along with the directory it landed in.
  */
 function moveTranscripts(root: string, fromUserId: string, toUserId: string): void {
   let from: string;
@@ -796,9 +858,10 @@ function moveTranscripts(root: string, fromUserId: string, toUserId: string): vo
 
   if (stranded > 0) return;
   try {
-    rmSync(from, { recursive: true });
+    rmdirSync(from);
   } catch {
-    // A directory that would not go is not worth failing the pairing over.
+    // Non-empty (something landed here after the loop above finished) or
+    // otherwise unremovable — not worth failing the pairing over either way.
   }
 }
 

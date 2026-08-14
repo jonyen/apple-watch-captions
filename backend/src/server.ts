@@ -474,18 +474,12 @@ async function handleRequest(
       return;
     }
     const since = Number(url.searchParams.get("since") ?? "0") || 0;
-    const active = calls.current();
-    // A call this poller does not own is invisible to them — answered
-    // exactly as "no call active", and deliberately without `reason`:
-    // `calls.lastReason()` is the call owner's state too, and surfacing it
-    // here would tell a stranger that someone else's call just ended, and
-    // how. Checked first, and on its own branch, so the session lookup below
-    // never runs with a userId that is not the poller's own — `store.has`/
-    // `store.drain` must never be handed anyone's id but the caller's.
-    if (active && active.userId !== principal.userId) {
-      sendJSON(res, 200, { active: false, events: [], seq: since });
-      return;
-    }
+    // Scoped to the poller: `CurrentCall` holds one call per user, so a call
+    // this poller does not own is not merely filtered out here — it is never
+    // returned in the first place. That also guarantees the session lookups
+    // below only ever run with the caller's own id, which is what `store.has`
+    // and `store.drain` require.
+    const active = calls.current(principal.userId);
     // reapIdle (or a direct /v1/stop) can drop a call's session without
     // telling CurrentCall. Left unguarded, this would report `active: true`
     // forever with no captions ever arriving — a screen that hangs rather

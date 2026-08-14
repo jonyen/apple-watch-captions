@@ -126,6 +126,76 @@ describe("cross-tenant isolation", () => {
     ws.close();
   });
 
+  // The eviction half of the same question the test above asks about reads:
+  // a `start` frame ends "the current call" before beginning its own. With a
+  // single process-global call slot, that eviction hit whoever held it —
+  // so any self-registered device could close a stranger's live call and
+  // take the slot, and the victim's next poll answered "no call".
+  it("does not let one user's incoming call end another user's live call", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const alice = identity.registerDevice("watch");
+    const mallory = identity.registerDevice("watch");
+    const providers: FakeTranscriptionProvider[] = [];
+    server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => {
+        const p = new FakeTranscriptionProvider();
+        providers.push(p);
+        return p;
+      },
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    // Alice's call is live.
+    const aliceWs = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=${alice.token}`);
+    await new Promise((resolve) => aliceWs.on("open", resolve));
+    aliceWs.send(JSON.stringify({
+      event: "start",
+      streamSid: "MZ-alice",
+      start: { callSid: "CA-alice", streamSid: "MZ-alice" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    providers[0].emitReady();
+
+    // Mallory opens her own media stream with her own valid token and starts
+    // a call of her own.
+    const malloryWs = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=${mallory.token}`);
+    await new Promise((resolve) => malloryWs.on("open", resolve));
+    malloryWs.send(JSON.stringify({
+      event: "start",
+      streamSid: "MZ-mallory",
+      start: { callSid: "CA-mallory", streamSid: "MZ-mallory" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Alice's session is still live and still hers: a caption emitted into it
+    // after Mallory's start frame still reaches Alice.
+    providers[0].emitTranscript({ text: "still talking", isFinal: true });
+    const aliceRes = await fetch(`http://127.0.0.1:${port}/v1/call?token=${alice.token}`);
+    const aliceBody = (await aliceRes.json()) as {
+      active: boolean;
+      reason?: string;
+      events: { type: string; text?: string }[];
+    };
+    expect(aliceBody.active).toBe(true);
+    expect(aliceBody.reason).toBeUndefined();
+    expect(
+      aliceBody.events.some((e) => e.type === "caption" && e.text === "still talking"),
+    ).toBe(true);
+
+    // And Mallory's own call is genuinely live too — this is two calls at
+    // once, not Mallory's start frame having been dropped on the floor.
+    const malloryBody = await (
+      await fetch(`http://127.0.0.1:${port}/v1/call?token=${mallory.token}`)
+    ).json();
+    expect(malloryBody.active).toBe(true);
+
+    aliceWs.close();
+    malloryWs.close();
+  });
+
   it("does not leak whether or how another user's call ended", async () => {
     const identity = new IdentityStore(openDb(":memory:"));
     const alice = identity.registerDevice("watch");

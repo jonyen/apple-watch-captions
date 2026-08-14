@@ -42,9 +42,12 @@ export function handleTwilioStream(
     const frame = parseTwilioFrame(data.toString("utf8"));
     switch (frame.type) {
       case "start": {
-        // Newest call wins. Close the old one first so CurrentCall never holds
-        // a session SessionStore has already dropped.
-        const previous = calls.current();
+        // Newest call wins — for this user. Close their old one first so
+        // CurrentCall never holds a session SessionStore has already dropped.
+        // `current` is asked for *this socket's* user, so a call belonging to
+        // anyone else is not visible here and cannot be evicted: the token on
+        // this socket authorises starting a call, never ending a stranger's.
+        const previous = calls.current(userId);
         if (previous) {
           calls.end(previous.sessionId, previous.userId, "ended");
           store.stop(previous.userId, previous.sessionId);
@@ -69,7 +72,7 @@ export function handleTwilioStream(
         // session id `store.stop` already removed, recreating it — and
         // opening a fresh, unreachable Deepgram connection — under a session
         // id nobody polls anymore.
-        if (sessionId && calls.current()?.sessionId === sessionId) {
+        if (sessionId && calls.current(userId)?.sessionId === sessionId) {
           store.feed(userId, sessionId, frame.audio, CALL_SESSION.ephemeral, CALL_SESSION.provider);
         }
         break;

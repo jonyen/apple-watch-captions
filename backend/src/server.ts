@@ -11,7 +11,6 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { CurrentCall } from "./currentCall";
 import { ReaderPresence } from "./readerPresence";
-import { SettingsStore } from "./settingsStore";
 import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
@@ -58,8 +57,6 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
-  /** Optional path the phone-written settings persist to. Memory-only without it. */
-  settingsFile?: string;
 }
 
 export interface CaptionServer {
@@ -70,8 +67,6 @@ export interface CaptionServer {
 /** Cap on a single audio POST body (~512 KB ≈ 16 s of 16 kHz mono Int16). */
 const MAX_AUDIO_BYTES = 512 * 1024;
 const REAP_INTERVAL_MS = 5_000;
-/** Settings are a handful of scalars; anything larger is not a settings write. */
-const MAX_SETTINGS_BYTES = 4 * 1024;
 /** A registration body is `{"kind":"watch"}`; anything larger is not one. */
 const MAX_REGISTRATION_BYTES = 1024;
 const DEVICE_KINDS: DeviceKind[] = ["watch", "phone", "mac"];
@@ -195,13 +190,8 @@ function clientAddress(req: IncomingMessage, trustProxyHeaders: boolean): string
 }
 
 export function startServer(opts: StartServerOptions): CaptionServer {
-  const settings = new SettingsStore(opts.settingsFile);
   const store = new SessionStore({
-    // Read at session creation rather than captured at boot, so changing the
-    // provider on the phone takes effect on the next session instead of the
-    // next deploy.
-    createProvider: (providerOpts) =>
-      opts.createProvider({ ...providerOpts, provider: settings.get().provider }),
+    createProvider: opts.createProvider,
     transcripts: opts.transcripts,
   });
   const currentCall = new CurrentCall();
@@ -215,7 +205,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
-    handleRequest(req, res, opts, store, currentCall, readers, settings, limiter, claimLimiter).catch(
+    handleRequest(req, res, opts, store, currentCall, readers, limiter, claimLimiter).catch(
       () => {
         if (!res.headersSent) res.writeHead(500);
         res.end();
@@ -300,7 +290,6 @@ async function handleRequest(
   store: SessionStore,
   calls: CurrentCall,
   readers: ReaderPresence,
-  settings: SettingsStore,
   limiter: RegistrationLimiter,
   claimLimiter: RegistrationLimiter,
 ): Promise<void> {
@@ -555,37 +544,6 @@ async function handleRequest(
     return;
   }
 
-  // Settings the phone writes and the watch reads. They live here because the
-  // two apps cannot talk to each other: the watch app is standalone, so there
-  // is no paired-companion channel between them.
-  if (url.pathname === "/v1/settings" && (req.method === "GET" || req.method === "PUT")) {
-    const principal = principalFor(req, url, opts);
-    if (!principal) {
-      sendJSON(res, 401, { error: "unauthorized" });
-      return;
-    }
-    if (req.method === "GET") {
-      sendJSON(res, 200, settings.get());
-      return;
-    }
-    let body: Buffer;
-    try {
-      body = await readBody(req, MAX_SETTINGS_BYTES);
-    } catch {
-      sendJSON(res, 413, { error: "body too large" });
-      return;
-    }
-    let patch: unknown;
-    try {
-      patch = JSON.parse(body.toString("utf8"));
-    } catch {
-      sendJSON(res, 400, { error: "invalid json" });
-      return;
-    }
-    sendJSON(res, 200, settings.update(patch));
-    return;
-  }
-
   if (req.method === "GET" && url.pathname.startsWith("/v1/transcripts")) {
     if (!opts.transcriptsRoot) {
       sendJSON(res, 404, { error: "transcripts not enabled" });
@@ -692,6 +650,14 @@ async function handleRequest(
       if (resume && !ephemeral && !store.has(principal.userId, session)) {
         opts.transcripts?.reopen(principal.userId, session, resume);
       }
+      // Read at creation and only at creation: swapping engines partway
+      // through a conversation would leave one transcript spoken in two
+      // voices. A later post carrying a different name is ignored, the same
+      // way `ephemeral` and `resume` are. An unrecognised name falls back to
+      // the relay's default rather than failing the request.
+      const requestedProvider = url.searchParams.get("provider");
+      const provider = PROVIDER_NAMES.find((name) => name === requestedProvider);
+      const providerOpts: ProviderOptions | undefined = provider ? { provider } : undefined;
 
       let body: Buffer;
       try {
@@ -710,7 +676,7 @@ async function handleRequest(
       // asks about this to open straight into captions on launch.
       if (body.length > 0) readers.markProducer(principal.userId, session);
 
-      store.feed(principal.userId, session, body, ephemeral);
+      store.feed(principal.userId, session, body, ephemeral, providerOpts);
       const { events, seq } = store.drain(principal.userId, session, since);
       sendJSON(res, 200, {
         events: flatten(events),

@@ -165,6 +165,88 @@ describe("HTTP transport", () => {
   });
 });
 
+describe("provider selection", () => {
+  it("uses the provider named on the request", async () => {
+    const seen: (string | undefined)[] = [];
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
+    const server = startServer({
+      port: 0,
+      identity,
+      createProvider: (o) => {
+        seen.push(o?.provider);
+        return new FakeTranscriptionProvider();
+      },
+    });
+    running = server;
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&provider=openai`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${device.token}` },
+      body: Buffer.alloc(3200),
+    });
+    expect(seen).toEqual(["openai"]);
+  });
+
+  it("ignores an unknown provider rather than failing the request", async () => {
+    const seen: (string | undefined)[] = [];
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
+    const server = startServer({
+      port: 0,
+      identity,
+      createProvider: (o) => {
+        seen.push(o?.provider);
+        return new FakeTranscriptionProvider();
+      },
+    });
+    running = server;
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&provider=toaster`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${device.token}` },
+      body: Buffer.alloc(3200),
+    });
+    expect(res.status).toBe(200);
+    expect(seen).toEqual([undefined]);
+  });
+
+  it("ignores a provider named on a later post to an already-created session", async () => {
+    const seen: (string | undefined)[] = [];
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
+    const server = startServer({
+      port: 0,
+      identity,
+      createProvider: (o) => {
+        seen.push(o?.provider);
+        return new FakeTranscriptionProvider();
+      },
+    });
+    running = server;
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&provider=openai`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${device.token}` },
+      body: Buffer.alloc(3200),
+    });
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&provider=assemblyai`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${device.token}` },
+      body: Buffer.alloc(3200),
+    });
+    // The session was already created with openai; the second post's provider
+    // name must not swap the engine mid-conversation.
+    expect(seen).toEqual(["openai"]);
+  });
+});
+
 describe("ephemeral sessions", () => {
   function startWithTranscriptSpy() {
     const identity = new IdentityStore(openDb(":memory:"));

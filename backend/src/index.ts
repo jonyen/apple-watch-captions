@@ -120,10 +120,6 @@ const server = startServer({
   transcriptsRoot: config.transcriptsDir,
   usage: createUsageService({ env: process.env }),
   callForwardTo: config.twilioForwardTo,
-  // Beside the transcripts, so settings ride the same persistent volume and
-  // survive a deploy — a caption size that reset itself on every release would
-  // read as a bug in the watch app.
-  settingsFile: join(config.transcriptsDir, "settings.json"),
 });
 
 const addr = server.address();

@@ -100,4 +100,31 @@ describe("migrateFlatTranscripts", () => {
     expect(second).toBeNull();
     expect(readdirSync(root)).toEqual([first!.userId]);
   });
+
+  it("never sweeps up the identity database itself, even when it is file-backed at the flat root", () => {
+    // Every other test in this file uses an in-memory store, so no database
+    // file ever exists at `root` — which is exactly the gap that let a
+    // file-backed `identity.db` at the root get renamed into the adopted
+    // user's directory, wiping every registered device's token on every
+    // boot. This test builds the store where boot really does: a real file
+    // living right next to the loose transcripts it is meant to migrate.
+    const root = mkdtempSync(join(tmpdir(), "wc-"));
+    writeFileSync(join(root, "2026-01-01T00-00-00Z_s1.jsonl"), '{"at":"x","text":"hi"}\n');
+
+    const dbPath = join(root, "identity.db");
+    const identity1 = new IdentityStore(openDb(dbPath));
+    const first = migrateFlatTranscripts(root, identity1)!;
+    expect(first).not.toBeNull();
+    expect(existsSync(dbPath)).toBe(true);
+
+    // "Restart": a fresh IdentityStore opened against the same on-disk file,
+    // as a real boot would do.
+    const identity2 = new IdentityStore(openDb(dbPath));
+    expect(identity2.resolve(first.token)?.userId).toBe(first.userId);
+
+    const second = migrateFlatTranscripts(root, identity2);
+    expect(second).toBeNull();
+
+    expect(readdirSync(root).sort()).toEqual(["identity.db", first.userId].sort());
+  });
 });

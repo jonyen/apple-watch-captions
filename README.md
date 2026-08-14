@@ -83,7 +83,6 @@ gets its own bearer token back; every other request carries it, either as
 |----------|---------|----------|
 | `POST /v1/audio?session=<id>&since=<seq>` | raw 16 kHz mono Int16 PCM (may be empty) | `{ "events": [{seq,type,...}], "seq": <latest> }` |
 | `GET /v1/presence?session=<id>` | — | `{ "reader": true, "producer": true }` — who polled with `role=reader`, and who fed audio, in the last 10s. The phone asks before streaming, so audio nobody is watching never leaves the device; the watch asks to open straight into captions when the phone is broadcasting. |
-| `GET`/`PUT /v1/settings` | JSON on `PUT` | Settings the phone writes and the watch reads (caption text size, auto-open, save transcripts, provider). They live here because the watch app is standalone: there is no paired-companion channel between the two apps. |
 | `POST /v1/stop?session=<id>` | empty | `{ "events": [...], "seq": <latest> }` |
 | `GET /healthz` | — | `200 ok` |
 | `WS /stream?token=…` | binary PCM frames | JSON caption messages — the mac app's production transport (WebSockets aren't restricted there the way they are on watchOS); accepts `?channels=2` for multichannel (mic + system audio), tagging captions with a `channel`. The watch still uses HTTP polling (see above). |

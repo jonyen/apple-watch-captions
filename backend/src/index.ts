@@ -116,6 +116,12 @@ const identity = new IdentityStore(openDb(config.dbPath));
 // holds only per-user directories.
 const migrated = migrateFlatTranscripts(config.transcriptsDir, identity);
 if (migrated) {
+  // This is a live bearer token, printed exactly once because there is no
+  // other way to hand the operator a credential for a user the relay just
+  // minted on their behalf. Whatever aggregates these logs (`fly logs`, a
+  // log drain, etc.) now holds it too — treat that output with the same
+  // care as any other secret. There is no revoke/rotate for it beyond
+  // pairing a new device onto this user and no longer using the old one.
   console.log(
     `Migrated ${migrated.moved} file(s) to user ${migrated.userId}. ` +
       `Adopt existing installs with this token (shown once): ${migrated.token}`,

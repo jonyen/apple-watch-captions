@@ -2,8 +2,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer, Server, IncomingMessage, ServerResponse } from "http";
 import { AddressInfo } from "net";
 import { randomUUID } from "crypto";
-import { verifyToken } from "./auth";
-import { IdentityStore, DeviceKind } from "./identityStore";
+import { bearerToken, resolveToken } from "./auth";
+import { IdentityStore, DeviceKind, Principal } from "./identityStore";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
@@ -27,15 +27,14 @@ export * from "./providerOptions";
 
 export interface StartServerOptions {
   port: number;
+  /** Users, devices, and pairing codes. Every authenticated route resolves its principal through this. */
+  identity: IdentityStore;
   /**
-   * Superseded shared-secret credential — every device used to present this
-   * same token. Every route still reads it via `verifyToken`; Task 6 moves
-   * them all onto `identity`'s per-device tokens via `resolveToken`, at
-   * which point this is deleted.
+   * Operator-only token for `/v1/usage`. It reports the operator's Deepgram
+   * and Fly bill, not a per-user figure, so a device token must never reach
+   * it — and with no admin token configured the endpoint stays closed.
    */
-  authToken?: string;
-  /** Users, devices, and pairing codes. */
-  identity?: IdentityStore;
+  adminToken?: string;
   /**
    * Trust the `Fly-Client-IP` header for the registration rate limiter's
    * address key, instead of the raw socket address. `X-Forwarded-For` is
@@ -196,7 +195,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
         ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
         : undefined;
-      if (!verifyToken(fromPath ?? token, opts.authToken ?? "")) {
+      if (!resolveToken(opts.identity, fromPath ?? token)) {
         console.log("twilio upgrade rejected: token missing or wrong");
         wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
         return;
@@ -210,7 +209,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       socket.destroy();
       return;
     }
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    if (!resolveToken(opts.identity, token)) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
       return;
     }
@@ -271,10 +270,6 @@ async function handleRequest(
   // An app registers itself on first launch. Unauthenticated by necessity:
   // there is no credential to present until this call issues one.
   if (req.method === "POST" && url.pathname === "/v1/devices") {
-    if (!opts.identity) {
-      sendJSON(res, 503, { error: "device registration not configured" });
-      return;
-    }
     const identity = opts.identity;
     const address = clientAddress(req, opts.trustProxyHeaders ?? false);
     if (!limiter.allow(address)) {
@@ -307,8 +302,8 @@ async function handleRequest(
   // Twilio asks what to do with an inbound call. Answer: fork the caller's
   // audio to this relay, then bridge the call onward.
   if (req.method === "POST" && url.pathname === "/twilio/voice") {
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -319,13 +314,16 @@ async function handleRequest(
     // The host Twilio reached us on is the host it should stream back to, so
     // there is no public-URL setting to keep in sync with the deployment.
     // Token in the path, not the query — Twilio's stream client discards the
-    // query string. See the upgrade handler.
+    // query string. See the upgrade handler. Re-extracted rather than kept
+    // from principalFor because it is the raw token that must travel in the
+    // outgoing URLs, not the principal it resolved to.
+    const token = bearerToken(req.headers.authorization) ?? url.searchParams.get("token") ?? "";
     const streamUrl =
       `wss://${req.headers.host ?? ""}${TWILIO_STREAM_PREFIX}` +
-      `${encodeURIComponent(token ?? "")}`;
+      `${encodeURIComponent(token)}`;
     const streamStatusUrl =
       `https://${req.headers.host ?? ""}/twilio/stream-status` +
-      `?token=${encodeURIComponent(token ?? "")}`;
+      `?token=${encodeURIComponent(token)}`;
     res.writeHead(200, { "content-type": "text/xml" });
     res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo, streamStatusUrl }));
     return;
@@ -335,8 +333,8 @@ async function handleRequest(
   // stream that never connects — this is the only channel that reports one,
   // and `StreamError` carries the reason the alert log omits.
   if (req.method === "POST" && url.pathname === "/twilio/stream-status") {
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -361,8 +359,8 @@ async function handleRequest(
   // call is live and to read it. Read-only — unlike /v1/audio it never creates
   // a session, so polling when no call exists costs nothing upstream.
   if (req.method === "GET" && url.pathname === "/v1/call") {
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -404,8 +402,8 @@ async function handleRequest(
   // phone streams only once a reader appears, and the watch opens only once a
   // producer does, so neither would ever go first.
   if (url.pathname === "/v1/presence" && (req.method === "GET" || req.method === "POST")) {
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -430,8 +428,8 @@ async function handleRequest(
   // two apps cannot talk to each other: the watch app is standalone, so there
   // is no paired-companion channel between them.
   if (url.pathname === "/v1/settings" && (req.method === "GET" || req.method === "PUT")) {
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -462,8 +460,8 @@ async function handleRequest(
       sendJSON(res, 404, { error: "transcripts not enabled" });
       return;
     }
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -503,8 +501,8 @@ async function handleRequest(
       sendJSON(res, 404, { error: "transcripts not enabled" });
       return;
     }
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -522,8 +520,10 @@ async function handleRequest(
       sendJSON(res, 404, { error: "usage not enabled" });
       return;
     }
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    // This reports the operator's Deepgram and Fly bill, not a per-user
+    // figure, so a device token must not reach it.
+    const token = bearerToken(req.headers.authorization) ?? url.searchParams.get("token");
+    if (!opts.adminToken || token !== opts.adminToken) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -536,8 +536,8 @@ async function handleRequest(
   }
 
   if (req.method === "POST" && (url.pathname === "/v1/audio" || url.pathname === "/v1/stop")) {
-    const token = url.searchParams.get("token") ?? undefined;
-    if (!verifyToken(token, opts.authToken ?? "")) {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
@@ -620,6 +620,24 @@ function safeDecode(value: string): string | undefined {
 
 function flatten(events: { seq: number; payload: OutboundMessage }[]) {
   return events.map((e) => ({ seq: e.seq, ...e.payload }));
+}
+
+/**
+ * The principal behind a request.
+ *
+ * The header is the real channel. The query string is still read for the two
+ * cases that cannot send a header: Twilio's media-stream client, which drops
+ * the query string and gets its token from the path instead, and its webhooks,
+ * which we do not control.
+ */
+function principalFor(
+  req: IncomingMessage,
+  url: URL,
+  opts: StartServerOptions,
+): Principal | null {
+  const header = bearerToken(req.headers.authorization);
+  const token = header ?? url.searchParams.get("token") ?? undefined;
+  return resolveToken(opts.identity, token);
 }
 
 function sendJSON(res: ServerResponse, status: number, body: unknown): void {

@@ -28,6 +28,14 @@ export type ClaimResult =
 export const PAIRING_CODE_TTL_MS = 10 * 60_000;
 
 /**
+ * How stale `last_seen_at` must be before `resolve` bothers rewriting it.
+ * `/v1/audio` is polled roughly once per second per device while
+ * captioning; `last_seen_at` is a liveness hint, not an audit log, so it
+ * only needs to be accurate to within this window.
+ */
+const LAST_SEEN_THROTTLE_MS = 5 * 60_000;
+
+/**
  * Users, devices, and the pairing codes that merge them.
  *
  * Devices authenticate with an opaque bearer token of which only a SHA-256 is
@@ -69,17 +77,23 @@ export class IdentityStore {
   /**
    * The principal a token belongs to, or null. Also stamps `last_seen_at`,
    * which is the only liveness signal available for a device that holds no
-   * connection open.
+   * connection open — but only when the stored value is missing or older
+   * than `LAST_SEEN_THROTTLE_MS`. Without the throttle, this would be a
+   * SQLite write on every poll of `/v1/audio`, which happens roughly once a
+   * second per device while captioning.
    */
   resolve(token: string | undefined): Principal | null {
     if (!token) return null;
     const row = this.db
-      .prepare("SELECT id, user_id FROM devices WHERE token_hash = ?")
-      .get(hashToken(token)) as { id: string; user_id: string } | undefined;
+      .prepare("SELECT id, user_id, last_seen_at FROM devices WHERE token_hash = ?")
+      .get(hashToken(token)) as { id: string; user_id: string; last_seen_at: string | null } | undefined;
     if (!row) return null;
-    this.db
-      .prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?")
-      .run(this.timestamp(), row.id);
+    const staleSince = this.now() - LAST_SEEN_THROTTLE_MS;
+    if (!row.last_seen_at || Date.parse(row.last_seen_at) <= staleSince) {
+      this.db
+        .prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?")
+        .run(this.timestamp(), row.id);
+    }
     return { userId: row.user_id, deviceId: row.id };
   }
 

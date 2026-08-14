@@ -2,6 +2,8 @@ import { join } from "path";
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
 import { startServer, ProviderOptions } from "./server";
+import { openDb } from "./db";
+import { IdentityStore } from "./identityStore";
 import { DeepgramProvider, DeepgramLike, telephonyOptions } from "./deepgramProvider";
 import { OpenAIProvider } from "./openaiProvider";
 import { AssemblyAIProvider } from "./assemblyaiProvider";
@@ -98,9 +100,15 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
   }
 }
 
+// Beside the transcripts, on the same persistent volume. Task 12 moves this
+// onto a proper `DB_PATH`/`ADMIN_TOKEN` config surface; this is the minimal
+// wiring that keeps identities alive across deploys in the meantime — an
+// in-memory store here would force every device to re-register on restart.
+const identity = new IdentityStore(openDb(join(config.transcriptsDir, "identity.db")));
+
 const server = startServer({
   port: config.port,
-  authToken: config.authToken,
+  identity,
   createProvider,
   transcripts,
   transcriptsDir: config.transcriptsDir,

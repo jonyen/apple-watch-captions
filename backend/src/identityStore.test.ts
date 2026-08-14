@@ -58,6 +58,47 @@ describe("IdentityStore registration", () => {
   });
 });
 
+describe("last_seen_at throttling", () => {
+  function lastSeenOf(db: ReturnType<typeof openDb>, deviceId: string): string | null {
+    const row = db
+      .prepare("SELECT last_seen_at FROM devices WHERE id = ?")
+      .get(deviceId) as { last_seen_at: string | null };
+    return row.last_seen_at;
+  }
+
+  it("does not rewrite last_seen_at on a resolve shortly after the first", () => {
+    let clock = 1_000_000;
+    const db = openDb(":memory:");
+    const s = new IdentityStore(db, { now: () => clock });
+    const registered = s.registerDevice("phone");
+
+    s.resolve(registered.token);
+    const first = lastSeenOf(db, registered.deviceId);
+
+    clock += 60_000; // 1 minute later, well inside the 5-minute window
+    s.resolve(registered.token);
+    const second = lastSeenOf(db, registered.deviceId);
+
+    expect(second).toBe(first);
+  });
+
+  it("rewrites last_seen_at once the throttle window has passed", () => {
+    let clock = 1_000_000;
+    const db = openDb(":memory:");
+    const s = new IdentityStore(db, { now: () => clock });
+    const registered = s.registerDevice("phone");
+
+    s.resolve(registered.token);
+    const first = lastSeenOf(db, registered.deviceId);
+
+    clock += 5 * 60_000 + 1; // just past the 5-minute throttle window
+    s.resolve(registered.token);
+    const second = lastSeenOf(db, registered.deviceId);
+
+    expect(second).not.toBe(first);
+  });
+});
+
 describe("devices table constraints", () => {
   // These constraints (CHECK on kind, UNIQUE on token_hash) come from Task 1's
   // schema and aren't reachable through IdentityStore's public API — kind is

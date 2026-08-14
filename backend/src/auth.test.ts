@@ -1,25 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { bearerToken, resolveToken, verifyToken } from "./auth";
+import { bearerToken, resolveToken } from "./auth";
 import { IdentityStore } from "./identityStore";
 import { openDb } from "./db";
-
-describe("verifyToken", () => {
-  it("accepts a matching token", () => {
-    expect(verifyToken("secret123", "secret123")).toBe(true);
-  });
-
-  it("rejects a wrong token", () => {
-    expect(verifyToken("wrong", "secret123")).toBe(false);
-  });
-
-  it("rejects a missing token", () => {
-    expect(verifyToken(undefined, "secret123")).toBe(false);
-  });
-
-  it("rejects when no expected token is configured", () => {
-    expect(verifyToken("anything", "")).toBe(false);
-  });
-});
 
 describe("bearerToken", () => {
   it("extracts a bearer token", () => {

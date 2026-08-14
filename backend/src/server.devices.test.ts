@@ -79,17 +79,6 @@ describe("POST /v1/devices", () => {
     expect(codes.filter((c) => c === 200)).toHaveLength(10);
     expect(codes.filter((c) => c === 429)).toHaveLength(2);
   });
-
-  it("responds 503 when no identity store is configured", async () => {
-    server = startServer({
-      port: 0,
-      createProvider: () => new FakeTranscriptionProvider(),
-    });
-    const addr = server.address();
-    const port = typeof addr === "object" && addr ? addr.port : 0;
-    const res = await register(port);
-    expect(res.status).toBe(503);
-  });
 });
 
 describe("POST /v1/devices rate-limit key and proxy trust", () => {

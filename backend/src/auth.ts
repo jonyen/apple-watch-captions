@@ -20,20 +20,3 @@ export function resolveToken(
 ): Principal | null {
   return identity.resolve(token);
 }
-
-/**
- * Superseded single-shared-secret check: every device used to present the
- * same `expected` token. Retained only until the routes in server.ts move to
- * `resolveToken`'s per-device tokens (Task 6), at which point this and its
- * tests should be deleted.
- *
- * Returns true only when a non-empty expected token is configured
- * and the provided token matches it exactly.
- */
-export function verifyToken(
-  provided: string | undefined,
-  expected: string,
-): boolean {
-  if (!expected) return false;
-  return provided === expected;
-}

@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import { AddressInfo } from "net";
 import { startServer, CaptionServer } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { IdentityStore } from "./identityStore";
+import { openDb } from "./db";
 
 let running: CaptionServer | null = null;
 
@@ -10,11 +12,17 @@ afterEach(async () => {
   running = null;
 });
 
-function startWithFakes(authToken: string) {
+function authHeaders(token: string) {
+  return { authorization: `Bearer ${token}` };
+}
+
+function startWithFakes() {
+  const identity = new IdentityStore(openDb(":memory:"));
+  const device = identity.registerDevice("watch");
   const providers: FakeTranscriptionProvider[] = [];
   const server = startServer({
     port: 0,
-    authToken,
+    identity,
     createProvider: () => {
       const p = new FakeTranscriptionProvider();
       providers.push(p);
@@ -23,15 +31,17 @@ function startWithFakes(authToken: string) {
   });
   running = server;
   const port = (server.address() as AddressInfo).port;
-  return { providers, port };
+  return { providers, port, token: device.token };
 }
 
 describe("resume", () => {
   it("binds the session to an existing transcript when ?resume= is given", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
     const reopened: Array<[string, string]> = [];
     const server = startServer({
       port: 0,
-      authToken: "t",
+      identity,
       createProvider: () => new FakeTranscriptionProvider(),
       transcripts: {
         reopen: (sessionId: string, name: string) => reopened.push([sessionId, name]),
@@ -44,18 +54,20 @@ describe("resume", () => {
     const port = (server.address() as AddressInfo).port;
 
     await fetch(
-      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&resume=2026-07-06T01-02-03Z_abc`,
-      { method: "POST", body: new Uint8Array(0) },
+      `http://127.0.0.1:${port}/v1/audio?session=s1&resume=2026-07-06T01-02-03Z_abc`,
+      { method: "POST", headers: authHeaders(device.token), body: new Uint8Array(0) },
     );
 
     expect(reopened).toEqual([["s1", "2026-07-06T01-02-03Z_abc"]]);
   });
 
   it("only reopens once, not on every audio post for the session", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
     const reopened: string[] = [];
     const server = startServer({
       port: 0,
-      authToken: "t",
+      identity,
       createProvider: () => new FakeTranscriptionProvider(),
       transcripts: {
         reopen: (_id: string, name: string) => reopened.push(name),
@@ -66,10 +78,10 @@ describe("resume", () => {
     });
     running = server;
     const port = (server.address() as AddressInfo).port;
-    const url = `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&resume=2026-07-06T01-02-03Z_abc`;
+    const url = `http://127.0.0.1:${port}/v1/audio?session=s1&resume=2026-07-06T01-02-03Z_abc`;
 
-    await fetch(url, { method: "POST", body: new Uint8Array(0) });
-    await fetch(url, { method: "POST", body: new Uint8Array(0) });
+    await fetch(url, { method: "POST", headers: authHeaders(device.token), body: new Uint8Array(0) });
+    await fetch(url, { method: "POST", headers: authHeaders(device.token), body: new Uint8Array(0) });
 
     expect(reopened).toHaveLength(1);
   });
@@ -80,23 +92,27 @@ const audio = (port: number, query: string) =>
 
 describe("HTTP transport", () => {
   it("rejects an audio POST with a bad token", async () => {
-    const { port } = startWithFakes("good");
-    const res = await fetch(audio(port, "session=s1&token=bad"), { method: "POST" });
+    const { port } = startWithFakes();
+    const res = await fetch(audio(port, "session=s1"), {
+      method: "POST",
+      headers: authHeaders("bad"),
+    });
     expect(res.status).toBe(401);
   });
 
   it("rejects an audio POST with no session", async () => {
-    const { port } = startWithFakes("good");
-    const res = await fetch(audio(port, "token=good"), { method: "POST" });
+    const { port, token } = startWithFakes();
+    const res = await fetch(audio(port, ""), { method: "POST", headers: authHeaders(token) });
     expect(res.status).toBe(400);
   });
 
   it("feeds audio to the provider and returns buffered caption events", async () => {
-    const { providers, port } = startWithFakes("good");
+    const { providers, port, token } = startWithFakes();
 
     // First POST lazily creates the session and forwards audio.
-    let res = await fetch(audio(port, "session=s1&since=0&token=good"), {
+    let res = await fetch(audio(port, "session=s1&since=0"), {
       method: "POST",
+      headers: authHeaders(token),
       body: new Uint8Array(Buffer.from("audio-bytes")),
     });
     expect(res.status).toBe(200);
@@ -107,7 +123,10 @@ describe("HTTP transport", () => {
     // Drive the provider, then poll for events.
     providers[0].emitReady();
     providers[0].emitTranscript({ text: "hello world", isFinal: true });
-    res = await fetch(audio(port, "session=s1&since=0&token=good"), { method: "POST" });
+    res = await fetch(audio(port, "session=s1&since=0"), {
+      method: "POST",
+      headers: authHeaders(token),
+    });
     const body = await res.json();
     expect(body.events).toEqual([
       { seq: 1, type: "ready" },
@@ -117,24 +136,27 @@ describe("HTTP transport", () => {
   });
 
   it("only returns events newer than `since`", async () => {
-    const { providers, port } = startWithFakes("good");
-    await fetch(audio(port, "session=s1&since=0&token=good"), { method: "POST" });
+    const { providers, port, token } = startWithFakes();
+    await fetch(audio(port, "session=s1&since=0"), { method: "POST", headers: authHeaders(token) });
     providers[0].emitReady();
     providers[0].emitTranscript({ text: "one", isFinal: true });
 
-    const res = await fetch(audio(port, "session=s1&since=1&token=good"), { method: "POST" });
+    const res = await fetch(audio(port, "session=s1&since=1"), {
+      method: "POST",
+      headers: authHeaders(token),
+    });
     const body = await res.json();
     expect(body.events).toEqual([{ seq: 2, type: "caption", text: "one", isFinal: true }]);
   });
 
   it("stop drains remaining events and closes the provider", async () => {
-    const { providers, port } = startWithFakes("good");
-    await fetch(audio(port, "session=s1&since=0&token=good"), { method: "POST" });
+    const { providers, port, token } = startWithFakes();
+    await fetch(audio(port, "session=s1&since=0"), { method: "POST", headers: authHeaders(token) });
     providers[0].emitReady();
 
     const res = await fetch(
-      `http://127.0.0.1:${port}/v1/stop?session=s1&since=0&token=good`,
-      { method: "POST" },
+      `http://127.0.0.1:${port}/v1/stop?session=s1&since=0`,
+      { method: "POST", headers: authHeaders(token) },
     );
     const body = await res.json();
     expect(body.events).toEqual([{ seq: 1, type: "ready" }]);
@@ -143,13 +165,15 @@ describe("HTTP transport", () => {
 });
 
 describe("ephemeral sessions", () => {
-  function startWithTranscriptSpy(authToken: string) {
+  function startWithTranscriptSpy() {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
     const appended: string[] = [];
     const finalized: string[] = [];
     const reopened: Array<[string, string]> = [];
     const server = startServer({
       port: 0,
-      authToken,
+      identity,
       createProvider: () => new FakeTranscriptionProvider(),
       transcripts: {
         append: (_id: string, text: string) => appended.push(text),
@@ -161,14 +185,14 @@ describe("ephemeral sessions", () => {
     });
     running = server;
     const port = (server.address() as AddressInfo).port;
-    return { port, appended, finalized, reopened };
+    return { port, appended, finalized, reopened, token: device.token };
   }
 
   it("omits the transcript name for a live session", async () => {
-    const { port } = startWithTranscriptSpy("t");
+    const { port, token } = startWithTranscriptSpy();
     const res = await fetch(
-      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&ephemeral=1`,
-      { method: "POST", body: new Uint8Array(0) },
+      `http://127.0.0.1:${port}/v1/audio?session=s1&ephemeral=1`,
+      { method: "POST", headers: authHeaders(token), body: new Uint8Array(0) },
     );
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -176,38 +200,41 @@ describe("ephemeral sessions", () => {
   });
 
   it("still names the transcript for a saved session", async () => {
-    const { port } = startWithTranscriptSpy("t");
+    const { port, token } = startWithTranscriptSpy();
     const res = await fetch(
-      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t`,
-      { method: "POST", body: new Uint8Array(0) },
+      `http://127.0.0.1:${port}/v1/audio?session=s1`,
+      { method: "POST", headers: authHeaders(token), body: new Uint8Array(0) },
     );
     const body = await res.json();
     expect(body.transcript).toBe("2026-07-29T10-00-00Z_s1");
   });
 
   it("ignores resume= for a live session", async () => {
-    const { port, reopened } = startWithTranscriptSpy("t");
+    const { port, reopened, token } = startWithTranscriptSpy();
     await fetch(
-      `http://127.0.0.1:${port}/v1/audio?session=s1&token=t&ephemeral=1&resume=2026-07-06T01-02-03Z_abc`,
-      { method: "POST", body: new Uint8Array(0) },
+      `http://127.0.0.1:${port}/v1/audio?session=s1&ephemeral=1&resume=2026-07-06T01-02-03Z_abc`,
+      { method: "POST", headers: authHeaders(token), body: new Uint8Array(0) },
     );
     expect(reopened).toEqual([]);
   });
 
   it("keeps a live session live across posts and on stop", async () => {
-    const { port, appended, finalized } = startWithTranscriptSpy("t");
-    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&token=t&ephemeral=1`, {
+    const { port, appended, finalized, token } = startWithTranscriptSpy();
+    await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&ephemeral=1`, {
       method: "POST",
+      headers: authHeaders(token),
       body: new Uint8Array(0),
     });
     // A second post without the flag must not start saving.
-    const res = await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1&token=t`, {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/audio?session=s1`, {
       method: "POST",
+      headers: authHeaders(token),
       body: new Uint8Array(0),
     });
     expect(await res.json()).not.toHaveProperty("transcript");
-    await fetch(`http://127.0.0.1:${port}/v1/stop?session=s1&token=t`, {
+    await fetch(`http://127.0.0.1:${port}/v1/stop?session=s1`, {
       method: "POST",
+      headers: authHeaders(token),
     });
     expect(appended).toEqual([]);
     expect(finalized).toEqual([]);

@@ -6,7 +6,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { startServer, CaptionServer, ProviderOptions } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
-import { TranscriptStore, listTranscripts } from "./transcriptStore";
+import { TranscriptStore, listTranscripts, userDir } from "./transcriptStore";
 import { IdentityStore } from "./identityStore";
 import { openDb } from "./db";
 
@@ -172,8 +172,8 @@ describe("caption server", () => {
           providers.push(p);
           return p;
         },
-        transcripts: new TranscriptStore({ dir }),
-        transcriptsDir: dir,
+        transcripts: new TranscriptStore({ root: dir }),
+        transcriptsRoot: dir,
       });
       running = server;
       const port = (server.address() as AddressInfo).port;
@@ -186,7 +186,7 @@ describe("caption server", () => {
       ws.close();
       await new Promise((r) => setTimeout(r, 20));
 
-      const transcripts = listTranscripts(dir);
+      const transcripts = listTranscripts(userDir(dir, device.userId));
       expect(transcripts).toHaveLength(1);
       expect(transcripts[0].segmentCount).toBe(1);
     } finally {

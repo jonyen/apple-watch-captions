@@ -44,7 +44,8 @@ describe("resume", () => {
       identity,
       createProvider: () => new FakeTranscriptionProvider(),
       transcripts: {
-        reopen: (sessionId: string, name: string) => reopened.push([sessionId, name]),
+        reopen: (_userId: string, sessionId: string, name: string) =>
+          reopened.push([sessionId, name]),
         append: () => {},
         finalize: () => {},
         finalizeAll: () => {},
@@ -70,7 +71,7 @@ describe("resume", () => {
       identity,
       createProvider: () => new FakeTranscriptionProvider(),
       transcripts: {
-        reopen: (_id: string, name: string) => reopened.push(name),
+        reopen: (_userId: string, _id: string, name: string) => reopened.push(name),
         append: () => {},
         finalize: () => {},
         finalizeAll: () => {},
@@ -176,9 +177,9 @@ describe("ephemeral sessions", () => {
       identity,
       createProvider: () => new FakeTranscriptionProvider(),
       transcripts: {
-        append: (_id: string, text: string) => appended.push(text),
-        finalize: (id: string) => finalized.push(id),
-        reopen: (id: string, name: string) => reopened.push([id, name]),
+        append: (_userId: string, _id: string, text: string) => appended.push(text),
+        finalize: (_userId: string, id: string) => finalized.push(id),
+        reopen: (_userId: string, id: string, name: string) => reopened.push([id, name]),
         finalizeAll: () => {},
         activeName: () => "2026-07-29T10-00-00Z_s1",
       } as any,

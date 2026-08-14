@@ -56,9 +56,9 @@ if (!exportTranscript) {
 }
 
 const transcripts = new TranscriptStore({
-  dir: config.transcriptsDir,
+  root: config.transcriptsDir,
   onFinalize: createFinalizer({
-    dir: config.transcriptsDir,
+    root: config.transcriptsDir,
     summarize,
     export: exportTranscript,
     update: config.notion ? createNotionUpdater(config.notion) : undefined,
@@ -117,7 +117,7 @@ const server = startServer({
   identity,
   createProvider,
   transcripts,
-  transcriptsDir: config.transcriptsDir,
+  transcriptsRoot: config.transcriptsDir,
   usage: createUsageService({ env: process.env }),
   callForwardTo: config.twilioForwardTo,
   // Beside the transcripts, so settings ride the same persistent volume and

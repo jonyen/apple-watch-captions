@@ -12,23 +12,27 @@ import {
   writeSummary,
   writeExportMarker,
   listTranscripts,
+  userDir,
 } from "./transcriptStore";
 
 let running: CaptionServer | null = null;
+let root: string;
+/** Where this test's one device's transcripts land; set once `start()` knows the userId. */
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "transcripts-http-"));
+  root = mkdtempSync(join(tmpdir(), "transcripts-http-"));
 });
 afterEach(async () => {
   if (running) await running.close();
   running = null;
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true });
 });
 
 function start() {
   const identity = new IdentityStore(openDb(":memory:"));
   const device = identity.registerDevice("watch");
+  dir = userDir(root, device.userId);
   const providers: FakeTranscriptionProvider[] = [];
   const server = startServer({
     port: 0,
@@ -38,8 +42,8 @@ function start() {
       providers.push(p);
       return p;
     },
-    transcripts: new TranscriptStore({ dir }),
-    transcriptsDir: dir,
+    transcripts: new TranscriptStore({ root }),
+    transcriptsRoot: root,
   });
   running = server;
   const port = (server.address() as AddressInfo).port;

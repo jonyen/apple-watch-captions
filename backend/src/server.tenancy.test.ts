@@ -1,9 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
 import WebSocket from "ws";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { startServer, CaptionServer } from "./server";
 import { IdentityStore } from "./identityStore";
 import { openDb } from "./db";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { TranscriptStore } from "./transcriptStore";
 
 let server: CaptionServer | undefined;
 afterEach(async () => {
@@ -163,5 +167,42 @@ describe("cross-tenant isolation", () => {
     const aliceRes = await fetch(`http://127.0.0.1:${port}/v1/call?token=${alice.token}`);
     const aliceBody = await aliceRes.json();
     expect(aliceBody).toEqual({ active: false, reason: "ended", events: [], seq: 0 });
+  });
+
+  it("does not list another user's transcripts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wc-"));
+    const identity = new IdentityStore(openDb(":memory:"));
+    const alice = identity.registerDevice("watch");
+    const mallory = identity.registerDevice("watch");
+    const transcripts = new TranscriptStore({ root });
+    transcripts.append(
+      identity.resolve(alice.token)!.userId,
+      "s1",
+      "alice's private conversation",
+    );
+
+    server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => new FakeTranscriptionProvider(),
+      transcripts,
+      transcriptsRoot: root,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/transcripts`, {
+      headers: { authorization: `Bearer ${mallory.token}` },
+    });
+    expect((await res.json()) as { transcripts: unknown[] }).toEqual({ transcripts: [] });
+
+    // And Alice must still see her own transcript — proving this is
+    // isolation, not just everything being broken.
+    const aliceRes = await fetch(`http://127.0.0.1:${port}/v1/transcripts`, {
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    const aliceBody = (await aliceRes.json()) as { transcripts: { preview: string }[] };
+    expect(aliceBody.transcripts).toHaveLength(1);
+    expect(aliceBody.transcripts[0].preview).toBe("alice's private conversation");
   });
 });

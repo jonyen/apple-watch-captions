@@ -116,7 +116,7 @@ export class SessionStore {
     if (!session) return;
     session.caption.close();
     this.sessions.delete(key);
-    if (!session.ephemeral) this.transcripts?.finalize(id);
+    if (!session.ephemeral) this.transcripts?.finalize(session.userId, session.id);
   }
 
   /** Close sessions idle longer than the configured timeout. */
@@ -126,7 +126,7 @@ export class SessionStore {
       if (session.lastActivity < cutoff) {
         session.caption.close();
         this.sessions.delete(key);
-        if (!session.ephemeral) this.transcripts?.finalize(session.id);
+        if (!session.ephemeral) this.transcripts?.finalize(session.userId, session.id);
       }
     }
   }
@@ -135,7 +135,7 @@ export class SessionStore {
   closeAll(): void {
     for (const [, session] of this.sessions) {
       session.caption.close();
-      if (!session.ephemeral) this.transcripts?.finalize(session.id);
+      if (!session.ephemeral) this.transcripts?.finalize(session.userId, session.id);
     }
     this.sessions.clear();
   }
@@ -176,7 +176,7 @@ export class SessionStore {
       // Skipping `append` is what keeps a live session off disk entirely:
       // `append` is also what creates the file.
       if (payload.type === "caption" && payload.isFinal && !session.ephemeral) {
-        this.transcripts?.append(id, payload.text, payload.channel);
+        this.transcripts?.append(userId, id, payload.text, payload.channel);
       }
     });
     this.sessions.set(key, session);

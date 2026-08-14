@@ -17,6 +17,7 @@ import {
   readTranscript,
   readExportStatus,
   deleteTranscript,
+  userDir,
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
@@ -49,8 +50,8 @@ export interface StartServerOptions {
   createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Optional transcript persistence; also enables the /v1/transcripts endpoints. */
   transcripts?: TranscriptStore;
-  /** Directory the transcript endpoints read from (required with `transcripts`). */
-  transcriptsDir?: string;
+  /** Root directory the transcript endpoints read from, one subdirectory per user (required with `transcripts`). */
+  transcriptsRoot?: string;
   /** Optional usage data source; enables GET /v1/usage. */
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
@@ -215,7 +216,8 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       socket.destroy();
       return;
     }
-    if (!resolveToken(opts.identity, token)) {
+    const principal = resolveToken(opts.identity, token);
+    if (!principal) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
       return;
     }
@@ -230,7 +232,8 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       channels || provider
         ? { ...(channels ? { channels } : {}), ...(provider ? { provider } : {}) }
         : undefined;
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts, providerOpts));
+    wss.handleUpgrade(req, socket, head, (ws) =>
+      handleConnection(ws, opts, principal.userId, providerOpts));
   });
 
   http.listen(opts.port);
@@ -473,7 +476,7 @@ async function handleRequest(
   }
 
   if (req.method === "GET" && url.pathname.startsWith("/v1/transcripts")) {
-    if (!opts.transcriptsDir) {
+    if (!opts.transcriptsRoot) {
       sendJSON(res, 404, { error: "transcripts not enabled" });
       return;
     }
@@ -482,8 +485,9 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
+    const dir = userDir(opts.transcriptsRoot, principal.userId);
     if (url.pathname === "/v1/transcripts") {
-      sendJSON(res, 200, { transcripts: listTranscripts(opts.transcriptsDir) });
+      sendJSON(res, 200, { transcripts: listTranscripts(dir) });
       return;
     }
     const path = url.pathname.slice("/v1/transcripts/".length);
@@ -492,7 +496,7 @@ async function handleRequest(
     // waiting on the export can poll it without pulling the whole transcript.
     if (path.endsWith("/export")) {
       const name = decodeURIComponent(path.slice(0, -"/export".length));
-      const status = readExportStatus(opts.transcriptsDir, name);
+      const status = readExportStatus(dir, name);
       if (!status) {
         sendJSON(res, 404, { error: "not found" });
         return;
@@ -502,7 +506,7 @@ async function handleRequest(
     }
 
     const name = decodeURIComponent(path);
-    const detail = readTranscript(opts.transcriptsDir, name);
+    const detail = readTranscript(dir, name);
     if (!detail) {
       sendJSON(res, 404, { error: "not found" });
       return;
@@ -514,7 +518,7 @@ async function handleRequest(
   // Deleting forgets the relay's copy — captions, summary, export marker. Any
   // Notion page stays: it is the archive, and the only way back.
   if (req.method === "DELETE" && url.pathname.startsWith("/v1/transcripts/")) {
-    if (!opts.transcriptsDir) {
+    if (!opts.transcriptsRoot) {
       sendJSON(res, 404, { error: "transcripts not enabled" });
       return;
     }
@@ -524,7 +528,7 @@ async function handleRequest(
       return;
     }
     const name = decodeURIComponent(url.pathname.slice("/v1/transcripts/".length));
-    if (!deleteTranscript(opts.transcriptsDir, name)) {
+    if (!deleteTranscript(userDir(opts.transcriptsRoot, principal.userId), name)) {
       sendJSON(res, 404, { error: "not found" });
       return;
     }
@@ -575,7 +579,7 @@ async function handleRequest(
       // the same session carry the param but must not re-bind it.
       const resume = url.searchParams.get("resume");
       if (resume && !ephemeral && !store.has(principal.userId, session)) {
-        opts.transcripts?.reopen(session, resume);
+        opts.transcripts?.reopen(principal.userId, session, resume);
       }
 
       let body: Buffer;
@@ -607,7 +611,7 @@ async function handleRequest(
         // whole session, even if a later post drops the flag.
         transcript: store.isEphemeral(principal.userId, session)
           ? undefined
-          : opts.transcripts?.activeName(session),
+          : opts.transcripts?.activeName(principal.userId, session),
       });
       return;
     }
@@ -699,13 +703,14 @@ function readBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
 function handleConnection(
   ws: WebSocket,
   opts: StartServerOptions,
+  userId: string,
   providerOpts?: ProviderOptions,
 ): void {
   const provider = opts.createProvider(providerOpts);
   const sessionId = randomUUID();
   const send = (message: OutboundMessage) => {
     if (message.type === "caption" && message.isFinal) {
-      opts.transcripts?.append(sessionId, message.text, message.channel);
+      opts.transcripts?.append(userId, sessionId, message.text, message.channel);
     }
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   };
@@ -716,7 +721,7 @@ function handleConnection(
     if (closed) return;
     closed = true;
     session.close();
-    opts.transcripts?.finalize(sessionId);
+    opts.transcripts?.finalize(userId, sessionId);
   };
 
   ws.on("message", (data: Buffer, isBinary: boolean) => {

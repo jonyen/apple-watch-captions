@@ -108,6 +108,47 @@ describe("IdentityStore pairing", () => {
     expect(code).toMatch(/^\d{6}$/);
   });
 
+  it("frees an expired code's value for reuse", () => {
+    const db = openDb(":memory:");
+    const s = new IdentityStore(db);
+    const phone = s.registerDevice("phone");
+    // A row that lived past its expiry but was never claimed — dead, but
+    // still occupying its code value under the old, unfiltered collision
+    // check.
+    db.prepare("INSERT INTO pairing_codes (code, user_id, expires_at) VALUES (?,?,?)").run(
+      "555555",
+      phone.userId,
+      "2000-01-01T00:00:00.000Z",
+    );
+
+    s.issuePairingCode(phone.userId);
+
+    const stillThere = db
+      .prepare("SELECT code FROM pairing_codes WHERE code = ?")
+      .get("555555");
+    expect(stillThere).toBeUndefined();
+  });
+
+  it("purges dead rows when issuing a new code", () => {
+    const db = openDb(":memory:");
+    const s = new IdentityStore(db);
+    const phone = s.registerDevice("phone");
+    // One consumed row and one expired-but-unconsumed row: both are dead.
+    db.prepare(
+      "INSERT INTO pairing_codes (code, user_id, expires_at, consumed_at) VALUES (?,?,?,?)",
+    ).run("111111", phone.userId, "2099-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z");
+    db.prepare("INSERT INTO pairing_codes (code, user_id, expires_at) VALUES (?,?,?)").run(
+      "222222",
+      phone.userId,
+      "2000-01-01T00:00:00.000Z",
+    );
+
+    s.issuePairingCode(phone.userId);
+
+    const rows = db.prepare("SELECT code FROM pairing_codes").all();
+    expect(rows).toHaveLength(1);
+  });
+
   it("moves the claiming device to the issuing user", () => {
     const s = store();
     const phone = s.registerDevice("phone");

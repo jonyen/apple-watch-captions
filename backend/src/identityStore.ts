@@ -92,8 +92,17 @@ export class IdentityStore {
    */
   issuePairingCode(userId: string): { code: string; expiresAt: string } {
     const expiresAt = new Date(this.now() + PAIRING_CODE_TTL_MS).toISOString();
-    // Retry on the astronomically unlikely collision with a live code rather
-    // than letting the unique constraint surface as a 500.
+    // Consumed and expired rows are garbage the instant they go dead, and
+    // nothing else purges them, so the code space would otherwise only ever
+    // shrink. Sweep dead rows first — compared against the injected clock, not
+    // SQLite's own time functions, so test clock injection still governs
+    // expiry — which also means every row left afterward is live, so the
+    // plain lookup below only ever matches a real collision.
+    this.db
+      .prepare("DELETE FROM pairing_codes WHERE consumed_at IS NOT NULL OR expires_at <= ?")
+      .run(this.timestamp());
+    // Retry on the astronomically unlikely collision with a still-live code
+    // rather than letting the unique constraint surface as a 500.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
       const existing = this.db

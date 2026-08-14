@@ -5,7 +5,7 @@ describe("CurrentCall", () => {
   it("has no call to begin with", () => {
     const calls = new CurrentCall();
     expect(calls.current()).toBeNull();
-    expect(calls.lastReason()).toBeNull();
+    expect(calls.lastReason("user-a")).toBeNull();
   });
 
   it("holds the call it was given", () => {
@@ -21,7 +21,7 @@ describe("CurrentCall", () => {
     expect(calls.end("CA1", "user-a", "ended")).toBe(true);
 
     expect(calls.current()).toBeNull();
-    expect(calls.lastReason()).toBe("ended");
+    expect(calls.lastReason("user-a")).toBe("ended");
   });
 
   // A dying socket from a call that was already replaced must not clear the
@@ -34,7 +34,7 @@ describe("CurrentCall", () => {
     expect(calls.end("CA1", "user-a", "stream_lost")).toBe(false);
 
     expect(calls.current()).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-a" });
-    expect(calls.lastReason()).toBeNull();
+    expect(calls.lastReason("user-a")).toBeNull();
   });
 
   // Same sessionId, different owner — must not happen with today's globally
@@ -46,7 +46,7 @@ describe("CurrentCall", () => {
     expect(calls.end("CA1", "user-b", "ended")).toBe(false);
 
     expect(calls.current()).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
-    expect(calls.lastReason()).toBeNull();
+    expect(calls.lastReason("user-a")).toBeNull();
   });
 
   it("clears a stale end reason when a new call begins", () => {
@@ -56,6 +56,18 @@ describe("CurrentCall", () => {
 
     calls.begin("CA2", "CA2", "user-a");
 
-    expect(calls.lastReason()).toBeNull();
+    expect(calls.lastReason("user-a")).toBeNull();
+  });
+
+  // CurrentCall is process-global — one call at a time across every user —
+  // so without scoping, whoever ended a call would leak both that a call
+  // just ended and how to any other user who happens to poll next.
+  it("does not report the end reason to a user who did not own the call", () => {
+    const calls = new CurrentCall();
+    calls.begin("CA1", "CA1", "user-a");
+    calls.end("CA1", "user-a", "ended");
+
+    expect(calls.lastReason("user-b")).toBeNull();
+    expect(calls.lastReason("user-a")).toBe("ended");
   });
 });

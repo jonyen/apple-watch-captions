@@ -25,10 +25,18 @@ export interface ActiveCall {
 export class CurrentCall {
   private active: ActiveCall | null = null;
   private reason: CallEndReason | null = null;
+  /**
+   * Whose call `reason` describes. `CurrentCall` is process-global — one
+   * call at a time across every user — so without this, the reason a call
+   * ended would be visible to whoever next happens to poll, not just the
+   * caller it belonged to.
+   */
+  private reasonUserId: string | null = null;
 
   begin(sessionId: string, callSid: string, userId: string): void {
     this.active = { sessionId, callSid, userId };
     this.reason = null;
+    this.reasonUserId = null;
   }
 
   /**
@@ -43,6 +51,7 @@ export class CurrentCall {
     if (this.active?.sessionId !== sessionId || this.active?.userId !== userId) return false;
     this.active = null;
     this.reason = reason;
+    this.reasonUserId = userId;
     return true;
   }
 
@@ -50,8 +59,15 @@ export class CurrentCall {
     return this.active;
   }
 
-  /** How the most recent call ended, or null if one is live or none has run. */
-  lastReason(): CallEndReason | null {
+  /**
+   * How the most recent call ended, or null if one is live, none has run, or
+   * the reason on record belongs to a different user than `userId`. Scoped
+   * by caller rather than a plain getter, for the same reason `SessionStore`
+   * is keyed by user: without it, this would tell any authenticated poller
+   * that someone else's call just ended, and how.
+   */
+  lastReason(userId: string): CallEndReason | null {
+    if (this.reasonUserId !== userId) return null;
     return this.reason;
   }
 }

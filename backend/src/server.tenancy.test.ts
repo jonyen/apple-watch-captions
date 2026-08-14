@@ -121,4 +121,47 @@ describe("cross-tenant isolation", () => {
 
     ws.close();
   });
+
+  it("does not leak whether or how another user's call ended", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const alice = identity.registerDevice("watch");
+    const mallory = identity.registerDevice("watch");
+    server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => new FakeTranscriptionProvider(),
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    // Alice's call begins and ends. CurrentCall is process-global, so its
+    // `lastReason()` must not answer it for anyone but Alice.
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=${alice.token}`);
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start",
+      streamSid: "MZ1",
+      start: { callSid: "CA1", streamSid: "MZ1" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    ws.send(JSON.stringify({ event: "stop" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Mallory, polling with her own valid token, must get exactly the
+    // no-call-active shape — no `reason` key at all, and `seq` echoing back
+    // what she sent. `toEqual` on the whole object so an extra key fails.
+    const malloryRes = await fetch(
+      `http://127.0.0.1:${port}/v1/call?token=${mallory.token}&since=42`,
+    );
+    expect(malloryRes.status).toBe(200);
+    const malloryBody = await malloryRes.json();
+    expect(malloryBody).toEqual({ active: false, events: [], seq: 42 });
+
+    // Alice, the call's actual owner, must still learn how her own call
+    // ended — this is what stops the fix from degenerating into "never
+    // report a reason to anyone".
+    const aliceRes = await fetch(`http://127.0.0.1:${port}/v1/call?token=${alice.token}`);
+    const aliceBody = await aliceRes.json();
+    expect(aliceBody).toEqual({ active: false, reason: "ended", events: [], seq: 0 });
+  });
 });

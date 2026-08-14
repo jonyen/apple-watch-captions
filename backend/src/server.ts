@@ -395,7 +395,7 @@ async function handleRequest(
       return;
     }
     if (!active) {
-      const reason = calls.lastReason();
+      const reason = calls.lastReason(principal.userId);
       sendJSON(res, 200, {
         active: false,
         ...(reason ? { reason } : {}),

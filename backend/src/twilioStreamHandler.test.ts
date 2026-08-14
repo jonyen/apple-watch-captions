@@ -83,7 +83,7 @@ describe("handleTwilioStream", () => {
     ws.send({ event: "stop" });
 
     expect(calls.current()).toBeNull();
-    expect(calls.lastReason()).toBe("ended");
+    expect(calls.lastReason("user-a")).toBe("ended");
     expect(providers[0].closed).toBe(true);
   });
 
@@ -95,7 +95,7 @@ describe("handleTwilioStream", () => {
 
     ws.close();
 
-    expect(calls.lastReason()).toBe("stream_lost");
+    expect(calls.lastReason("user-a")).toBe("stream_lost");
     expect(providers[0].closed).toBe(true);
   });
 
@@ -106,7 +106,7 @@ describe("handleTwilioStream", () => {
 
     ws.close();
 
-    expect(calls.lastReason()).toBe("ended");
+    expect(calls.lastReason("user-a")).toBe("ended");
   });
 
   it("survives a frame it cannot parse", () => {

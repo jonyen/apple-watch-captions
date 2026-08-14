@@ -123,25 +123,24 @@ export class RegistrationLimiter {
  * The client address to key the registration rate limiter on.
  *
  * Fly's `http_service` proxy terminates the real TCP connection, so
- * `req.socket.remoteAddress` is the proxy's address, not the caller's — but
- * a client can send `X-Forwarded-For` itself, so trusting it unconditionally
- * would let any caller forge a fresh identity per request and evade the
- * limit entirely. Proxy headers are read only when `trustProxyHeaders` is
- * on, which must be true only when a proxy that overwrites them genuinely
- * sits in front of this process.
+ * `req.socket.remoteAddress` is the proxy's address, not the caller's.
+ * `Fly-Client-IP` is trusted, when `trustProxyHeaders` is on, because Fly's
+ * edge overwrites it on every request that traverses `http_service` — a
+ * client cannot set it.
+ *
+ * `X-Forwarded-For` is deliberately NOT consulted, on or off: Fly's edge
+ * *appends* its observed address to any `X-Forwarded-For` it receives rather
+ * than replacing it, so a client-chosen entry (e.g. the left-most one) can
+ * survive to this process untouched, letting an attacker pick a fresh
+ * address per request and evade the limit entirely. A proxy with different,
+ * replace-not-append semantics would need its own explicit support here —
+ * this must not inherit that assumption.
  */
 function clientAddress(req: IncomingMessage, trustProxyHeaders: boolean): string {
   if (trustProxyHeaders) {
     const fly = req.headers["fly-client-ip"];
     const flyValue = Array.isArray(fly) ? fly[0] : fly;
     if (flyValue?.trim()) return flyValue.trim();
-
-    const forwarded = req.headers["x-forwarded-for"];
-    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-    // Left-most entry is the original client; the rest are hops added by
-    // intermediate proxies.
-    const first = forwardedValue?.split(",")[0]?.trim();
-    if (first) return first;
   }
   return req.socket.remoteAddress ?? "unknown";
 }

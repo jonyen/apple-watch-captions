@@ -118,20 +118,18 @@ describe("POST /v1/devices rate-limit key and proxy trust", () => {
     expect(other.status).toBe(200);
   });
 
-  it("keys X-Forwarded-For on its first (left-most) entry when trustProxyHeaders is on", async () => {
+  it("ignores X-Forwarded-For even when trustProxyHeaders is on, absent Fly-Client-IP", async () => {
+    // Fly's edge appends its observed address to any X-Forwarded-For it
+    // receives rather than replacing it, so a client-chosen left-most entry
+    // survives to the app. Only Fly-Client-IP is trustworthy; X-Forwarded-For
+    // must never be consulted, with or without the flag.
     const { port } = start({ trustProxyHeaders: true });
     for (let i = 0; i < 10; i += 1) {
-      const res = await register(port, { "x-forwarded-for": "3.3.3.3, 5.6.7.8" });
+      const res = await register(port, { "x-forwarded-for": "1.1.1.1" });
       expect(res.status).toBe(200);
     }
-    // Same left-most client, no trailing hop: still the same bucket.
-    const same = await register(port, { "x-forwarded-for": "3.3.3.3" });
-    expect(same.status).toBe(429);
-
-    // Different left-most client, same trailing hop: an independent bucket —
-    // proves the key is the first entry, not the whole header value.
-    const different = await register(port, { "x-forwarded-for": "4.4.4.4, 5.6.7.8" });
-    expect(different.status).toBe(200);
+    const res = await register(port, { "x-forwarded-for": "2.2.2.2" });
+    expect(res.status).toBe(429);
   });
 });
 

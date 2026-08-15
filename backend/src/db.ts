@@ -72,5 +72,14 @@ function migrate(db: Db): void {
       ON pairing_codes(consumed_at, expires_at);
     CREATE INDEX IF NOT EXISTS pairing_codes_expires
       ON pairing_codes(expires_at);
+
+    CREATE TABLE IF NOT EXISTS export_destinations (
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind        TEXT NOT NULL CHECK (kind IN ('notion','email')),
+      config      TEXT NOT NULL,
+      secret      TEXT,
+      created_at  TEXT NOT NULL,
+      PRIMARY KEY (user_id, kind)
+    );
   `);
 }

@@ -22,9 +22,14 @@ import {
   TRANSCRIPT_SUFFIXES,
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
+import { EXPORTS_HTML } from "./exportsPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
 import { voiceResponse } from "./twiml";
+import { ExportDestinationStore } from "./exportDestinations";
+import { OAuthStateStore, authorizeUrl, NotionOAuthConfig, ExchangeCode } from "./notionOAuth";
+import { EmailVerificationStore } from "./emailVerification";
+import { SendEmail } from "./emailSender";
 
 export * from "./providerOptions";
 
@@ -58,6 +63,31 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
+  /** Optional; where each user's export destinations live. Enables /v1/exports*. */
+  destinations?: ExportDestinationStore;
+  /** Optional; single-use CSRF state for the Notion OAuth flow. Required alongside `notionOAuth` to enable connecting. */
+  oauthStates?: OAuthStateStore;
+  /** Optional; this relay's registered Notion OAuth integration. */
+  notionOAuth?: NotionOAuthConfig;
+  /** Trade a Notion authorization code for an access token. Injectable for tests. */
+  exchangeNotionCode?: ExchangeCode;
+  /**
+   * Find a database to export into, using the token just granted.
+   *
+   * Notion only returns a database id directly from the token exchange for
+   * template-based integrations (`duplicated_template_id`). A normal
+   * integration grants access to pages the user picks on the consent screen
+   * and the token response carries no database id at all, so the callback
+   * falls back to this search when `exchangeNotionCode` supplies none.
+   * Injectable for tests — production wiring calls Notion's `/v1/search`.
+   */
+  findNotionDatabase?: (accessToken: string) => Promise<{ id: string; title?: string } | null>;
+  /** Optional; single-use, expiring proof of control over an email address. Required alongside `sendEmail`, `destinations`, and `publicBaseUrl` to enable /v1/exports/email. */
+  emailVerifications?: EmailVerificationStore;
+  /** Optional; sends the verification email. Injectable for tests. */
+  sendEmail?: SendEmail;
+  /** Public origin the confirmation link points back to, e.g. https://relay.fly.dev. Required alongside the email options above. */
+  publicBaseUrl?: string;
 }
 
 export interface CaptionServer {
@@ -107,6 +137,31 @@ const PAIR_CLAIM_WINDOW_MS = 10 * 60_000;
  */
 const PAIR_CODE_ISSUES_PER_WINDOW = 10;
 const PAIR_CODE_WINDOW_MS = 60 * 60_000;
+/**
+ * Verification emails a device may trigger per window, and the window.
+ *
+ * The relay sends mail to whatever address `/v1/exports/email` names, so an
+ * unlimited caller could use it to deliver mail to strangers — this is the
+ * only thing standing between that and an open remailer, alongside the
+ * single-use expiring confirmation token itself.
+ */
+const EMAIL_SENDS_PER_WINDOW = 5;
+const EMAIL_WINDOW_MS = 60 * 60_000;
+
+/**
+ * Confirmation links a client address may follow per window, and the window.
+ *
+ * Spec section 6 requires the confirmation endpoint to be rate limited. The
+ * token is 32 random bytes, so guessing one is not a realistic attack and
+ * this is a backstop rather than the defence; what it actually bounds is an
+ * unauthenticated endpoint that does a database read and a write per call.
+ * Keyed on the caller's address, since there is no bearer token here — the
+ * request comes from whatever inbox the link was opened in. A real user
+ * follows their link once, so the budget only has to leave room for a mail
+ * client prefetching it and the user clicking a couple of times.
+ */
+const EMAIL_CONFIRMS_PER_WINDOW = 10;
+const EMAIL_CONFIRM_WINDOW_MS = 60 * 60_000;
 
 /**
  * Per-key sliding-window limiter. Used both for `/v1/devices` registrations
@@ -226,6 +281,12 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     PAIR_CODE_ISSUES_PER_WINDOW,
     PAIR_CODE_WINDOW_MS,
   );
+  const emailLimiter = new RegistrationLimiter(undefined, EMAIL_SENDS_PER_WINDOW, EMAIL_WINDOW_MS);
+  const confirmLimiter = new RegistrationLimiter(
+    undefined,
+    EMAIL_CONFIRMS_PER_WINDOW,
+    EMAIL_CONFIRM_WINDOW_MS,
+  );
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
@@ -239,6 +300,8 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       limiter,
       claimLimiter,
       codeLimiter,
+      emailLimiter,
+      confirmLimiter,
     ).catch(
       () => {
         if (!res.headersSent) res.writeHead(500);
@@ -327,6 +390,8 @@ async function handleRequest(
   limiter: RegistrationLimiter,
   claimLimiter: RegistrationLimiter,
   codeLimiter: RegistrationLimiter,
+  emailLimiter: RegistrationLimiter,
+  confirmLimiter: RegistrationLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -341,6 +406,13 @@ async function handleRequest(
   if (req.method === "GET" && url.pathname === "/app") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(VIEWER_HTML);
+    return;
+  }
+
+  // Export destinations web app — same static-page shape as /app above.
+  if (req.method === "GET" && url.pathname === "/app/exports") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(EXPORTS_HTML);
     return;
   }
 
@@ -744,6 +816,235 @@ async function handleRequest(
     const { events, seq } = store.drain(principal.userId, session, since);
     store.stop(principal.userId, session);
     sendJSON(res, 200, { events: flatten(events), seq });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/exports") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    sendJSON(res, 200, { destinations: opts.destinations?.list(principal.userId) ?? [] });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/exports/notion/start") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.notionOAuth || !opts.oauthStates) {
+      sendJSON(res, 503, { error: "notion export not configured" });
+      return;
+    }
+    const state = opts.oauthStates.mint(principal.userId);
+    res.writeHead(302, { location: authorizeUrl(opts.notionOAuth, state) });
+    res.end();
+    return;
+  }
+
+  // Notion redirects the browser here, so there is no bearer token to check.
+  // The single-use `state` is what identifies the user and what stops an
+  // attacker binding their own workspace to someone else's account.
+  if (req.method === "GET" && url.pathname === "/v1/exports/notion/callback") {
+    const fail = (reason: string = "failed") => {
+      res.writeHead(302, { location: `/app/exports?notion=${reason}` });
+      res.end();
+    };
+    const state = url.searchParams.get("state");
+    if (!state || !opts.oauthStates || !opts.destinations || !opts.exchangeNotionCode) {
+      fail();
+      return;
+    }
+    const userId = opts.oauthStates.consume(state);
+    if (!userId) {
+      fail();
+      return;
+    }
+    // Notion sends `error=access_denied` (and no `code`) when the user
+    // clicks Cancel on the consent screen. That is routine — users will hit
+    // it often — and deserves its own reason distinct from a real failure,
+    // rather than collapsing into the generic "something went wrong".
+    const error = url.searchParams.get("error");
+    if (error) {
+      fail(error === "access_denied" ? "denied" : "failed");
+      return;
+    }
+    const code = url.searchParams.get("code");
+    if (!code) {
+      fail();
+      return;
+    }
+    // Catches everything, not just thrown `Error`s: `createCodeExchange`
+    // leaves network failures and malformed JSON unwrapped, and a fake used
+    // in tests may throw any value at all.
+    try {
+      const granted = await opts.exchangeNotionCode(code);
+      let databaseId = granted.databaseId;
+      let workspaceName = granted.workspaceName;
+      if (!databaseId) {
+        // Normal (non-template) integrations never carry a database id in
+        // the token response — search for one with the freshly granted
+        // token instead. No database shared with the integration means no
+        // export destination, which is worse than no connection at all, so
+        // nothing is stored and the user is told why.
+        if (!opts.findNotionDatabase) {
+          // Distinct from "the search ran and found nothing": this is a
+          // deployment gap (Task 8 wired exchangeNotionCode but not this
+          // seam), not something the user can fix by sharing a database, so
+          // it must not read as the same actionable "nodatabase" message.
+          console.warn(
+            "notion callback: findNotionDatabase is not configured; cannot resolve a database",
+          );
+          fail();
+          return;
+        }
+        const found = await opts.findNotionDatabase(granted.accessToken);
+        if (!found) {
+          fail("nodatabase");
+          return;
+        }
+        databaseId = found.id;
+        workspaceName = workspaceName ?? found.title;
+      }
+      opts.destinations.putNotion(userId, granted.accessToken, {
+        databaseId,
+        ...(workspaceName ? { workspaceName } : {}),
+      });
+    } catch (err) {
+      console.error("notion callback failed:", err instanceof Error ? err.message : String(err));
+      fail();
+      return;
+    }
+    res.writeHead(302, { location: "/app/exports?notion=connected" });
+    res.end();
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/v1/exports/notion") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    // 503 rather than `{removed:false}`, like every sibling route: with no
+    // store there is nothing to disconnect *from*, and reporting that as a
+    // successful no-op tells `/app/exports` the Disconnect worked.
+    if (!opts.destinations) {
+      sendJSON(res, 503, { error: "notion export not configured" });
+      return;
+    }
+    sendJSON(res, 200, { removed: opts.destinations.remove(principal.userId, "notion") });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/exports/email") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.emailVerifications || !opts.sendEmail || !opts.destinations || !opts.publicBaseUrl) {
+      sendJSON(res, 503, { error: "email export not configured" });
+      return;
+    }
+    // The relay sends mail to whatever address this call names, so an
+    // unlimited caller could use it to deliver mail to strangers. Checked
+    // before the body is even read — deliberately: a typo'd address still
+    // spends budget, but that is the right trade for abuse resistance, since
+    // the alternative (parse first) lets a caller retry a bad address for
+    // free and never actually pay for the attempts that matter.
+    if (!emailLimiter.allow(principal.deviceId)) {
+      sendJSON(res, 429, { error: "too many verification emails" });
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBody(req, MAX_REGISTRATION_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    let address: unknown;
+    try {
+      address = (JSON.parse(body.toString("utf8")) as { address?: unknown } | null)?.address;
+    } catch {
+      sendJSON(res, 400, { error: "invalid json" });
+      return;
+    }
+    if (typeof address !== "string" || !/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(address)) {
+      sendJSON(res, 400, { error: "invalid address" });
+      return;
+    }
+    const token = opts.emailVerifications.mint(principal.userId, address);
+    const link = `${opts.publicBaseUrl.replace(/\/$/, "")}/v1/exports/email/confirm?token=${token}`;
+    // Sent before the destination is written: a 502 here must leave any
+    // existing (possibly already-verified) destination untouched, rather
+    // than wiping a working address out from under the user just because
+    // the replacement one failed to send.
+    try {
+      await opts.sendEmail({
+        to: address,
+        subject: "Confirm transcript delivery",
+        text:
+          `Confirm this address to start receiving your caption transcripts:\n\n${link}\n\n` +
+          `If you did not ask for this, ignore this message and nothing will be sent.`,
+      });
+    } catch (err) {
+      console.error("verification email failed:", err);
+      sendJSON(res, 502, { error: "could not send verification email" });
+      return;
+    }
+    opts.destinations.putEmail(principal.userId, { address });
+    sendJSON(res, 200, { pending: true });
+    return;
+  }
+
+  // Followed from an inbox, so there is no bearer token. The single-use token
+  // is the proof, and it proves control of the address — which is the point.
+  if (req.method === "GET" && url.pathname === "/v1/exports/email/confirm") {
+    // Keyed on the address rather than a device, because this request
+    // carries no credential at all — it arrives from the user's inbox.
+    // Spent before the token is looked at, so a caller cycling guesses pays
+    // for every attempt rather than only for the ones that hit a real row.
+    if (!confirmLimiter.allow(clientAddress(req, opts.trustProxyHeaders ?? false))) {
+      sendJSON(res, 429, { error: "too many confirmation attempts" });
+      return;
+    }
+    const token = url.searchParams.get("token");
+    const claim = token && opts.emailVerifications ? opts.emailVerifications.consume(token) : null;
+    if (!claim || !opts.destinations) {
+      res.writeHead(302, { location: "/app/exports?email=failed" });
+      res.end();
+      return;
+    }
+    opts.destinations.putEmail(claim.userId, {
+      address: claim.address,
+      verifiedAt: new Date().toISOString(),
+    });
+    res.writeHead(302, { location: "/app/exports?email=confirmed" });
+    res.end();
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/v1/exports/email") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    // Same as the Notion route above: no store, nothing to remove, so this
+    // fails closed rather than reporting a no-op as a successful delete.
+    if (!opts.destinations) {
+      sendJSON(res, 503, { error: "email export not configured" });
+      return;
+    }
+    // A still-valid confirmation link must not be able to recreate the
+    // destination this just deleted, already verified.
+    opts.emailVerifications?.deleteForUser(principal.userId);
+    sendJSON(res, 200, { removed: opts.destinations.remove(principal.userId, "email") });
     return;
   }
 

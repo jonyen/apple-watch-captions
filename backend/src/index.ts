@@ -11,16 +11,14 @@ import { AssemblyAIProvider } from "./assemblyaiProvider";
 import { ChannelSplitProvider } from "./channelSplitProvider";
 import { UnavailableProvider } from "./unavailableProvider";
 import { TranscriptionProvider } from "./transcriptionProvider";
-import { TranscriptStore } from "./transcriptStore";
 import { Summarize, createClaudeSummarizer } from "./summarizer";
 import { createGeminiSummarizer } from "./geminiSummarizer";
-import { createFinalizer } from "./finalizer";
-import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
-import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
+import { adoptLegacyNotionAtBoot } from "./exportDestinations";
+import { buildServerOptions, buildResolveExporters } from "./serverOptions";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -51,20 +49,20 @@ console.log(
     : "No summary provider configured — transcripts are saved without summaries",
 );
 
-const exportTranscript = config.notion ? createNotionExporter(config.notion) : undefined;
-if (!exportTranscript) {
-  console.log("NOTION_TOKEN/NOTION_DATABASE_ID not set — transcripts are not exported to Notion");
-}
-
-const transcripts = new TranscriptStore({
-  root: config.transcriptsDir,
-  onFinalize: createFinalizer({
-    root: config.transcriptsDir,
-    summarize,
-    export: exportTranscript,
-    update: config.notion ? createNotionUpdater(config.notion) : undefined,
-  }),
-});
+// The directory has to exist before `openDb` runs: nothing else creates it
+// this early (TranscriptStore only creates it lazily, on the first write),
+// so on a fresh volume `openDb` would otherwise throw SQLITE_CANTOPEN at
+// import time and boot-loop the process. `dbPath` defaults beside the
+// transcripts on the same persistent volume, so identities survive a
+// redeploy; an in-memory store here would force every device to re-register.
+mkdirSync(config.transcriptsDir, { recursive: true });
+// And the database's own directory, which is only the same one by default: a
+// DB_PATH pointed anywhere else (a sibling directory on the volume, say) that
+// does not exist yet fails with SQLITE_CANTOPEN at import time, which on Fly
+// is a boot loop rather than an error anyone reads.
+mkdirSync(dirname(config.dbPath), { recursive: true });
+const db = openDb(config.dbPath);
+const identity = new IdentityStore(db);
 
 /**
  * Deepgram transcribes the 2-channel stream natively; OpenAI and AssemblyAI
@@ -102,23 +100,68 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
   }
 }
 
-// The directory has to exist before `openDb` runs: nothing else creates it
-// this early (TranscriptStore only creates it lazily, on the first write),
-// so on a fresh volume `openDb` would otherwise throw SQLITE_CANTOPEN at
-// import time and boot-loop the process. `dbPath` defaults beside the
-// transcripts on the same persistent volume, so identities survive a
-// redeploy; an in-memory store here would force every device to re-register.
-mkdirSync(config.transcriptsDir, { recursive: true });
-// And the database's own directory, which is only the same one by default: a
-// DB_PATH pointed anywhere else (a sibling directory on the volume, say) that
-// does not exist yet fails with SQLITE_CANTOPEN at import time, which on Fly
-// is a boot loop rather than an error anyone reads.
-mkdirSync(dirname(config.dbPath), { recursive: true });
-const identity = new IdentityStore(openDb(config.dbPath));
+// `buildServerOptions` is the actual gating logic (see serverOptions.ts for
+// why it lives there rather than inline here): every optional piece is
+// constructed from `config` and gated on what actually makes it usable, so
+// an unconfigured relay still boots and captions normally. The console
+// output below is derived from the *returned* options object rather than
+// re-checking each config flag separately, so a log line can never claim a
+// wiring state that isn't the one actually passed to `startServer` (fix
+// round 1, Critical 2 was exactly this kind of drift — a comment asserting a
+// fallback that didn't exist).
+const options = buildServerOptions(config, {
+  db,
+  identity,
+  createProvider,
+  summarize,
+  usage: createUsageService({ env: process.env }),
+});
+
+if (!options.destinations) {
+  console.log("Export destinations disabled: ENCRYPTION_KEY is not set");
+}
+if (!options.sendEmail) {
+  console.log("Transcript email disabled: RESEND_API_KEY and EMAIL_FROM are not both set");
+}
+if (!config.notionOAuth) {
+  console.log(
+    "Per-user Notion export disabled: set NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, and PUBLIC_BASE_URL",
+  );
+} else if (!options.oauthStates) {
+  // notionOAuth is set but buildServerOptions still declined to wire the
+  // OAuth pieces — the only other thing it gates on is `destinations`. See
+  // serverOptions.ts's "does not offer to connect Notion..." test.
+  console.log(
+    "Per-user Notion export disabled: ENCRYPTION_KEY is not set (Notion OAuth is otherwise configured)",
+  );
+}
+if (options.sendEmail && !options.emailVerifications) {
+  console.log("Transcript email confirmation disabled: PUBLIC_BASE_URL is not set");
+}
+if (config.notion) {
+  // The old single-workspace NOTION_TOKEN/NOTION_DATABASE_ID path is
+  // deprecated now that each user connects their own workspace — this is
+  // the operator-visible replacement for the "NOTION_TOKEN not set" line
+  // Task 4 removed, so upgrading with a global token still gets a signal
+  // instead of silence. This config does NOT export on its own and never
+  // did in this per-user world: `resolveExporters` (built inside
+  // `buildServerOptions`) only ever reads a user's own stored connection.
+  // The only thing this legacy value still does is seed that connection for
+  // one user, below, via `adoptLegacyNotionIfUnambiguous` — attempted on
+  // every boot, but a no-op once that user has a connection of their own.
+  console.log(
+    "NOTION_TOKEN/NOTION_DATABASE_ID are deprecated: connect each user's own workspace via " +
+      "/app/exports, then unset these once everyone has.",
+  );
+}
 
 // One-time (per install) adoption of transcripts written before the relay was
 // multi-tenant. No-ops on every boot after the first, once the flat root
-// holds only per-user directories.
+// holds only per-user directories. Independent of the legacy-Notion
+// adoption below: that migration ships on a different branch/plan and may
+// already be long done (or may never run at all, on an install that started
+// multi-tenant), so the Notion adoption below cannot depend on catching this
+// one still pending.
 const migrated = migrateFlatTranscripts(config.transcriptsDir, identity);
 if (migrated) {
   // This is a live bearer token, printed exactly once because there is no
@@ -133,22 +176,46 @@ if (migrated) {
   );
 }
 
-const server = startServer({
-  port: config.port,
-  identity,
-  adminToken: config.adminToken,
-  createProvider,
-  transcripts,
-  transcriptsRoot: config.transcriptsDir,
-  usage: createUsageService({ env: process.env }),
-  callForwardTo: config.twilioForwardTo,
-  trustProxyHeaders: config.trustProxyHeaders,
-});
+// The legacy single-workspace NOTION_TOKEN has no reliable owner once the
+// relay is multi-tenant — it only maps unambiguously onto a user when there
+// is exactly one. Safe to re-run every boot: the adoption resolves a user
+// (adopted, or found already connected) at most once ever, via a marker that
+// survives that user later disconnecting — so this can never silently undo a
+// deliberate Disconnect. See its doc comment in exportDestinations.ts for the
+// rest of the reasoning, including why it is deliberately independent of the
+// flat-transcript migration above.
+//
+// `adoptLegacyNotionAtBoot`, not `adoptLegacyNotionIfUnambiguous`: this is
+// module scope, so an exception here is not a failed adoption but a relay
+// that never listens, on a Fly restart loop, with captioning down for an
+// export-only reason (a rotated ENCRYPTION_KEY, a database restored from
+// another environment). The wrapper logs and returns `failed` instead.
+const legacyNotion = adoptLegacyNotionAtBoot(identity, options.destinations, config.notion);
+if (legacyNotion.outcome === "adopted") {
+  console.log(`Adopted the legacy Notion connection onto the relay's one user (${legacyNotion.userId}).`);
+} else if (legacyNotion.outcome === "already-resolved") {
+  // Fires on every boot after the first, once resolved — that repetition is
+  // deliberate: it is the only place an operator can currently confirm it is
+  // safe to unset NOTION_TOKEN/NOTION_DATABASE_ID (nothing here is reading
+  // them for this user anymore, resolved or not still connected).
+  console.log(
+    `Legacy Notion config already resolved for the relay's one user (${legacyNotion.userId}); ` +
+      "NOTION_TOKEN/NOTION_DATABASE_ID can be unset.",
+  );
+} else if (legacyNotion.outcome === "ambiguous") {
+  console.log(
+    "NOTION_TOKEN/NOTION_DATABASE_ID could not be adopted onto a single user automatically " +
+      "(this relay has zero or more than one registered user) — connect each user's own " +
+      "workspace via /app/exports instead.",
+  );
+}
+
+const server = startServer(options);
 
 const addr = server.address();
 const port = typeof addr === "object" && addr ? addr.port : config.port;
 console.log(`Caption relay listening on ws://0.0.0.0:${port}/stream`);
-console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app`);
+console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app, export destinations at /app/exports`);
 
 /**
  * The per-user subdirectories under the transcripts root — each backfill
@@ -175,10 +242,15 @@ function userDirs(root: string): { dir: string; userId: string }[] {
  * Runs once per user directory and sums the results, rather than once over
  * the flat root: transcripts live under `userDir(root, userId)` now, so a
  * single sweep of the root itself would see no `.jsonl` files and do
- * nothing.
+ * nothing. Each directory's owner resolves their own Notion connection (or
+ * none), rather than this sweep being gated on one operator-wide setting.
  */
 async function runBackfills(): Promise<void> {
   const dirs = userDirs(config.transcriptsDir);
+  // Same resolver the live finalizer uses (built from `options.destinations`
+  // inside `buildServerOptions`) — reconstructed here via the same pure
+  // helper rather than a second copy of the resolution logic.
+  const resolveExporters = buildResolveExporters(options.destinations);
 
   if (summarize) {
     const totals = { summarized: 0, patched: 0, failed: 0 };
@@ -187,7 +259,7 @@ async function runBackfills(): Promise<void> {
         dir,
         userId,
         summarize,
-        patchPage: config.notion ? createNotionSummaryPatcher(config.notion) : undefined,
+        resolve: resolveExporters,
       });
       totals.summarized += r.summarized;
       totals.patched += r.patched;
@@ -199,16 +271,14 @@ async function runBackfills(): Promise<void> {
       );
     }
   }
-  if (exportTranscript) {
-    const totals = { exported: 0, failed: 0 };
-    for (const { dir, userId } of dirs) {
-      const r = await backfillNotion({ dir, userId, export: exportTranscript });
-      totals.exported += r.exported;
-      totals.failed += r.failed;
-    }
-    if (totals.exported || totals.failed) {
-      console.log(`Notion backfill: ${totals.exported} exported, ${totals.failed} failed`);
-    }
+  const notionTotals = { exported: 0, failed: 0 };
+  for (const { dir, userId } of dirs) {
+    const r = await backfillNotion({ dir, userId, resolve: resolveExporters });
+    notionTotals.exported += r.exported;
+    notionTotals.failed += r.failed;
+  }
+  if (notionTotals.exported || notionTotals.failed) {
+    console.log(`Notion backfill: ${notionTotals.exported} exported, ${notionTotals.failed} failed`);
   }
 }
 

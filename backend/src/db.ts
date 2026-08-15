@@ -72,5 +72,42 @@ function migrate(db: Db): void {
       ON pairing_codes(consumed_at, expires_at);
     CREATE INDEX IF NOT EXISTS pairing_codes_expires
       ON pairing_codes(expires_at);
+
+    CREATE TABLE IF NOT EXISTS export_destinations (
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind        TEXT NOT NULL CHECK (kind IN ('notion','email')),
+      config      TEXT NOT NULL,
+      secret      TEXT,
+      created_at  TEXT NOT NULL,
+      PRIMARY KEY (user_id, kind)
+    );
+
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      state       TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS oauth_states_expires ON oauth_states(expires_at);
+
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      token       TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      address     TEXT NOT NULL,
+      expires_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS email_verifications_expires ON email_verifications(expires_at);
+
+    -- One-time marker: has the legacy NOTION_TOKEN/NOTION_DATABASE_ID pair
+    -- already been resolved (adopted, or found already connected) for this
+    -- user? Deliberately its own table rather than a flag on
+    -- export_destinations: that row is exactly what a user's Disconnect
+    -- deletes, and this marker's entire purpose is to survive that delete —
+    -- once a user has been resolved, the boot-time legacy-Notion adoption
+    -- must never touch them again, or a deliberate Disconnect would be
+    -- silently undone by the next redeploy. Never deleted by this relay.
+    CREATE TABLE IF NOT EXISTS legacy_notion_resolutions (
+      user_id      TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      resolved_at  TEXT NOT NULL
+    );
   `);
 }

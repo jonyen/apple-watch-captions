@@ -188,6 +188,27 @@ provider rather than failing the request.
 
 Four destinations, split by where the work naturally lives.
 
+**Amended 2026-08-15, after section 3-5 shipped.** The original split assumed the
+phone app would configure all four. It cannot: the phone app needs a paid Apple
+Developer Program membership (section 2), so routing configuration through it
+would gate every destination on that purchase.
+
+The two relay-side destinations do not need it. Their configuration moves to the
+`/app` web viewer, which already exists and already authenticates with a device
+token. This is not merely a workaround — Notion's authorization-code flow needs a
+registered redirect URI that only the relay can host, so a browser is the natural
+home for it, and it avoids the phone-posts-code-to-relay handoff entirely. The
+mac app gains the same configuration surface for free.
+
+Delivery therefore splits:
+
+| Destination | Where | Ships in |
+|---|---|---|
+| Notion via OAuth | relay, configured in `/app` | Plan 2 |
+| Email to self | relay, configured in `/app` | Plan 2 |
+| Files / iCloud Drive | phone | Plan 3 (needs membership) |
+| Share sheet | phone | Plan 3 (needs membership) |
+
 ### Phone-side (no relay involvement)
 
 **Files / iCloud Drive as Markdown.** The default, and the only destination with
@@ -209,16 +230,24 @@ Messages, Drafts, and every other share-sheet target.
 
 **Notion via OAuth.** Replaces the global `NOTION_TOKEN` env var.
 
-The phone runs the authorization-code flow in `ASWebAuthenticationSession`
-against a public Notion integration. The `client_secret` cannot ship in the app
-binary, so the relay brokers the exchange: the phone posts the returned code to
-`POST /v1/exports/notion/callback`, and the relay exchanges it over HTTP Basic,
-encrypts the resulting access token, and writes an `export_destinations` row.
+The authorization-code flow runs in the browser, from `/app`. The user clicks
+Connect, the relay redirects to Notion with a `state` value it minted and bound
+to their `userId`, and Notion redirects back to
+`GET /v1/exports/notion/callback` — a URI registered with the integration, which
+only the relay can host. The relay exchanges the code over HTTP Basic using a
+`client_secret` that never leaves the server, encrypts the resulting access
+token, and writes an `export_destinations` row.
+
+The `state` parameter is load-bearing, not ceremony: without it, an attacker can
+hand a victim a callback URL carrying the attacker's own authorization code and
+silently bind the victim's transcripts to the attacker's Notion workspace. It
+must be single-use, expiring, and verified against the session that started the
+flow.
 
 Notion access tokens do not expire and have no refresh token; they stay valid
 until the user revokes the integration in Notion's settings. There is no refresh
 machinery to build. A revoked token surfaces as a `401` from the Notion API, which
-marks the destination as needing re-authorization and surfaces in the phone UI.
+marks the destination as needing re-authorization and surfaces in `/app`.
 
 `notionExporter.ts`, `notionBlocks.ts`, `notionUpdater.ts`, and
 `notionBackfill.ts` are retained. The single change is that they read a per-user
@@ -233,8 +262,15 @@ sheet would require the user to tap through a draft for every transcript, which
 is manual emailing rather than the set-and-forget behavior the destination is
 for. The cost is a new dependency, a sending domain, and SPF/DKIM/DMARC setup.
 
-Address ownership is verified by a confirmation link before the first transcript
-is sent, so the relay cannot be used to mail arbitrary strangers.
+The address is entered in `/app`. Ownership is verified by a confirmation link
+before the first transcript is sent, so the relay cannot be used to mail
+arbitrary strangers — the confirmation endpoint is itself the abuse surface, and
+must be rate limited and its token single-use and expiring.
+
+This destination sends conversation transcripts, including the speech of
+bystanders, to an address the relay was told about. Sending to an unverified
+address would make the relay a remailer; sending to a verified but wrong one is
+a privacy incident the user cannot undo. Verification is not a formality here.
 
 ### Secret storage
 
@@ -314,8 +350,12 @@ effective ceiling is higher still.
 ### Export configuration UI
 
 One `ExportDestination` protocol with local implementations for Files and share
-sheet, and remote configuration screens for Notion (an OAuth button) and email
-(an address field plus confirmation state).
+sheet.
+
+Notion and email are **not** configured here — per the section 6 amendment they
+are configured in the `/app` web viewer and ship in Plan 2, before this client
+work is unblocked. The phone may later surface their status read-only, but it
+does not own their setup.
 
 ## 8. Migration
 

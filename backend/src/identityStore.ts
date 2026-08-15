@@ -194,6 +194,18 @@ export class IdentityStore {
     return { ok: true, fromUserId, toUserId };
   }
 
+  /**
+   * The id of the one user in this database, or null if there are zero or
+   * more than one. Used only to attribute a relay-wide legacy setting (the
+   * pre-OAuth `NOTION_TOKEN`) onto a user when doing so is unambiguous —
+   * `LIMIT 2` is enough to tell "exactly one" from every other count without
+   * scanning the whole table.
+   */
+  soleUserId(): string | null {
+    const rows = this.db.prepare("SELECT id FROM users LIMIT 2").all() as { id: string }[];
+    return rows.length === 1 ? rows[0]!.id : null;
+  }
+
   protected timestamp(): string {
     return new Date(this.now()).toISOString();
   }

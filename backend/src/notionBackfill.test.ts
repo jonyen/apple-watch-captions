@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { backfillNotion } from "./notionBackfill";
+import { ResolveExporters, UserExporters } from "./finalizer";
 import {
   TranscriptStore,
   FinalizedTranscript,
@@ -35,11 +36,27 @@ const ok = () => vi.fn(async (_t: FinalizedTranscript, _s: string | null) => ({
   url: "https://notion.so/p1",
 }));
 
+/** Wraps an `export` fn into the `resolve` shape `backfillNotion` now takes, for user `U`. */
+function resolveWith(exportTranscript: UserExporters["export"]): ResolveExporters {
+  return (userId) =>
+    userId === U
+      ? {
+          export: exportTranscript,
+          update: async () => ({ pageId: "p1", url: "https://notion.so/p1", exportedSegments: 0 }),
+          patchSummary: async () => {},
+        }
+      : undefined;
+}
+
+/** A user with no Notion connection at all. */
+const noConnection: ResolveExporters = () => undefined;
+
 describe("backfillNotion", () => {
   let root: string;
+  let consoleError: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "backfill-"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => {
@@ -54,7 +71,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -70,7 +87,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -92,7 +109,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -107,7 +124,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -122,7 +139,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -142,7 +159,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -158,7 +175,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -175,7 +192,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
       limit: 2,
     });
@@ -190,7 +207,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: join(scoped(root), "missing"),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -206,7 +223,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: ok(),
+      resolve: resolveWith(ok()),
       delayMs: 400,
       sleep: async (ms) => {
         waits.push(ms);
@@ -214,5 +231,114 @@ describe("backfillNotion", () => {
     });
 
     expect(waits).toEqual([400, 400]);
+  });
+
+  it("does nothing for a user with no Notion connection", async () => {
+    storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      resolve: noConnection,
+      delayMs: 0,
+    });
+
+    expect(result).toEqual({ exported: 0, skipped: 0, failed: 0 });
+  });
+
+  it("does not let one user's throwing resolve stop the sweep for the next user in the loop", async () => {
+    // Mirrors what `runBackfills` in index.ts does: call `backfillNotion`
+    // once per user directory, in a loop, sharing one `resolve`. A sealed
+    // secret that fails to open for one user (rotated key, restored
+    // database) must not abort export catch-up for the users after them.
+    const bad = "user-bad";
+    const good = "user-good";
+    const store = new TranscriptStore({ root, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    store.append(bad, "s1", LONG);
+    store.append(good, "s2", LONG);
+    const goodName = listTranscripts(userDir(root, good))[0].name;
+
+    const exportTranscript = ok();
+    const resolve: ResolveExporters = (userId) => {
+      if (userId === bad) throw new Error("bad auth tag");
+      if (userId === good) {
+        return {
+          export: exportTranscript,
+          update: async () => ({ pageId: "p1", url: "https://notion.so/p1", exportedSegments: 0 }),
+          patchSummary: async () => {},
+        };
+      }
+      return undefined;
+    };
+
+    const results = [];
+    for (const userId of [bad, good]) {
+      results.push(await backfillNotion({ dir: userDir(root, userId), userId, resolve, delayMs: 0 }));
+    }
+
+    expect(results[0]).toEqual({ exported: 0, skipped: 0, failed: 0 });
+    expect(exportTranscript).toHaveBeenCalledOnce();
+    expect(results[1].exported).toBe(1);
+    expect(readExportMarker(userDir(root, good), goodName)).toMatchObject({ pageId: "p1" });
+  });
+
+  it("does not resolve the failing user's error into an unrecoverable state, and reports it", async () => {
+    storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+    const resolve: ResolveExporters = () => {
+      throw new Error("bad auth tag");
+    };
+
+    const result = await backfillNotion({ dir: scoped(root), userId: U, resolve, delayMs: 0 });
+
+    expect(result).toEqual({ exported: 0, skipped: 0, failed: 0 });
+  });
+
+  // `backfillNotion` checks for a marker itself before ever calling
+  // `exportOnce` (`readExportMarker` above, in the loop) — but `exportOnce`
+  // re-reads the marker on its own (`finalizer.ts`). These are two separate
+  // reads with a real window between them: `runBackfills` runs at boot while
+  // the live finalizer path may already be landing markers for the same
+  // transcript concurrently. `backfillNotion` never passes an updater, so
+  // `exportOnce`'s `if (!update) return false` must fire quietly here.
+  //
+  // The exporter-not-called / marker-unchanged assertions below hold
+  // identically whether that branch exists or not: without it,
+  // `update(t, summary, marker)` calls `undefined` as a function, throws
+  // synchronously, is caught by the catch two lines down, and returns a
+  // failure — same externally observable result, except it logs "page
+  // update failed for ...". That log line is one of the two things that
+  // discriminate the two implementations, and it matters on its own: this
+  // path is the boot sweep racing a live finalize, which is expected and
+  // benign, not an export failure — logging one would mislead an operator
+  // grepping for real problems. So `consoleError` staying silent is part of
+  // what proves this test covers the branch it is named for.
+  //
+  // The other is the count. The final review's smaller item 4: silencing the
+  // log left this case still counted as `failed`, so the boot log said
+  // "Notion backfill: 0 exported, 1 failed" for a routine race — the
+  // misleading signal moved one line down rather than going away. It is
+  // `skipped` now, which is what "there was nothing to do here" already
+  // means everywhere else in this sweep.
+  it("leaves a marker written between listing and export alone, rather than re-exporting or overwriting it", async () => {
+    const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+    const exportTranscript = ok();
+
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      resolve: resolveWith(exportTranscript),
+      delayMs: 1,
+      // Stands in for the live finalizer path landing this transcript's
+      // export in the window between the loop's own marker check (above,
+      // already passed by the time this runs) and `exportOnce`'s own read.
+      sleep: async () => {
+        writeExportMarker(scoped(root), name, { pageId: "live-export", url: "https://notion.so/live" });
+      },
+    });
+
+    expect(exportTranscript).not.toHaveBeenCalled();
+    expect(result).toEqual({ exported: 0, skipped: 1, failed: 0 });
+    expect(readExportMarker(scoped(root), name)).toMatchObject({ pageId: "live-export" });
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

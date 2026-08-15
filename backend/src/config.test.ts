@@ -123,6 +123,16 @@ describe("loadConfig", () => {
     warn.mockRestore();
   });
 
+  it("leaves the encryption key unset when ENCRYPTION_KEY is not configured", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    expect(cfg.encryptionKey).toBeUndefined();
+  });
+
+  it("reads ENCRYPTION_KEY when set", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", ENCRYPTION_KEY: "base64-key-value" });
+    expect(cfg.encryptionKey).toBe("base64-key-value");
+  });
+
   it("defaults the port to 8080 when unset", () => {
     const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.port).toBe(8080);
@@ -130,6 +140,69 @@ describe("loadConfig", () => {
 
   it("throws when DEEPGRAM_API_KEY is missing", () => {
     expect(() => loadConfig({})).toThrow(/DEEPGRAM_API_KEY/);
+  });
+});
+
+// Final review, Important 2: `fly.toml` ships PUBLIC_BASE_URL pointing at
+// this project's own fly.dev hostname, and `fly.dev` names are globally
+// unique — so an operator deploying from scratch renames the app and, unless
+// they also change this, builds a Notion redirect URI and an emailed
+// confirmation link that point at a host they do not control. Notion then
+// sends a live authorization code there, and the relay mails a live
+// verification token (with the user's address) pointing at the same place.
+// Neither is usable there; both leak.
+describe("PUBLIC_BASE_URL sanity check", () => {
+  const base = { DEEPGRAM_API_KEY: "k" };
+  const messages = (warn: ReturnType<typeof vi.spyOn>) =>
+    warn.mock.calls.map((call) => call.join(" ")).join("\n");
+
+  it("warns, naming both values, when the host is not this Fly app's own hostname", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfig({
+      ...base,
+      FLY_APP_NAME: "their-relay",
+      PUBLIC_BASE_URL: "https://watch-captions-relay.fly.dev",
+    });
+    const text = messages(warn);
+    warn.mockRestore();
+    expect(text).toContain("PUBLIC_BASE_URL");
+    expect(text).toContain("https://watch-captions-relay.fly.dev");
+    expect(text).toContain("their-relay");
+  });
+
+  it("says nothing when PUBLIC_BASE_URL already matches the app", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfig({
+      ...base,
+      FLY_APP_NAME: "their-relay",
+      PUBLIC_BASE_URL: "https://their-relay.fly.dev",
+    });
+    const text = messages(warn);
+    warn.mockRestore();
+    expect(text).toBe("");
+  });
+
+  // Off Fly there is nothing to compare against, and a local run on
+  // http://localhost:8080 is not a misconfiguration.
+  it("says nothing when FLY_APP_NAME is unset", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfig({ ...base, PUBLIC_BASE_URL: "http://localhost:8080" });
+    const text = messages(warn);
+    warn.mockRestore();
+    expect(text).toBe("");
+  });
+
+  // A custom domain is a legitimate mismatch, so this must never be fatal —
+  // captioning does not depend on any of it.
+  it("still boots on a mismatch rather than throwing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({
+      ...base,
+      FLY_APP_NAME: "their-relay",
+      PUBLIC_BASE_URL: "https://captions.example.com",
+    });
+    warn.mockRestore();
+    expect(cfg.publicBaseUrl).toBe("https://captions.example.com");
   });
 });
 

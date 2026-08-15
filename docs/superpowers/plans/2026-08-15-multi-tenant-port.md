@@ -505,46 +505,36 @@ git commit -m "feat(summary): add resummarize CLI for regenerating the newest N"
 
 ---
 
-### Task 6: Port two-way call audio
+### Task 6: Port two-way call audio, keyed per user
 
-**Sized by Task 1.** If that spike found the port mechanical, this is one task. If it found call presence must become per-user, **stop and split this into its own plan** rather than absorbing structural work here.
+**Re-scoped by the Task 1 spike and its adversarial review.** The original copy-and-wire task is void: presence, downlink, and uplink are per-process globals on the old lineage, and on a base with credential-free device registration any registered token could mark presence, drain another user's caller audio, speak into their call, or end it. The review proved route-level auth cannot compensate — it identifies the requester but cannot route to the right compartment when there is only one compartment — and the base explicitly supports concurrent calls for two users (`server.tenancy.test.ts`'s alice/mallory concurrent-stream test), which one shared buffer cannot serve.
+
+This is design-and-implement work, not transcription: the implementer owns the code shape, bound by the requirements below and the base's own established pattern (`CurrentCall`, a `Map` keyed by `userId`).
 
 **Files:**
-- Create: `backend/src/mulaw.ts`, `backend/src/ringback.ts`, `backend/src/callAudioBuffer.ts`, `backend/src/callPresence.ts`, `backend/src/callUplink.ts` (and their tests)
-- Modify: `backend/src/index.ts`, `backend/src/twilioStreamHandler.ts`, `backend/src/twiml.ts`
+- Create: `backend/src/mulaw.ts`, `backend/src/ringback.ts` (verified pure — move as-is with their tests)
+- Create: `backend/src/callPresence.ts`, `backend/src/callAudioBuffer.ts`, `backend/src/callUplink.ts` — per-user keyed re-designs of the old lineage's globals, plus tests
+- Modify: `backend/src/server.ts` (the routes — NOTE: on both lineages the routes live in `server.ts`, not `index.ts` as this plan previously claimed), and whatever wiring `serverOptions.ts`/`twilioStreamHandler.ts` need
+- Source lineage: `git show origin/backup/local-main-2026-08-15:backend/src/<file>.ts`
 
 **Interfaces:**
-- Consumes: the spike's finding.
-- Produces: the `/v1/call/audio` uplink and downlink routes the watch's **Tune in** action depends on.
+- Consumes: the spike's finding (spec §1 item 4) and full report at `.superpowers/sdd/2026-08-15-multi-tenant-port/task-1-report.md`; `CurrentCall`'s keying pattern.
+- Produces: `/v1/call*` uplink/downlink/presence routes, per-user; the watch's Tune in flow works for the principal that owns the call.
 
-- [ ] **Step 1: Re-read the spike's finding**
+**Requirements (each one is a review criterion):**
 
-Read the amended section 1 item 4 of the spec. Do not start until it says mechanical.
+- [ ] **R1 — Per-user keying.** `CallPresence`, the downlink buffer map, and the uplink are keyed by `userId`, following `CurrentCall`'s pattern. No process-global call state remains.
+- [ ] **R2 — Presence routes through the principal.** Marking presence uses only the authenticated principal's `userId`; `/twilio/voice` consults presence for ITS resolved principal's `userId` and no other. One user's dark watch never answers another user's call.
+- [ ] **R3 — The downlink map is never swept.** Per-user buffers are created lazily and live for the process lifetime. The old `callAudioBuffer.seq` comment documents why: `seq` is deliberately never reset, and evict-and-recreate between a user's calls resurrects the skipped-opening-seconds bug. Carry that comment forward onto the map.
+- [ ] **R4 — Route auth follows the base.** Every `/v1/call*` route resolves a bearer principal; the Twilio webhook authenticates via the token already embedded in its URL, exactly as the base's `/twilio/voice` does today.
+- [ ] **R5 — Cross-tenant isolation tests.** Following `server.tenancy.test.ts`'s alice/mallory pattern, prove: M marking presence does not cause A's inbound call to connect; M cannot drain A's downlink; M cannot write into A's uplink; M cannot end A's call. These four are the load-bearing tests of this task — the attack walk in the spike review is the script.
+- [ ] **R6 — Old tests come along.** The five modules' existing tests port with the code, adapted to the keyed APIs; inbound captioning's existing `server.call.test.ts` stays green untouched.
+- [ ] **R7 — Global forward number is a documented remnant.** `callForwardTo` stays a single global (the operator's number). Record in the spec's §5 that a second inbound-call user needs their own Twilio number with their own token in its webhook URL, and that per-user forward numbers are future work.
+- [ ] **R8 — Full suite green, `tsc --noEmit` clean, TDD for all new keying behavior.**
 
-- [ ] **Step 2: Copy the leaf modules and their tests**
-
-```bash
-cd /Users/jonyen/Projects/apple-watch-captions
-for f in mulaw ringback callAudioBuffer callPresence callUplink; do
-  git show origin/backup/local-main-2026-08-15:backend/src/$f.ts > backend/src/$f.ts
-  git show origin/backup/local-main-2026-08-15:backend/src/$f.test.ts > backend/src/$f.test.ts 2>/dev/null || true
-done
-```
-
-Then run `cd backend && npm test` and fix what fails. Expect failures where these modules import something the base names differently — that is the port, and each one is a decision to record in the commit message.
-
-- [ ] **Step 3: Wire the routes**
-
-Compare `git show origin/backup/local-main-2026-08-15:backend/src/index.ts` against the current one for the call routes only, and add them. Every route on this base authenticates with a bearer token; the Twilio webhook is the documented exception. Follow whatever the base already does for `/twilio/voice`.
-
-- [ ] **Step 4: Run the full suite**
-
-Run: `cd backend && npm test && npm run build`
-Expected: all passing, `tsc --noEmit` clean, and the pre-existing `server.call.test.ts` still green — it covers the inbound captioning half this port must not disturb.
-
-- [ ] **Step 5: Commit**
+- [ ] **Final step: Commit**
 
 ```bash
-git add backend/src
-git commit -m "feat(relay): port two-way call audio onto the multi-tenant base"
+git add backend/src docs/superpowers/specs/2026-08-15-multi-tenant-migration-design.md
+git commit -m "feat(relay): port two-way call audio, keyed per user"
 ```

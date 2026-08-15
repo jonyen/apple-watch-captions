@@ -1,5 +1,6 @@
 import XCTest
-@testable import CaptionCore
+import CaptionCore
+@testable import CaptionRelay
 
 /// Records what the store asked the relay to delete. A box, because the client
 /// protocol is `Sendable` and its methods cannot mutate the fake.

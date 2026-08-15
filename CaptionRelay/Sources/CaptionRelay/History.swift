@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CaptionCore
 
 /// One entry in the transcript list.
 public struct TranscriptListItem: Equatable, Identifiable, Sendable {

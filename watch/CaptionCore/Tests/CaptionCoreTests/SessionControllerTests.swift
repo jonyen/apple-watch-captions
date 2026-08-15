@@ -4,19 +4,17 @@ import XCTest
 @MainActor
 final class SessionControllerTests: XCTestCase {
 
-    final class FakeRelay: Relay {
-        var onMessage: (@MainActor (CaptionEvent) -> Void)?
+    final class FakeRelay: CaptionEngine {
+        var onEvent: (@MainActor (CaptionEvent) -> Void)?
         var onClose: (@MainActor () -> Void)?
         var connected = false
         var connectCount = 0
-        /// The mode the last `connect` was handed, or nil if never connected.
-        var mode: SessionMode?
         var closed = false
         var sent: [Data] = []
-        func connect(mode: SessionMode) { connected = true; connectCount += 1; self.mode = mode }
+        func start() { connected = true; connectCount += 1 }
         func send(_ audio: Data) { sent.append(audio) }
         func close() { closed = true }
-        @MainActor func deliver(_ m: CaptionEvent) { onMessage?(m) }
+        @MainActor func deliver(_ m: CaptionEvent) { onEvent?(m) }
         @MainActor func dropConnection() { onClose?() }
     }
 
@@ -161,35 +159,14 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(store.state, .connecting)
     }
 
-    func testLiveModeReachesTheRelay() async {
-        let relay = FakeRelay()
-        let c = SessionController(store: CaptionStore(), relay: relay,
-                                  audio: FakeAudio(), permission: FakePermission(granted: true))
-        await c.start(mode: .live)
-        XCTAssertEqual(relay.mode, .live)
-    }
-
-    func testLiveModeStillCapturesAudio() async {
+    func testARunningSessionCapturesAudio() async {
         let relay = FakeRelay()
         let audio = FakeAudio()
         let c = SessionController(store: CaptionStore(), relay: relay,
                                   audio: audio, permission: FakePermission(granted: true))
-        await c.start(mode: .live)
+        await c.start()
         relay.deliver(.ready)
         XCTAssertTrue(audio.started)
-    }
-
-    func testStartPassesTheTranscriptToResumeToTheRelay() async {
-        let (controller, store, relay, _) = make()
-        await controller.start(mode: .saved(resuming: "2026-07-25T09-00-00Z_abc"))
-        XCTAssertEqual(relay.mode, .saved(resuming: "2026-07-25T09-00-00Z_abc"))
-        XCTAssertEqual(store.state, .connecting)
-    }
-
-    func testStartWithoutResumeAsksForAFreshTranscript() async {
-        let (controller, _, relay, _) = make()
-        await controller.start()
-        XCTAssertEqual(relay.mode, .saved(resuming: nil))
     }
 
     func testSessionTokenChangesAcrossStartAndStop() async {
@@ -220,11 +197,11 @@ final class SessionControllerTests: XCTestCase {
         let controller = SessionController(store: store, relay: relay, audio: audio,
                                             permission: permission)
 
-        let staleStart = Task { await controller.start(mode: .saved(resuming: "stale")) }
+        let staleStart = Task { await controller.start() }
         await permission.waitForArrival(1)
 
         controller.stop()
-        let currentStart = Task { await controller.start(mode: .saved(resuming: "current")) }
+        let currentStart = Task { await controller.start() }
         await permission.waitForArrival(2)
 
         // Release both permission checks together; order between them no
@@ -235,7 +212,6 @@ final class SessionControllerTests: XCTestCase {
         await currentStart.value
 
         XCTAssertEqual(relay.connectCount, 1)
-        XCTAssertEqual(relay.mode, .saved(resuming: "current"))
     }
 
     func testStartReturnsTrueWhenItConnects() async {
@@ -264,11 +240,11 @@ final class SessionControllerTests: XCTestCase {
         let controller = SessionController(store: CaptionStore(), relay: FakeRelay(),
                                             audio: FakeAudio(), permission: permission)
 
-        let staleStart = Task { await controller.start(mode: .saved(resuming: "stale")) }
+        let staleStart = Task { await controller.start() }
         await permission.waitForArrival(1)
 
         controller.stop()
-        let currentStart = Task { await controller.start(mode: .saved(resuming: "current")) }
+        let currentStart = Task { await controller.start() }
         await permission.waitForArrival(2)
 
         await permission.releaseAll()

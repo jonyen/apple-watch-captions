@@ -5,19 +5,17 @@ import XCTest
 @MainActor
 final class TranscriptPrefillerTests: XCTestCase {
 
-    final class FakeRelay: Relay {
-        var onMessage: (@MainActor (CaptionEvent) -> Void)?
+    final class FakeRelay: CaptionEngine {
+        var onEvent: (@MainActor (CaptionEvent) -> Void)?
         var onClose: (@MainActor () -> Void)?
         var connected = false
         var connectCount = 0
-        /// The mode the last `connect` was handed, or nil if never connected.
-        var mode: SessionMode?
         var closed = false
         var sent: [Data] = []
-        func connect(mode: SessionMode) { connected = true; connectCount += 1; self.mode = mode }
+        func start() { connected = true; connectCount += 1 }
         func send(_ audio: Data) { sent.append(audio) }
         func close() { closed = true }
-        @MainActor func deliver(_ m: CaptionEvent) { onMessage?(m) }
+        @MainActor func deliver(_ m: CaptionEvent) { onEvent?(m) }
         @MainActor func dropConnection() { onClose?() }
     }
 
@@ -107,7 +105,7 @@ final class TranscriptPrefillerTests: XCTestCase {
     private func startedController(store: CaptionStore) async -> SessionController {
         let controller = SessionController(store: store, relay: FakeRelay(), audio: FakeAudio(),
                                            permission: FakePermission(granted: true))
-        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))
+        await controller.start()
         return controller
     }
 
@@ -162,7 +160,7 @@ final class TranscriptPrefillerTests: XCTestCase {
 
         prefiller.restore(name: "2026-07-10T18-00-00Z_abc", into: store, for: controller)   // fetch 1: blocked
         controller.stop()
-        await controller.start(mode: .saved(resuming: "2026-07-10T18-00-00Z_abc"))
+        await controller.start()
         prefiller.restore(name: "2026-07-10T18-00-00Z_abc", into: store, for: controller)   // fetch 2: blocked
 
         // Release both fetches together; order between them no longer matters

@@ -3,13 +3,14 @@ import AVFoundation
 import Speech
 import CaptionCore
 
-/// Apple on-device captioning presented as a `Relay`, so `SessionController`
-/// drives it exactly like a relay-backed provider: `connect()` asks for
-/// speech-recognition permission and emits `.ready`; `send(_:)` takes the
-/// same interleaved stereo PCM the relay gets and feeds one recognizer per
-/// channel; captions come back as `.caption` messages. No backend involved.
-final class LocalSpeechRelay: NSObject, Relay {
-    var onMessage: (@MainActor (CaptionEvent) -> Void)?
+/// Apple on-device captioning presented as a `CaptionEngine`, so
+/// `SessionController` drives it exactly like a relay-backed provider:
+/// `start()` asks for speech-recognition permission and emits `.ready`;
+/// `send(_:)` takes the same interleaved stereo PCM the relay gets and feeds
+/// one recognizer per channel; captions come back as `.caption` messages. No
+/// backend involved.
+final class LocalSpeechRelay: NSObject, CaptionEngine {
+    var onEvent: (@MainActor (CaptionEvent) -> Void)?
     var onClose: (@MainActor () -> Void)?
 
     private let queue = DispatchQueue(label: "localspeech")
@@ -17,10 +18,7 @@ final class LocalSpeechRelay: NSObject, Relay {
     private var tickTimer: DispatchSourceTimer?
     private var stopped = false
 
-    // Mac sessions always start fresh, the relay names the transcript itself,
-    // and there is no live-only mode here — so the mode carries nothing this
-    // transport can act on.
-    func connect(mode _: SessionMode) {
+    func start() {
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             guard let self else { return }
             self.queue.async {
@@ -82,8 +80,8 @@ final class LocalSpeechRelay: NSObject, Relay {
     }
 
     private func emit(_ message: CaptionEvent) {
-        guard let onMessage else { return }
-        Task { @MainActor in onMessage(message) }
+        guard let onEvent else { return }
+        Task { @MainActor in onEvent(message) }
     }
 
     /// Split interleaved stereo Int16 LE frames (ch0 = mic, ch1 = system).

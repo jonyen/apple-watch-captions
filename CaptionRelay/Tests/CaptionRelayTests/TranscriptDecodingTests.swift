@@ -1,5 +1,5 @@
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 /// Decoding is pinned against the relay's real response shape, captured from
 /// `GET /v1/transcripts` in production.

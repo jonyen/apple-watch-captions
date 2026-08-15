@@ -1,11 +1,13 @@
 import Foundation
 import CaptionCore
+import CaptionRelay
 
-/// `Relay` over plain HTTP. watchOS blocks WebSockets for normal apps (TN3135),
-/// but high-level `URLSession` requests are always allowed. Audio is batched and
-/// POSTed roughly once per second; new caption events come back in each response.
-final class HTTPRelayClient: Relay {
-    var onMessage: (@MainActor (CaptionEvent) -> Void)?
+/// `CaptionEngine` over plain HTTP. watchOS blocks WebSockets for normal apps
+/// (TN3135), but high-level `URLSession` requests are always allowed. Audio is
+/// batched and POSTed roughly once per second; new caption events come back in
+/// each response.
+final class HTTPRelayClient: CaptionEngine {
+    var onEvent: (@MainActor (CaptionEvent) -> Void)?
     var onClose: (@MainActor () -> Void)?
     /// Fires once with the transcript this session is writing to, so the app
     /// can offer to resume it later. The relay assigns the name — and sends
@@ -21,6 +23,11 @@ final class HTTPRelayClient: Relay {
     /// name the same session, so this client must not mint a fresh id per
     /// connect the way a mic session does.
     private let fixedSessionID: String?
+
+    /// What the next session does with what it hears. Set before `start()`;
+    /// read once per connect, so changing it mid-session affects nothing
+    /// until the next one — the same lifecycle the old parameter had.
+    var mode: SessionMode = .saved(resuming: nil)
 
     private var sessionID = UUID().uuidString
     private var resumeName: String?
@@ -49,7 +56,8 @@ final class HTTPRelayClient: Relay {
         session = URLSession(configuration: config)
     }
 
-    func connect(mode: SessionMode) {
+    func start() {
+        let mode = self.mode
         queue.async { [weak self] in
             guard let self else { return }
             // Start a fresh session each connect so reconnects (Try Again, returning
@@ -211,7 +219,7 @@ final class HTTPRelayClient: Relay {
     }
 
     /// Torn down the same way `fail()` handles a transport failure, but via
-    /// `onMessage(.error)` rather than `onClose` so the app can show a message
+    /// `onEvent(.error)` rather than `onClose` so the app can show a message
     /// specific to this cause instead of the generic "Connection lost".
     private func failEphemeralMismatch() {
         guard !stopped else { return }
@@ -222,6 +230,6 @@ final class HTTPRelayClient: Relay {
     }
 
     private func emit(_ message: CaptionEvent) {
-        if let onMessage { Task { @MainActor in onMessage(message) } }
+        if let onEvent { Task { @MainActor in onEvent(message) } }
     }
 }

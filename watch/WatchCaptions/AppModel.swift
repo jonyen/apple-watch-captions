@@ -256,7 +256,7 @@ final class AppModel: ObservableObject {
         do {
             try audioPlayer.start()
         } catch {
-            store.setError("Could not start call audio.")
+            store.setError("Could not start audio.")
             return
         }
         callTwoWay = true
@@ -293,7 +293,7 @@ final class AppModel: ObservableObject {
         // Not a dropped packet: the relay refuses every turn from here on.
         // Better to say the call is over than to leave the user pressing and
         // speaking into it.
-        if refusal == .noCallLive { store.setError("The call has ended.") }
+        if refusal == .noCallLive { store.setError("The audio has ended.") }
     }
 
     /// Leave the call, and end it.

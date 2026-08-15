@@ -15,57 +15,29 @@ struct HomeView: View {
 
     var body: some View {
         List {
-            // One row, two halves split by a divider: the wide one records,
-            // the narrow one does not. The row itself is an ordinary list
-            // row, so the system supplies the fill, insets, height and
-            // corner radius that make it a sibling of "Transcripts" below.
-            // The halves are nested plain buttons purely so each stays
-            // independently tappable inside that one row.
-            HStack(spacing: 0) {
-                Button(action: onNew) {
-                    // A `Label` scales its icon and text as one unit, and on
-                    // the 40mm case that unit never shrinks enough before
-                    // hitting the truncating edge — the words lose out to the
-                    // dot. Composing the pieces by hand lets the scale floor
-                    // apply to the text alone; the glyph stays full size.
-                    HStack(spacing: 4) {
-                        Image(systemName: "record.circle")
-                        Text("New session")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                    }
-                    // Keeps the glyph off the row's leading edge. Modest on
-                    // purpose: this content already competes with that scale
-                    // floor for space on the 40mm case, the tightest there is.
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity)
-                    // Without this only the glyph and letters take the tap,
-                    // not the empty width between them and the divider.
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Divider()
-                Button(action: onLive) {
-                    Image(systemName: "waveform")
-                        .frame(width: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Live caption")
-                .accessibilityHint("Captions on screen only. Nothing is saved.")
+            Button(action: onNew) {
+                Label("New session", systemImage: "record.circle")
             }
+            // Its own row rather than a half-width sibling of "New session":
+            // a glyph alone never said "this one is not kept", and the split
+            // row left no space for words that would have. The empty circle
+            // against the filled one above is the same distinction said twice.
+            Button(action: onLive) {
+                Label("Off the record", systemImage: "circle")
+            }
+            .accessibilityHint("Captions on screen only. Nothing is saved.")
             if lastSession != nil {
                 Button(action: onContinue) {
-                    Label("Continue last", systemImage: "arrow.clockwise")
+                    Label("Resume previous", systemImage: "arrow.clockwise")
                 }
             }
             Button(action: onTakeCall) {
-                Label("Take call", systemImage: "phone.badge.waveform")
+                Label("Tune in", systemImage: "antenna.radiowaves.left.and.right")
             }
             Button(action: onBrowse) {
                 Label("Transcripts", systemImage: "list.bullet")
             }
-            // Sits under the actions as a caption, not as a fourth thing to tap.
+            // Sits under the actions as a caption, not another thing to tap.
             Text(versionLabel)
                 .font(.footnote)
                 .foregroundStyle(.secondary)

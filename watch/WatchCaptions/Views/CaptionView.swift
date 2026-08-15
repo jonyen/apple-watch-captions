@@ -16,8 +16,8 @@ enum CaptionIndicator {
         switch self {
         case .recording: return "Recording"
         case .liveOnly: return "Live only, not saved"
-        case .call: return "Captioning a call"
-        case .callEnded(.ended): return "Call ended"
+        case .call: return "Tuned in"
+        case .callEnded(.ended): return "Audio ended"
         case .callEnded(.streamLost): return "Captions stopped"
         }
     }

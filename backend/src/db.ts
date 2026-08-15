@@ -81,5 +81,12 @@ function migrate(db: Db): void {
       created_at  TEXT NOT NULL,
       PRIMARY KEY (user_id, kind)
     );
+
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      state       TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS oauth_states_expires ON oauth_states(expires_at);
   `);
 }

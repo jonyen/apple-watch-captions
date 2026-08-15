@@ -803,13 +803,26 @@ async function handleRequest(
       res.end();
     };
     const state = url.searchParams.get("state");
-    const code = url.searchParams.get("code");
-    if (!state || !code || !opts.oauthStates || !opts.destinations || !opts.exchangeNotionCode) {
+    if (!state || !opts.oauthStates || !opts.destinations || !opts.exchangeNotionCode) {
       fail();
       return;
     }
     const userId = opts.oauthStates.consume(state);
     if (!userId) {
+      fail();
+      return;
+    }
+    // Notion sends `error=access_denied` (and no `code`) when the user
+    // clicks Cancel on the consent screen. That is routine — users will hit
+    // it often — and deserves its own reason distinct from a real failure,
+    // rather than collapsing into the generic "something went wrong".
+    const error = url.searchParams.get("error");
+    if (error) {
+      fail(error === "access_denied" ? "denied" : "failed");
+      return;
+    }
+    const code = url.searchParams.get("code");
+    if (!code) {
       fail();
       return;
     }
@@ -826,7 +839,18 @@ async function handleRequest(
         // token instead. No database shared with the integration means no
         // export destination, which is worse than no connection at all, so
         // nothing is stored and the user is told why.
-        const found = await opts.findNotionDatabase?.(granted.accessToken);
+        if (!opts.findNotionDatabase) {
+          // Distinct from "the search ran and found nothing": this is a
+          // deployment gap (Task 8 wired exchangeNotionCode but not this
+          // seam), not something the user can fix by sharing a database, so
+          // it must not read as the same actionable "nodatabase" message.
+          console.warn(
+            "notion callback: findNotionDatabase is not configured; cannot resolve a database",
+          );
+          fail();
+          return;
+        }
+        const found = await opts.findNotionDatabase(granted.accessToken);
         if (!found) {
           fail("nodatabase");
           return;
@@ -839,7 +863,7 @@ async function handleRequest(
         ...(workspaceName ? { workspaceName } : {}),
       });
     } catch (err) {
-      console.error("notion callback failed:", err);
+      console.error("notion callback failed:", err instanceof Error ? err.message : String(err));
       fail();
       return;
     }

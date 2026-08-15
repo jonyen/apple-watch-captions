@@ -81,7 +81,15 @@ describe("GET /v1/exports", () => {
     const res = await fetch(`http://127.0.0.1:${port}/v1/exports`, {
       headers: { authorization: `Bearer ${alice.token}` },
     });
-    expect(await res.text()).not.toContain("ntn_secret");
+    // Asserting only "the body doesn't contain the secret" passes on any
+    // 401/404/500 too, so it can't actually fail. Pin the response to an
+    // actual successful listing first.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({
+      destinations: [{ kind: "notion", connected: true, detail: "db1" }],
+    });
+    expect(JSON.stringify(body)).not.toContain("ntn_secret");
   });
 });
 
@@ -105,6 +113,15 @@ describe("GET /v1/exports/notion/start", () => {
       redirect: "manual",
     });
     expect(res.status).toBe(401);
+  });
+
+  it("answers 503 when Notion OAuth is not configured", async () => {
+    const { port, alice } = start({ notionOAuth: undefined });
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/notion/start`, {
+      headers: { authorization: `Bearer ${alice.token}` },
+      redirect: "manual",
+    });
+    expect(res.status).toBe(503);
   });
 });
 
@@ -166,6 +183,11 @@ describe("GET /v1/exports/notion/callback", () => {
   // search for one itself using the freshly granted token.
 
   it("resolves the database via search when the exchange supplies none", async () => {
+    // Captured outside the fake rather than asserted inside it: an
+    // `expect` failing inside `findNotionDatabase` would throw into the
+    // route's own try/catch and come out as a misleading "redirected to
+    // failed" assertion mismatch instead of "wrong token was passed".
+    let receivedToken: string | undefined;
     const { port, destinations, oauthStates, alice } = start({
       exchangeNotionCode: async (code) => {
         if (code !== "good-code") throw new Error("bad code");
@@ -174,7 +196,7 @@ describe("GET /v1/exports/notion/callback", () => {
         return { accessToken: "ntn_granted" };
       },
       findNotionDatabase: async (accessToken) => {
-        expect(accessToken).toBe("ntn_granted");
+        receivedToken = accessToken;
         return { id: "db-found", title: "Found DB" };
       },
     });
@@ -186,6 +208,7 @@ describe("GET /v1/exports/notion/callback", () => {
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/app/exports?notion=connected");
+    expect(receivedToken).toBe("ntn_granted");
     expect(destinations.getNotion(alice.userId)).toEqual({
       token: "ntn_granted",
       config: { databaseId: "db-found", workspaceName: "Found DB" },
@@ -204,6 +227,38 @@ describe("GET /v1/exports/notion/callback", () => {
       { redirect: "manual" },
     );
     expect(res.headers.get("location")).toBe("/app/exports?notion=nodatabase");
+    expect(destinations.getNotion(alice.userId)).toBeNull();
+  });
+
+  it("fails rather than reporting nodatabase when findNotionDatabase itself is not wired up", async () => {
+    // An exchange that supplies no databaseId but no findNotionDatabase seam
+    // configured is a deployment gap (Task 8 wiring), not "the user shares
+    // no database" — the two must not produce the same message, since only
+    // one of them is something the user can fix.
+    const { port, destinations, oauthStates, alice } = start({
+      exchangeNotionCode: async () => ({ accessToken: "ntn_granted" }),
+      findNotionDatabase: undefined,
+    });
+    const state = oauthStates.mint(alice.userId);
+
+    const res = await fetch(
+      `http://127.0.0.1:${port}/v1/exports/notion/callback?code=good-code&state=${state}`,
+      { redirect: "manual" },
+    );
+    expect(res.headers.get("location")).toBe("/app/exports?notion=failed");
+    expect(destinations.getNotion(alice.userId)).toBeNull();
+  });
+
+  it("reports a distinct denied reason when the user cancels on Notion's consent screen", async () => {
+    const { port, destinations, oauthStates, alice } = start();
+    const state = oauthStates.mint(alice.userId);
+
+    const res = await fetch(
+      `http://127.0.0.1:${port}/v1/exports/notion/callback?error=access_denied&state=${state}`,
+      { redirect: "manual" },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/app/exports?notion=denied");
     expect(destinations.getNotion(alice.userId)).toBeNull();
   });
 
@@ -239,5 +294,13 @@ describe("DELETE /v1/exports/notion", () => {
     expect(await res.json()).toEqual({ removed: true });
     expect(destinations.getNotion(alice.userId)).toBeNull();
     expect(destinations.getNotion(mallory.userId)).not.toBeNull();
+  });
+
+  it("requires authentication", async () => {
+    const { port } = start();
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/notion`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(401);
   });
 });

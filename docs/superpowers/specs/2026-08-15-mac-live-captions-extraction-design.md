@@ -57,16 +57,24 @@ the relay-specific types as its own code.
 | `Protocols.swift` (Relay half → CaptionEngine; audio/permission protocols) | caption-core |
 | `ServerMessage.swift` (as `CaptionEvent`, minus wire decoding) | caption-core |
 | `CaptionStore.swift`, `SessionController.swift` | caption-core |
-| `SessionMode.swift`, `History.swift`, `Paragraphs.swift`, `ExportWatcher.swift`, `CallCaptions.swift`, `CallAudio.swift`, `CallVoice.swift`, `MuLaw.swift`, `PCMConverter.swift`, `Settings.swift`, `LaunchAction.swift`, `BuildInfo.swift`, `PhoneAudio.swift` | repo-local package inside apple-watch-captions, shared by the watch and iOS targets |
+| `Paragraphs.swift` — `CaptionStore` calls its internal `append` and exposes `[CaptionParagraph]`; `parseISODate` becomes public so the leaving `TranscriptRow.format` can keep calling it | caption-core |
+| `TranscriptSegment` (extracted from `History.swift`) — the parameter type of `CaptionStore.prepend` and of `buildParagraphs` | caption-core |
+| `SessionMode.swift`, `History.swift` (minus `TranscriptSegment`), `ExportWatcher.swift`, `CallCaptions.swift`, `CallAudio.swift`, `CallVoice.swift`, `MuLaw.swift`, `PCMConverter.swift`, `Settings.swift`, `LaunchAction.swift`, `BuildInfo.swift`, `PhoneAudio.swift` | `CaptionRelay`, a repo-local package at the root of apple-watch-captions, shared by the watch and iOS targets; depends on caption-core |
 
-Tests follow their types. `ServerMessageTests` moves into the repo-local
-package as `RelayMessageTests` (it tests the wire format, which only the
-watch/iOS side has).
+Tests follow their types. `ServerMessageTests` is deleted, not moved:
+the watch parses the relay's wire format with `JSONSerialization`
+(`HTTPRelayClient.handle`, `CallCaptions.decodeCallEvent`), so
+`ServerMessage`'s `Decodable` conformance and `decode(_:)` have exactly one
+production consumer — mac's `WebSocketRelay`, which this extraction deletes.
+The conformance, its tests, and the planned `RelayMessage` replacement all
+turn out to be unnecessary.
 
-**Consumers: three, not two.** `ios/PhoneCaptions` consumes CaptionCore by
-relative path (`ios/project.yml`) and imports it in `SampleHandler.swift`,
-`RelayUploader.swift`, and `PresenceWatcher.swift`. Every reshape step below
-applies to watch, iOS, and mac targets alike.
+**Consumers: three, not two — but the renames touch zero iOS files.**
+`ios/PhoneCaptions` consumes CaptionCore by relative path (`ios/project.yml`)
+in `SampleHandler.swift`, `RelayUploader.swift`, and `PresenceWatcher.swift`,
+using only `PCMConverter` and `PhoneAudio.sessionID` — both of which move to
+CaptionRelay. iOS therefore swaps its dependency to CaptionRelay (three
+`import` lines and `project.yml`) and never depends on caption-core at all.
 
 ## 2. The reshape (before the split, in place)
 
@@ -83,11 +91,12 @@ single `startCaptions(mode:)` call site sets immediately before
 `controller.start()`. Accepted temporal coupling: mode is relay-specific
 config, not a core concept, and there is exactly one call site.
 
-**`ServerMessage` → `CaptionEvent`.** The JSON `Decodable` conformance does
-not move to caption-core. The repo-local package gains a
-`RelayMessage: Decodable` that parses the relay's wire shape and maps to
-`CaptionEvent`. This avoids a retroactive conformance and keeps the wire
-format in the only module that has a wire.
+**`ServerMessage` → `CaptionEvent`.** The JSON `Decodable` conformance and
+`decode(_:)` are deleted with the rename — their only production consumer is
+mac's `WebSocketRelay`, which is removed before the rename happens (see
+ordering below). The watch's wire parsing (`JSONSerialization` in
+`HTTPRelayClient` and `CallCaptions`) is untouched by the rename beyond the
+type name.
 
 **`SessionMode` and `HistoryClient` leave core**, which is what makes
 `SessionController.start()` parameterless. The prefill logic (restoring a
@@ -141,26 +150,34 @@ array; one session, no override parameter.
 ## 4. Order of operations
 
 1. **Reconcile:** merge local `main` and `origin/main` per the merge shape
-   above. Gate: watch, iOS, and mac targets build; full test suites pass;
-   backend tests pass on the origin side taken wholesale. Also update the
-   multi-tenant port plan's `git show main:backend/...` references to
+   above. "Backend wholesale to origin" includes non-conflicted backend files
+   that only the local side changed — the merged tree's `backend/` must equal
+   origin/main's exactly, or origin's build breaks on local-only modules.
+   Gate: watch, iOS, and mac targets build; full test suites pass; backend
+   tests pass on the origin side taken wholesale. Also update the multi-tenant
+   port plan's `git show main:backend/...` references to
    `backup/local-main-2026-08-15:` — after this merge, `main` stops meaning
    the local lineage the plan copies from.
-2. **Reshape** on a branch: renames, boundary moves, prefill port. Gate:
-   CaptionCore `swift test`, watch + iOS + mac `xcodebuild test`, all green,
-   watch behavior unchanged.
+2. **Reshape** on a branch: create CaptionRelay and move the leaving files,
+   **slim the mac app in place** (relay code, providers, and settings fields
+   deleted while everything still builds together — doing it post-split would
+   force mac to depend on CaptionRelay just to keep dead code compiling),
+   then the renames, mode move, and prefill port. Gate: CaptionCore +
+   CaptionRelay `swift test`, watch + iOS + mac `xcodebuild` build/test, all
+   green, watch behavior unchanged.
 3. **Split caption-core:** `git filter-repo` on `watch/CaptionCore/` →
    `jonyen/caption-core`, push, tag `0.1.0`.
-4. **Split mac:** `git filter-repo` on `mac/` → `jonyen/mac-live-captions`,
-   push.
-5. **In mac-live-captions:** strip relay code, collapse providers, add hotkey
-   + recorder + launch-at-login, depend on caption-core. Gate: build + tests;
-   manual verification that the hotkey toggles captions with the app
-   unfocused (Carbon registration is not unit-testable).
-6. **In apple-watch-captions:** delete `mac/` and `watch/CaptionCore/`, add
-   the caption-core dependency (both `watch/project.yml` and
-   `ios/project.yml`), keep the repo-local relay types. Gate: watch + iOS build
-   and test.
+4. **Split mac:** `git filter-repo` on `mac/` → `jonyen/mac-live-captions`
+   (already slim), push.
+5. **In mac-live-captions:** depend on caption-core by git URL, rename
+   `LocalSpeechRelay` → `AppleSpeechEngine`, add hotkey + recorder +
+   launch-at-login. Gate: build + tests; manual verification that the hotkey
+   toggles captions with the app unfocused (Carbon registration is not
+   unit-testable).
+6. **In apple-watch-captions:** delete `mac/` and `watch/CaptionCore/`, point
+   `watch/project.yml` and `CaptionRelay/Package.swift` at the caption-core
+   git URL (iOS depends only on CaptionRelay and needs no change beyond the
+   Task-2 swap). Gate: watch + iOS build and test.
 
 Steps 5 and 6 are independent and can proceed in either order once 3–4 land.
 
@@ -168,9 +185,14 @@ Steps 5 and 6 are independent and can proceed in either order once 3–4 land.
 
 | Repo | Keeps / gains |
 |---|---|
-| caption-core | `CaptionStoreTests`; the permission/ready/audio/error half of `SessionControllerTests` |
+| caption-core | `CaptionStoreTests`, `ParagraphsTests`; the permission/ready/audio/error half of `SessionControllerTests`; gains a `sessionToken` regeneration test |
 | mac-live-captions | `InterleaverTests`, `SmokeTest`; gains `HotkeyBindingTests` (round-trip, display string, cleared case) |
-| apple-watch-captions | Full existing suite passes unchanged — the gate on the reshape; gains `RelayMessageTests` and the prefill/`waitForPrefill` tests |
+| apple-watch-captions (CaptionRelay) | Gains the moved suites (`CallCaptionsTests`, `PCMConverterTests`, `SettingsTests`, `LaunchActionTests`, `BuildInfoTests`, `ExportWatcherTests`, `HistoryStoreTests`, `TranscriptDecodingTests`) and `TranscriptPrefillerTests` (the ported prefill/generation-guard tests). The watch's full remaining suite passes unchanged — the gate on the reshape. |
+
+Dropped, with their subjects: `ReconnectPolicyTests` (dies with
+`WebSocketRelay`), `ServerMessageTests` (dies with the `Decodable`
+conformance), and the three `SessionControllerTests` mode-forwarding tests
+(the forwarding they test no longer exists once mode is a relay property).
 
 Carbon hotkey registration and the recorder field are verified by running the
 app, not by unit tests; the report states what was actually observed.

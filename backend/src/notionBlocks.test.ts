@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { markdownToBlocks, MAX_TEXT } from "./notionBlocks";
+import { markdownToBlocks, paragraph, MAX_TEXT } from "./notionBlocks";
+
+/** Rich-text runs of a block as [text, isBold] pairs. */
+function runsOf(block: any): [string, boolean][] {
+  const body = block[block.type];
+  return body.rich_text.map((r: any) => [r.text.content, r.annotations?.bold === true]);
+}
 
 /** Text of a block, joining its rich_text runs. */
 function textOf(block: any): string {
@@ -68,5 +74,38 @@ describe("markdownToBlocks", () => {
   it("returns nothing for empty or whitespace-only markdown", () => {
     expect(markdownToBlocks("")).toEqual([]);
     expect(markdownToBlocks("   \n\n ")).toEqual([]);
+  });
+});
+
+describe("inline bold", () => {
+  it("renders **bold** as a bold run with the markers stripped", () => {
+    const blocks = markdownToBlocks("- **Action:** do the thing");
+
+    expect(runsOf(blocks[0])).toEqual([
+      ["Action:", true],
+      [" do the thing", false],
+    ]);
+  });
+
+  it("keeps the text on both sides of a bold span", () => {
+    const blocks = markdownToBlocks("before **middle** after");
+
+    expect(runsOf(blocks[0])).toEqual([
+      ["before ", false],
+      ["middle", true],
+      [" after", false],
+    ]);
+  });
+
+  it("leaves an unmatched ** as literal text", () => {
+    const blocks = markdownToBlocks("a ** dangling marker");
+
+    expect(runsOf(blocks[0])).toEqual([["a ** dangling marker", false]]);
+  });
+
+  it("treats transcript lines as plain text, not markdown", () => {
+    expect(runsOf(paragraph("he said **literally** that")[0])).toEqual([
+      ["he said **literally** that", false],
+    ]);
   });
 });

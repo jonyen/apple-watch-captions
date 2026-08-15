@@ -87,6 +87,10 @@ final class AppModel: ObservableObject {
     /// because it joins a session the phone owns rather than starting one — but
     /// it shares `store`, since only one thing is ever on screen.
     private let phoneController: SessionController
+    /// Restores a resumed session's scrollback behind `controller`. Kept off
+    /// `SessionController` itself so a fetch that outlives its session has
+    /// somewhere to be guarded without the controller knowing history exists.
+    private let prefiller: TranscriptPrefiller
     private let settingsClient: RelaySettingsClient
     /// What the phone last said. Defaults until the relay answers, so the app
     /// works unchanged when it cannot be reached.
@@ -134,11 +138,11 @@ final class AppModel: ObservableObject {
             store: store,
             relay: relay,
             audio: AudioCapture(),
-            permission: micPermission,
-            // Resuming a session restores its transcript; this reads it. Kept
-            // off HistoryStore, whose `detail` belongs to the history screen.
-            history: historyClient
+            permission: micPermission
         )
+        // Resuming a session restores its transcript; this reads it. Kept off
+        // HistoryStore, whose `detail` belongs to the history screen.
+        prefiller = TranscriptPrefiller(history: historyClient)
         phoneController = SessionController(
             store: store,
             relay: HTTPRelayClient(
@@ -484,6 +488,9 @@ final class AppModel: ObservableObject {
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
         await controller.start(mode: mode)
+        if case .saved(let name?) = mode, controller.isRunning {
+            prefiller.restore(name: name, into: store, for: controller)
+        }
     }
 
     /// End the session and remember it, so reopening can offer to continue.
@@ -504,6 +511,7 @@ final class AppModel: ObservableObject {
 
     private func endCapture() {
         controller.stop()
+        prefiller.cancel()
         rememberCurrentSession()
         capturing = false
         live = false

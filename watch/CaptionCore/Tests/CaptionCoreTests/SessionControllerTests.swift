@@ -28,6 +28,13 @@ final class SessionControllerTests: XCTestCase {
         func stop() { stopped = true }
     }
 
+    final class FakeWakeLock: DisplayWakeLocking {
+        var acquireCount = 0
+        var releaseCount = 0
+        func acquire() { acquireCount += 1 }
+        func release() { releaseCount += 1 }
+    }
+
     struct FakePermission: MicPermissionProviding {
         let granted: Bool
         func ensureGranted() async -> Bool { granted }
@@ -148,6 +155,16 @@ final class SessionControllerTests: XCTestCase {
                                   permission: FakePermission(granted: granted),
                                   history: history)
         return (c, store, relay, audio)
+    }
+
+    private func makeWaking(granted: Bool = true)
+        -> (SessionController, FakeRelay, FakeWakeLock) {
+        let relay = FakeRelay()
+        let lock = FakeWakeLock()
+        let c = SessionController(store: CaptionStore(), relay: relay, audio: FakeAudio(),
+                                  permission: FakePermission(granted: granted),
+                                  wakeLock: lock)
+        return (c, relay, lock)
     }
 
     func testStartConnectsWhenPermitted() async {
@@ -379,5 +396,42 @@ final class SessionControllerTests: XCTestCase {
 
         XCTAssertEqual(relay.connectCount, 1)
         XCTAssertEqual(relay.mode, .saved(resuming: "current"))
+    }
+
+    func testAcquiresTheWakeLockWhenKeepAwakeIsSet() async {
+        let (c, _, lock) = makeWaking()
+        await c.start(keepAwake: true)
+        XCTAssertEqual(lock.acquireCount, 1)
+    }
+
+    func testDoesNotAcquireTheWakeLockByDefault() async {
+        let (c, relay, lock) = makeWaking()
+        await c.start()
+        XCTAssertTrue(relay.connected)
+        XCTAssertEqual(lock.acquireCount, 0)
+    }
+
+    func testReleasesTheWakeLockOnStop() async {
+        let (c, _, lock) = makeWaking()
+        await c.start(keepAwake: true)
+        c.stop()
+        XCTAssertEqual(lock.releaseCount, 1)
+    }
+
+    /// A dropped connection ends the session without going through `stop()`.
+    /// Without its own release the workout session — and the lit screen —
+    /// would outlive the session that asked for it.
+    func testReleasesTheWakeLockWhenTheConnectionDrops() async {
+        let (c, relay, lock) = makeWaking()
+        await c.start(keepAwake: true)
+        relay.deliver(.ready)
+        relay.dropConnection()
+        XCTAssertEqual(lock.releaseCount, 1)
+    }
+
+    func testDoesNotAcquireTheWakeLockWhenTheMicIsDenied() async {
+        let (c, _, lock) = makeWaking(granted: false)
+        await c.start(keepAwake: true)
+        XCTAssertEqual(lock.acquireCount, 0)
     }
 }

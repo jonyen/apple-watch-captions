@@ -9,6 +9,7 @@ public final class SessionController {
     private let audio: AudioCapturing
     private let permission: MicPermissionProviding
     private let history: HistoryClient?
+    private let wakeLock: DisplayWakeLocking?
     /// Retained so tests can await the restore. The app never waits on it.
     private var prefillTask: Task<Void, Never>?
     /// The restore a new session superseded. Retained only so tests can await
@@ -24,12 +25,14 @@ public final class SessionController {
 
     public init(store: CaptionStore, relay: Relay,
                 audio: AudioCapturing, permission: MicPermissionProviding,
-                history: HistoryClient? = nil) {
+                history: HistoryClient? = nil,
+                wakeLock: DisplayWakeLocking? = nil) {
         self.store = store
         self.relay = relay
         self.audio = audio
         self.permission = permission
         self.history = history
+        self.wakeLock = wakeLock
         self.relay.onMessage = { [weak self] message in self?.handle(message) }
         self.relay.onClose = { [weak self] in self?.handleClose() }
     }
@@ -38,7 +41,7 @@ public final class SessionController {
     /// `.saved(resuming:)` appends to an existing transcript instead of opening
     /// a new one — what the app does when you glance back mid-conversation.
     /// `.live` keeps nothing, so it never restores anything either.
-    public func start(mode: SessionMode = .saved(resuming: nil)) async {
+    public func start(mode: SessionMode = .saved(resuming: nil), keepAwake: Bool = false) async {
         guard !running else { return }
         running = true
         generation += 1
@@ -54,6 +57,9 @@ public final class SessionController {
         // `running` alone can't tell this session apart from a stop+start that
         // reused the flag while we were suspended; compare generation too.
         guard running, self.generation == generation else { return }
+        // After the permission gate and its generation re-check, so a denied
+        // mic or a superseded session never takes a lock nothing will release.
+        if keepAwake { wakeLock?.acquire() }
         relay.connect(mode: mode)
         // Only a resumed saved session has scrollback to put back. The pattern
         // match is why `.live` needs no guard of its own.
@@ -68,6 +74,7 @@ public final class SessionController {
         prefillTask?.cancel()
         audio.stop()
         relay.close()
+        wakeLock?.release()
     }
 
     private func handle(_ message: ServerMessage) {
@@ -87,6 +94,7 @@ public final class SessionController {
         prefillTask?.cancel()
         store.setError("Connection lost")
         audio.stop()
+        wakeLock?.release()
     }
 
     private func startAudio() {

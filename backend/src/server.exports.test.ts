@@ -664,4 +664,49 @@ describe("adoptLegacyNotionIfUnambiguous", () => {
       outcome: "not-configured",
     });
   });
+
+  // Fix round 2, Important: adoption used to be able to fire on every boot
+  // with no memory of having run before, so a user's deliberate Disconnect
+  // (DELETE /v1/exports/notion, wired to the Disconnect button in
+  // exportsPage.ts — it just removes the row) would be silently undone by
+  // the next boot's adoption sweep. Verified red against the round-1 code
+  // (no marker check at all): this failed with `{outcome: "adopted", ...}`
+  // and a re-populated connection.
+  it("does not re-adopt after the user disconnects", () => {
+    const { identity, destinations } = fixture();
+    const solo = identity.registerDevice("mac").userId;
+
+    const first = adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+    expect(first).toEqual({ outcome: "adopted", userId: solo });
+
+    destinations.remove(solo, "notion");
+
+    const second = adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+    expect(second).not.toEqual({ outcome: "adopted", userId: solo });
+    expect(destinations.getNotion(solo)).toBeNull();
+  });
+
+  // A no-op boot (nothing to adopt, nothing changed) must be distinguishable
+  // from a real adoption in the returned outcome — this is also what an
+  // operator-facing log needs to tell them it's safe to unset NOTION_TOKEN.
+  it("reports already-resolved, not adopted, on a repeat boot with no changes", () => {
+    const { identity, destinations } = fixture();
+    const solo = identity.registerDevice("mac").userId;
+    adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+
+    const second = adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+
+    expect(second).toEqual({ outcome: "already-resolved", userId: solo });
+  });
+
+  it("reports already-resolved, not adopted, when the sole user already had their own connection", () => {
+    const { identity, destinations } = fixture();
+    const solo = identity.registerDevice("mac").userId;
+    destinations.putNotion(solo, "ntn_own", { databaseId: "db-own" });
+
+    const result = adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+
+    expect(result).toEqual({ outcome: "already-resolved", userId: solo });
+    expect(destinations.getNotion(solo)!.token).toBe("ntn_own");
+  });
 });

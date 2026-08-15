@@ -113,6 +113,31 @@ export class ExportDestinationStore {
       .get(userId, kind) as { config: string; secret: string | null } | undefined;
     return row ? { ...row } : null;
   }
+
+  /**
+   * Has the legacy `NOTION_TOKEN`/`NOTION_DATABASE_ID` pair already been
+   * resolved for this user (adopted, or found already connected)? Backed by
+   * its own table (`legacy_notion_resolutions`), never `export_destinations`
+   * itself — that row is exactly what `remove(userId, "notion")` deletes,
+   * and this must keep answering `true` after that delete, or a user's
+   * Disconnect would look identical to "never resolved" and get silently
+   * re-adopted on the next boot.
+   */
+  hasResolvedLegacyNotion(userId: string): boolean {
+    return Boolean(
+      this.db.prepare("SELECT 1 FROM legacy_notion_resolutions WHERE user_id = ?").get(userId),
+    );
+  }
+
+  /** Idempotent: marking an already-marked user is a no-op, not an error. */
+  markLegacyNotionResolved(userId: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO legacy_notion_resolutions (user_id, resolved_at) VALUES (?,?) " +
+          "ON CONFLICT(user_id) DO NOTHING",
+      )
+      .run(userId, new Date(this.now()).toISOString());
+  }
 }
 
 /**
@@ -131,6 +156,7 @@ export function adoptLegacyNotion(
 
 export type LegacyNotionAdoption =
   | { outcome: "adopted"; userId: string }
+  | { outcome: "already-resolved"; userId: string }
   | { outcome: "ambiguous" }
   | { outcome: "not-configured" };
 
@@ -146,6 +172,17 @@ export type LegacyNotionAdoption =
  * "Exactly one user" is the only condition under which a relay-wide legacy
  * setting maps onto a single destination row unambiguously; zero or several
  * users both leave it to `/app/exports` instead.
+ *
+ * Runs on every boot, which means it must never re-adopt a user who has
+ * since disconnected: once resolved (adopted, or already connected on their
+ * own), `hasResolvedLegacyNotion` stays true forever — even after
+ * `DELETE /v1/exports/notion` removes the destination row itself — so a
+ * user's deliberate Disconnect is never silently undone by a later boot's
+ * adoption sweep. `"already-resolved"` (as opposed to `"adopted"`) is what
+ * lets a caller tell "nothing happened this boot" from "a row was just
+ * written" — which matters for both the disconnect guarantee above and for
+ * an operator reading the boot log to decide whether it's safe to unset
+ * `NOTION_TOKEN`.
  */
 export function adoptLegacyNotionIfUnambiguous(
   identity: IdentityStore,
@@ -155,6 +192,15 @@ export function adoptLegacyNotionIfUnambiguous(
   if (!legacy || !destinations) return { outcome: "not-configured" };
   const solo = identity.soleUserId();
   if (!solo) return { outcome: "ambiguous" };
-  adoptLegacyNotion(destinations, solo, legacy);
-  return { outcome: "adopted", userId: solo };
+  if (destinations.hasResolvedLegacyNotion(solo)) {
+    return { outcome: "already-resolved", userId: solo };
+  }
+  const alreadyConnected = Boolean(destinations.getNotion(solo));
+  if (!alreadyConnected) {
+    adoptLegacyNotion(destinations, solo, legacy);
+  }
+  destinations.markLegacyNotionResolved(solo);
+  return alreadyConnected
+    ? { outcome: "already-resolved", userId: solo }
+    : { outcome: "adopted", userId: solo };
 }

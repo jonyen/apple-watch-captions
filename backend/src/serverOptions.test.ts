@@ -91,6 +91,34 @@ describe("buildServerOptions", () => {
   });
 });
 
+// Fix round 2, smaller item 1: every test above only asserts the eight
+// optional, config-gated fields — an extraction that silently dropped or
+// mis-bound one of the *unconditional* fields (adminToken, callForwardTo,
+// ...) would satisfy every one of them. This pins the rest of
+// `StartServerOptions` — everything not already covered by the gating tests
+// above — in one place.
+describe("buildServerOptions base fields", () => {
+  it("passes every non-gated option straight through from config and deps", () => {
+    const usage = { getUsage: async () => ({}) as never };
+    const config = baseConfig({ port: 4242, adminToken: "admin-secret", twilioForwardTo: "+15551234567" });
+    const deps = fixtureDeps();
+
+    const options = buildServerOptions(config, { ...deps, usage });
+
+    expect(options).toMatchObject({
+      port: 4242,
+      identity: deps.identity,
+      adminToken: "admin-secret",
+      createProvider: deps.createProvider,
+      transcriptsRoot: "/does-not-matter",
+      usage,
+      callForwardTo: "+15551234567",
+      trustProxyHeaders: false,
+    });
+    expect(options.transcripts).toBeDefined();
+  });
+});
+
 describe("buildResolveExporters", () => {
   it("resolves nothing for any user when there are no destinations", () => {
     expect(buildResolveExporters(undefined)("user-1")).toBeUndefined();

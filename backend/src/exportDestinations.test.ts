@@ -99,6 +99,43 @@ describe("ExportDestinationStore list", () => {
   });
 });
 
+describe("ExportDestinationStore legacy Notion resolution marker", () => {
+  it("is unresolved for a user nothing has touched", () => {
+    const { store, alice } = fixture();
+    expect(store.hasResolvedLegacyNotion(alice)).toBe(false);
+  });
+
+  it("is resolved after being marked", () => {
+    const { store, alice } = fixture();
+    store.markLegacyNotionResolved(alice);
+    expect(store.hasResolvedLegacyNotion(alice)).toBe(true);
+  });
+
+  it("does not mark other users as resolved", () => {
+    const { store, alice, mallory } = fixture();
+    store.markLegacyNotionResolved(alice);
+    expect(store.hasResolvedLegacyNotion(mallory)).toBe(false);
+  });
+
+  // The whole point of this marker: it must outlive the row it originally
+  // accompanied, or a Disconnect (which deletes that row) would look
+  // indistinguishable from "never resolved" and get silently re-adopted.
+  it("survives the user's notion destination being removed", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "ntn_secret", { databaseId: "db1" });
+    store.markLegacyNotionResolved(alice);
+    store.remove(alice, "notion");
+    expect(store.hasResolvedLegacyNotion(alice)).toBe(true);
+  });
+
+  it("marking twice does not error", () => {
+    const { store, alice } = fixture();
+    store.markLegacyNotionResolved(alice);
+    expect(() => store.markLegacyNotionResolved(alice)).not.toThrow();
+    expect(store.hasResolvedLegacyNotion(alice)).toBe(true);
+  });
+});
+
 describe("ExportDestinationStore remove", () => {
   it("removes only the named kind for the named user", () => {
     const { store, alice, mallory } = fixture();

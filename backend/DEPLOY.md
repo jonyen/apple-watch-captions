@@ -72,8 +72,12 @@ fly secrets set ENCRYPTION_KEY="$ENCRYPTION_KEY"
 fly secrets set NOTION_CLIENT_ID="<client-id>" NOTION_CLIENT_SECRET="<client-secret>"
 
 #    7d. Resend, for the email export destination — an API key (secret) and
-#        the From address (not a secret; also in fly.toml's [env], edit it
-#        there). See https://resend.com.
+#        the From address (not a secret, but deliberately NOT committed to
+#        fly.toml either: unlike PUBLIC_BASE_URL there's no correct default
+#        — it must be on a domain verified with Resend — and a shipped
+#        placeholder would let this secret alone look like a complete,
+#        working setup). Uncomment and set EMAIL_FROM in fly.toml's [env]
+#        yourself. See https://resend.com.
 fly secrets set RESEND_API_KEY="<resend-api-key>"
 ```
 
@@ -124,12 +128,16 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "<device-token>" sam
 
 - `auto_stop_machines = "off"` + `min_machines_running = 1` keep the relay always up so it
   can accept incoming connections. This is the ~$2–5/month fixed cost from the design spec.
-- `PUBLIC_BASE_URL` and `EMAIL_FROM` live in `fly.toml`'s `[env]` too, right
-  beside `TRUST_PROXY_HEADERS` — neither is a secret (a deploy's own public
-  address; a From address), unlike `NOTION_CLIENT_SECRET` and
-  `RESEND_API_KEY`, which are credentials and belong only in `fly secrets`.
-  Edit `PUBLIC_BASE_URL` in `fly.toml` if you're on a custom domain rather
-  than the default `fly.dev` hostname.
+- `PUBLIC_BASE_URL` lives in `fly.toml`'s `[env]` too, right beside
+  `TRUST_PROXY_HEADERS` — it isn't a secret (a deploy's own public address),
+  unlike `NOTION_CLIENT_SECRET` and `RESEND_API_KEY`, which are credentials
+  and belong only in `fly secrets`. Edit it in `fly.toml` if you're on a
+  custom domain rather than the default `fly.dev` hostname. `EMAIL_FROM`
+  isn't a secret either, but ships **commented out** in `fly.toml` rather
+  than with a default value: there's no correct default (it must be on a
+  domain verified with Resend), and a placeholder would let setting only the
+  `RESEND_API_KEY` secret look like a complete configuration when it isn't.
+  Uncomment and set it yourself in `fly.toml` to enable email export.
 - `TRUST_PROXY_HEADERS = "true"` in `fly.toml`'s `[env]` is what makes the
   registration rate limit work on Fly: `http_service` terminates the client's
   connection, so without it every caller shares one 10-per-hour bucket and any

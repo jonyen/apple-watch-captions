@@ -178,13 +178,24 @@ if (migrated) {
 
 // The legacy single-workspace NOTION_TOKEN has no reliable owner once the
 // relay is multi-tenant — it only maps unambiguously onto a user when there
-// is exactly one. `adoptLegacyNotionIfUnambiguous` never overwrites a
-// connection the user has since made through OAuth, so this is safe to
-// re-run every boot; see its doc comment in exportDestinations.ts for why
-// it is deliberately independent of the flat-transcript migration above.
+// is exactly one. Safe to re-run every boot: `adoptLegacyNotionIfUnambiguous`
+// resolves a user (adopted, or found already connected) at most once ever,
+// via a marker that survives that user later disconnecting — so this can
+// never silently undo a deliberate Disconnect. See its doc comment in
+// exportDestinations.ts for the rest of the reasoning, including why it is
+// deliberately independent of the flat-transcript migration above.
 const legacyNotion = adoptLegacyNotionIfUnambiguous(identity, options.destinations, config.notion);
 if (legacyNotion.outcome === "adopted") {
   console.log(`Adopted the legacy Notion connection onto the relay's one user (${legacyNotion.userId}).`);
+} else if (legacyNotion.outcome === "already-resolved") {
+  // Fires on every boot after the first, once resolved — that repetition is
+  // deliberate: it is the only place an operator can currently confirm it is
+  // safe to unset NOTION_TOKEN/NOTION_DATABASE_ID (nothing here is reading
+  // them for this user anymore, resolved or not still connected).
+  console.log(
+    `Legacy Notion config already resolved for the relay's one user (${legacyNotion.userId}); ` +
+      "NOTION_TOKEN/NOTION_DATABASE_ID can be unset.",
+  );
 } else if (legacyNotion.outcome === "ambiguous") {
   console.log(
     "NOTION_TOKEN/NOTION_DATABASE_ID could not be adopted onto a single user automatically " +

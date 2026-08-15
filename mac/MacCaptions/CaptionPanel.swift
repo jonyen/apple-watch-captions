@@ -66,25 +66,8 @@ struct CaptionPanelView: View {
 
     var body: some View {
         Group {
-            if model.sessions.count > 1 {
-                // Compare mode: one pane per provider, equal heights.
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.sessions) { session in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(session.provider.displayName)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                            CaptionFlow(store: session.store, fontSize: settings.fontSize)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity,
-                                       alignment: .bottomLeading)
-                        }
-                        .frame(maxHeight: .infinity)
-                    }
-                }
-            } else {
-                CaptionFlow(store: store, fontSize: settings.fontSize)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
+            CaptionFlow(store: store, fontSize: settings.fontSize)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))

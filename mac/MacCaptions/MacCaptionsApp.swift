@@ -16,7 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct MacCaptionsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
-    @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
     var body: some Scene {
@@ -26,14 +25,6 @@ struct MacCaptionsApp: App {
             Toggle("Microphone", isOn: $model.micOn)
             Toggle("System Audio", isOn: $model.systemOn)
             Divider()
-            Button("Usage…") {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: "usage")
-            }
-            Button("Transcripts…") {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: "transcripts")
-            }
             // SettingsLink doesn't activate an LSUIElement app, so the
             // Settings window opens behind every other window; activate first.
             Button("Settings…") {
@@ -45,18 +36,6 @@ struct MacCaptionsApp: App {
         Settings {
             SettingsView(settings: model.settings)
         }
-        Window("Transcripts", id: "transcripts") {
-            TranscriptsView(api: model.settings.configured
-                ? RelayAPI(base: model.settings.relayURL!, token: model.settings.token)
-                : nil)
-        }
-        .defaultSize(width: 720, height: 480)
-        Window("Usage", id: "usage") {
-            UsageView(api: model.settings.configured
-                ? RelayAPI(base: model.settings.relayURL!, token: model.settings.token)
-                : nil)
-        }
-        .defaultSize(width: 420, height: 360)
     }
 }
 
@@ -100,22 +79,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Relay") {
-                TextField("Relay URL", text: $settings.relayURLString,
-                          prompt: Text("https://watch-captions-relay.fly.dev"))
-                SecureField("Auth token", text: $settings.token)
-            }
             Section("Captions") {
-                Picker("Provider", selection: $settings.provider) {
-                    ForEach(CaptionProvider.allCases) { provider in
-                        Text(provider.displayName).tag(provider)
-                    }
-                }
-                .disabled(settings.compareProviders)
-                Toggle("Compare all providers", isOn: $settings.compareProviders)
-                Text("Runs every provider at once with a caption pane per provider. Cloud providers need their API key configured on the relay.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 HStack {
                     Slider(value: $settings.fontSize, in: 12...48, step: 1) {
                         Text("Text size")

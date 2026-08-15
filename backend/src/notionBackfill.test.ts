@@ -53,9 +53,10 @@ const noConnection: ResolveExporters = () => undefined;
 
 describe("backfillNotion", () => {
   let root: string;
+  let consoleError: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "backfill-"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => {
@@ -298,8 +299,19 @@ describe("backfillNotion", () => {
   // reads with a real window between them: `runBackfills` runs at boot while
   // the live finalizer path may already be landing markers for the same
   // transcript concurrently. `backfillNotion` never passes an updater, so
-  // `exportOnce` must leave a marker that appeared in that window alone
-  // rather than re-exporting or overwriting it.
+  // `exportOnce`'s `if (!update) return false` must fire quietly here.
+  //
+  // The exporter-not-called / marker-unchanged / failed:1 assertions below
+  // hold identically whether that branch exists or not: without it,
+  // `update(t, summary, marker)` calls `undefined` as a function, throws
+  // synchronously, is caught by the catch two lines down, and returns
+  // `false` — same externally observable result, except it logs "page
+  // update failed for ...". That log line is the one thing that actually
+  // discriminates the two implementations, and it matters on its own: this
+  // path is the boot sweep racing a live finalize, which is expected and
+  // benign, not an export failure — logging one would mislead an operator
+  // grepping for real problems. So the assertion that proves this test
+  // covers the branch it is named for is `consoleError` staying silent.
   it("leaves a marker written between listing and export alone, rather than re-exporting or overwriting it", async () => {
     const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
     const exportTranscript = ok();
@@ -320,5 +332,6 @@ describe("backfillNotion", () => {
     expect(exportTranscript).not.toHaveBeenCalled();
     expect(result).toMatchObject({ exported: 0, failed: 1 });
     expect(readExportMarker(scoped(root), name)).toMatchObject({ pageId: "live-export" });
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

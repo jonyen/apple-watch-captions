@@ -154,3 +154,47 @@ describe("ExportDestinationStore remove", () => {
     expect(store.remove(alice, "notion")).toBe(false);
   });
 });
+
+describe("ExportDestinationStore revoked notion connections", () => {
+  it("reports a revoked connection as not connected, keeping its label", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "ntn_secret", { databaseId: "db1", workspaceName: "Notes" });
+    store.markNotionRevoked(alice);
+    expect(store.list(alice)).toEqual([
+      { kind: "notion", connected: false, detail: "Notes" },
+    ]);
+  });
+
+  it("stops resolving a revoked connection", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "ntn_secret", { databaseId: "db1" });
+    store.markNotionRevoked(alice);
+    expect(store.getNotion(alice)).toBeNull();
+  });
+
+  it("does not revoke another user's connection", () => {
+    const { store, alice, mallory } = fixture();
+    store.putNotion(alice, "a", { databaseId: "db1" });
+    store.putNotion(mallory, "m", { databaseId: "db2" });
+    store.markNotionRevoked(alice);
+    expect(store.getNotion(mallory)).not.toBeNull();
+  });
+
+  it("clears the revoked flag when the user reconnects", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "old", { databaseId: "db1" });
+    store.markNotionRevoked(alice);
+    store.putNotion(alice, "new", { databaseId: "db2", workspaceName: "Fresh" });
+    expect(store.getNotion(alice)).toEqual({
+      token: "new",
+      config: { databaseId: "db2", workspaceName: "Fresh" },
+    });
+    expect(store.list(alice)[0]!.connected).toBe(true);
+  });
+
+  it("is a no-op for a user with no notion connection", () => {
+    const { store, alice } = fixture();
+    expect(() => store.markNotionRevoked(alice)).not.toThrow();
+    expect(store.list(alice)).toEqual([]);
+  });
+});

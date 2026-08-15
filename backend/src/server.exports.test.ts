@@ -74,6 +74,12 @@ describe("GET /app/exports", () => {
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toContain("Connect Notion");
+    // A revoked connection renders a "needs reconnect" badge. Without a
+    // reconnect affordance on that same row the badge is a dead end — the
+    // only button there is Disconnect, so the page would tell the user to do
+    // something it gives them no way to do. Text-level, matching the other
+    // assertions on this page.
+    expect(body).toContain("Reconnect");
     // Fix round 1, Minor 2: the Connect link carries the device token in its
     // URL (the one place in the app that happens) — `rel="noreferrer"` stops
     // the browser from leaking this page's URL as a Referer on the

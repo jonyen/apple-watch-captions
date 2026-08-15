@@ -8,6 +8,14 @@ export interface NotionConfigRow {
   databaseId: string;
   /** Shown in `/app` so a user can tell which workspace they connected. */
   workspaceName?: string;
+  /**
+   * Set when Notion answered 401 — the user revoked the integration, or the
+   * workspace was deleted. The sealed token is kept rather than cleared so
+   * `/app` can still name the workspace that needs reconnecting; `getNotion`
+   * stops handing it out, which is what stops every later export retrying a
+   * credential that will never work again.
+   */
+  revokedAt?: string;
 }
 
 export interface EmailConfigRow {
@@ -50,10 +58,31 @@ export class ExportDestinationStore {
   getNotion(userId: string): { token: string; config: NotionConfigRow } | null {
     const row = this.row(userId, "notion");
     if (!row?.secret) return null;
-    return {
-      token: open(row.secret, this.key),
-      config: JSON.parse(row.config) as NotionConfigRow,
-    };
+    const config = JSON.parse(row.config) as NotionConfigRow;
+    // A revoked connection is not a usable one. Withholding it here is what
+    // makes "stop until reconnected" fall out for free — the finalizer and
+    // both backfills already skip a user this returns null for.
+    if (config.revokedAt) return null;
+    return { token: open(row.secret, this.key), config };
+  }
+
+  /**
+   * Record that Notion rejected this user's token, so `/app` can ask them to
+   * reconnect. Idempotent, and a no-op for a user with no connection.
+   *
+   * `putNotion` replaces the whole config blob, so reconnecting clears this
+   * without any explicit unset — the same replace-not-merge property that
+   * stops a re-submitted email address inheriting a previous confirmation.
+   */
+  markNotionRevoked(userId: string): void {
+    const row = this.row(userId, "notion");
+    if (!row) return;
+    const config = JSON.parse(row.config) as NotionConfigRow;
+    if (config.revokedAt) return;
+    config.revokedAt = new Date(this.now()).toISOString();
+    this.db
+      .prepare("UPDATE export_destinations SET config = ? WHERE user_id = ? AND kind = ?")
+      .run(JSON.stringify(config), userId, "notion");
   }
 
   putEmail(userId: string, config: EmailConfigRow): void {
@@ -74,7 +103,10 @@ export class ExportDestinationStore {
       const config = JSON.parse(notion.config) as NotionConfigRow;
       out.push({
         kind: "notion",
-        connected: Boolean(notion.secret),
+        // Revoked counts as not connected: the row is still here so we can
+        // name the workspace, but nothing will be delivered to it again until
+        // the user reconnects.
+        connected: Boolean(notion.secret) && !config.revokedAt,
         detail: config.workspaceName ?? config.databaseId,
       });
     }

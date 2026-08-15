@@ -140,36 +140,50 @@ async function loadNotion() {
   const list = (await (await api('/v1/exports')).json()).destinations;
   const notion = list.find((d) => d.kind === 'notion');
   const card = el('div', 'card');
+  // Top-level navigation — a normal <a> click, not a fetch — so there is no
+  // request this script controls and thus no way to attach an
+  // Authorization header. The device token travels in the query string
+  // instead; principalFor() already falls back to reading it from there.
+  // This is the one place in the app a device token appears in a URL
+  // (and so the one place it can land in browser history or a proxy log)
+  // — every other call here uses the header. Kept to this single
+  // unavoidable spot rather than adopted more broadly.
+  const connectLink = (label) => {
+    const connect = el('a', 'button', label);
+    connect.href = '/v1/exports/notion/start?token=' + encodeURIComponent(token);
+    // Cheap extra guard on top of the above, given the token is in this URL:
+    // stops the browser from sending this page's URL as a Referer to
+    // whatever the relay's 302 redirects on to.
+    connect.rel = 'noreferrer';
+    return connect;
+  };
   if (notion) {
     const row = el('div', 'row');
     const left = el('div');
     left.append(el('strong', '', notion.detail));
     if (!notion.connected) left.append(el('span', 'badge pending', 'needs reconnect'));
     row.append(left);
+    const actions = el('div');
+    // A revoked connection keeps its row so the workspace stays named, but
+    // the only useful action is reconnecting. Offering Disconnect alone
+    // would make the badge a dead end.
+    if (!notion.connected) actions.append(connectLink('Reconnect'));
     const disconnect = el('button', '', 'Disconnect');
     disconnect.onclick = async () => {
       await api('/v1/exports/notion', { method: 'DELETE' });
       loadNotion();
     };
-    row.append(disconnect);
+    actions.append(disconnect);
+    row.append(actions);
     card.append(row);
+    if (!notion.connected) {
+      card.append(el('p', 'meta',
+        'Notion rejected this connection — the integration was removed, or the workspace is gone. ' +
+        'Nothing is being sent there until you reconnect.'));
+    }
   } else {
     card.append(el('p', 'meta', 'Not connected. Finished transcripts are not sent to Notion.'));
-    // Top-level navigation — a normal <a> click, not a fetch — so there is no
-    // request this script controls and thus no way to attach an
-    // Authorization header. The device token travels in the query string
-    // instead; principalFor() already falls back to reading it from there.
-    // This is the one place in the app a device token appears in a URL
-    // (and so the one place it can land in browser history or a proxy log)
-    // — every other call here uses the header. Kept to this single
-    // unavoidable spot rather than adopted more broadly.
-    const connect = el('a', 'button', 'Connect Notion');
-    connect.href = '/v1/exports/notion/start?token=' + encodeURIComponent(token);
-    // Cheap extra guard on top of the above, given the token is in this URL:
-    // stops the browser from sending this page's URL as a Referer to
-    // whatever the relay's 302 redirects on to.
-    connect.rel = 'noreferrer';
-    card.append(connect);
+    card.append(connectLink('Connect Notion'));
   }
   notionBox.append(card);
 }

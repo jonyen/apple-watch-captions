@@ -1,4 +1,5 @@
 import { join } from "path";
+import { NotionOAuthConfig } from "./notionOAuth";
 
 export interface Config {
   port: number;
@@ -38,6 +39,10 @@ export interface Config {
    * see `clientAddress` in `server.ts`.
    */
   trustProxyHeaders: boolean;
+  /** Optional; enables per-user Notion export via /v1/exports/notion/*. All three parts are required. */
+  notionOAuth?: NotionOAuthConfig;
+  /** Public origin the OAuth redirect returns to, e.g. https://relay.fly.dev. Required alongside notionOAuth. */
+  publicBaseUrl?: string;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -75,6 +80,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
     twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
     trustProxyHeaders: loadTrustProxyHeaders(env),
+    notionOAuth: loadNotionOAuth(env, env.PUBLIC_BASE_URL || undefined),
+    publicBaseUrl: env.PUBLIC_BASE_URL || undefined,
   };
 }
 
@@ -109,6 +116,30 @@ function loadSummaryProvider(env: NodeJS.ProcessEnv): SummaryProvider | undefine
   if (value === "claude" || value === "gemini") return value;
   console.warn(`Ignoring SUMMARY_PROVIDER="${value}" — expected "claude" or "gemini"`);
   return undefined;
+}
+
+/**
+ * The relay's registered Notion OAuth integration, letting each user connect
+ * their own workspace. Unset means that flow stays off — captioning itself
+ * must not depend on it — while the legacy single-workspace `notion` config
+ * above continues to work independently until every user has migrated.
+ */
+function loadNotionOAuth(
+  env: NodeJS.ProcessEnv,
+  baseUrl: string | undefined,
+): NotionOAuthConfig | undefined {
+  const clientId = env.NOTION_CLIENT_ID;
+  const clientSecret = env.NOTION_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return undefined;
+  if (!baseUrl) {
+    console.warn("Notion OAuth disabled: PUBLIC_BASE_URL is required for the redirect URI");
+    return undefined;
+  }
+  return {
+    clientId,
+    clientSecret,
+    redirectUri: `${baseUrl.replace(/\/$/, "")}/v1/exports/notion/callback`,
+  };
 }
 
 /**

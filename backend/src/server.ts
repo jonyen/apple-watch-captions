@@ -25,6 +25,8 @@ import { VIEWER_HTML } from "./viewerPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
 import { voiceResponse } from "./twiml";
+import { ExportDestinationStore } from "./exportDestinations";
+import { OAuthStateStore, authorizeUrl, NotionOAuthConfig, ExchangeCode } from "./notionOAuth";
 
 export * from "./providerOptions";
 
@@ -58,6 +60,25 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
+  /** Optional; where each user's export destinations live. Enables /v1/exports*. */
+  destinations?: ExportDestinationStore;
+  /** Optional; single-use CSRF state for the Notion OAuth flow. Required alongside `notionOAuth` to enable connecting. */
+  oauthStates?: OAuthStateStore;
+  /** Optional; this relay's registered Notion OAuth integration. */
+  notionOAuth?: NotionOAuthConfig;
+  /** Trade a Notion authorization code for an access token. Injectable for tests. */
+  exchangeNotionCode?: ExchangeCode;
+  /**
+   * Find a database to export into, using the token just granted.
+   *
+   * Notion only returns a database id directly from the token exchange for
+   * template-based integrations (`duplicated_template_id`). A normal
+   * integration grants access to pages the user picks on the consent screen
+   * and the token response carries no database id at all, so the callback
+   * falls back to this search when `exchangeNotionCode` supplies none.
+   * Injectable for tests — production wiring calls Notion's `/v1/search`.
+   */
+  findNotionDatabase?: (accessToken: string) => Promise<{ id: string; title?: string } | null>;
 }
 
 export interface CaptionServer {
@@ -744,6 +765,96 @@ async function handleRequest(
     const { events, seq } = store.drain(principal.userId, session, since);
     store.stop(principal.userId, session);
     sendJSON(res, 200, { events: flatten(events), seq });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/exports") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    sendJSON(res, 200, { destinations: opts.destinations?.list(principal.userId) ?? [] });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/exports/notion/start") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.notionOAuth || !opts.oauthStates) {
+      sendJSON(res, 503, { error: "notion export not configured" });
+      return;
+    }
+    const state = opts.oauthStates.mint(principal.userId);
+    res.writeHead(302, { location: authorizeUrl(opts.notionOAuth, state) });
+    res.end();
+    return;
+  }
+
+  // Notion redirects the browser here, so there is no bearer token to check.
+  // The single-use `state` is what identifies the user and what stops an
+  // attacker binding their own workspace to someone else's account.
+  if (req.method === "GET" && url.pathname === "/v1/exports/notion/callback") {
+    const fail = (reason: string = "failed") => {
+      res.writeHead(302, { location: `/app/exports?notion=${reason}` });
+      res.end();
+    };
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    if (!state || !code || !opts.oauthStates || !opts.destinations || !opts.exchangeNotionCode) {
+      fail();
+      return;
+    }
+    const userId = opts.oauthStates.consume(state);
+    if (!userId) {
+      fail();
+      return;
+    }
+    // Catches everything, not just thrown `Error`s: `createCodeExchange`
+    // leaves network failures and malformed JSON unwrapped, and a fake used
+    // in tests may throw any value at all.
+    try {
+      const granted = await opts.exchangeNotionCode(code);
+      let databaseId = granted.databaseId;
+      let workspaceName = granted.workspaceName;
+      if (!databaseId) {
+        // Normal (non-template) integrations never carry a database id in
+        // the token response — search for one with the freshly granted
+        // token instead. No database shared with the integration means no
+        // export destination, which is worse than no connection at all, so
+        // nothing is stored and the user is told why.
+        const found = await opts.findNotionDatabase?.(granted.accessToken);
+        if (!found) {
+          fail("nodatabase");
+          return;
+        }
+        databaseId = found.id;
+        workspaceName = workspaceName ?? found.title;
+      }
+      opts.destinations.putNotion(userId, granted.accessToken, {
+        databaseId,
+        ...(workspaceName ? { workspaceName } : {}),
+      });
+    } catch (err) {
+      console.error("notion callback failed:", err);
+      fail();
+      return;
+    }
+    res.writeHead(302, { location: "/app/exports?notion=connected" });
+    res.end();
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/v1/exports/notion") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    sendJSON(res, 200, { removed: opts.destinations?.remove(principal.userId, "notion") ?? false });
     return;
   }
 

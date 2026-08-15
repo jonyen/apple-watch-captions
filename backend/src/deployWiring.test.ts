@@ -24,8 +24,11 @@ const backend = join(import.meta.dirname, "..");
 const read = (name: string) => readFileSync(join(backend, name), "utf8");
 
 describe("deployment wiring", () => {
+  // Fix round 1: this literal moved from index.ts into serverOptions.ts's
+  // `buildServerOptions` when that function was extracted (Important 2), so
+  // the check follows it there.
   it("passes the configured trustProxyHeaders through to the server", () => {
-    expect(read("src/index.ts")).toContain("trustProxyHeaders: config.trustProxyHeaders");
+    expect(read("src/serverOptions.ts")).toContain("trustProxyHeaders: config.trustProxyHeaders");
   });
 
   // On Fly, `http_service` terminates the client connection, so without this
@@ -38,41 +41,50 @@ describe("deployment wiring", () => {
 
   // The whole /v1/exports/* surface (Tasks 5-7) shipped fully built and fully
   // tested against `startServer` directly, and unreachable in production:
-  // nothing in index.ts ever passed any of these eight options, so an
-  // unconfigured-looking StartServerOptions object satisfied every route
-  // test while the entrypoint constructed something else entirely. One test
-  // per option, so a single dropped wire fails on its own line rather than
-  // hiding in a passing composite assertion.
-  const entrypoint = read("src/index.ts");
-  const callStart = entrypoint.indexOf("startServer({");
-  const callEnd = entrypoint.indexOf("});", callStart);
-  // Sliced to just the call site, not the whole file: without this, a test
-  // for (say) `sendEmail` would pass merely because that identifier appears
-  // *somewhere* in index.ts — as the variable's own declaration — even if it
-  // were never actually threaded into the options object below.
-  const startServerCall = entrypoint.slice(callStart, callEnd);
-
-  it.each([
-    ["destinations", "destinations,"],
-    ["oauthStates", "oauthStates,"],
-    ["notionOAuth", "notionOAuth: config.notionOAuth,"],
-    ["exchangeNotionCode", "exchangeNotionCode,"],
-    ["findNotionDatabase", "findNotionDatabase,"],
-    ["emailVerifications", "emailVerifications,"],
-    ["sendEmail", "sendEmail,"],
-    ["publicBaseUrl", "publicBaseUrl: config.publicBaseUrl,"],
-  ])("wires %s into the startServer call", (_name, needle) => {
-    expect(startServerCall).toContain(needle);
+  // nothing in index.ts ever passed any of the export-destination options,
+  // so an unconfigured-looking StartServerOptions object satisfied every
+  // route test while the entrypoint constructed something else entirely.
+  //
+  // Fix round 1, Important 2: this file used to assert each of those eight
+  // options as a flat substring inside a literal `startServer({...})` call
+  // here. That could pass with an *inverted* gate, a value pinned to
+  // `undefined`, or a shorthand bound to the wrong variable — a textual
+  // check can't tell "correctly gated" from "present" — which is exactly how
+  // Important 1 (Notion OAuth offered with nowhere to store the connection)
+  // shipped undetected. That behavioral coverage now lives in
+  // `serverOptions.test.ts`, which calls the real gating function
+  // (`buildServerOptions`) against fake configs and asserts on what it
+  // returns.
+  //
+  // What's left here is the one thing a behavioral unit test of
+  // `buildServerOptions` cannot see on its own: whether `index.ts` actually
+  // calls it with the real config and feeds its result straight to the real
+  // `startServer`, rather than building it and discarding the result (or
+  // constructing some other, unrelated options object instead).
+  it("builds startServer's options from the loaded config via buildServerOptions", () => {
+    expect(read("src/index.ts")).toMatch(/const options = buildServerOptions\(config,/);
   });
 
-  // RESEND_API_KEY is a bearer credential for the whole relay's mail sending
-  // — it belongs in `fly secrets`, never committed to fly.toml. EMAIL_FROM
-  // and PUBLIC_BASE_URL are not secrets (a From address and this deploy's own
-  // public origin), so they belong in `[env]` like TRUST_PROXY_HEADERS above.
-  it("adds the non-secret email/public-URL settings to the Fly config", () => {
-    const toml = read("fly.toml");
-    expect(toml).toMatch(/^\s*EMAIL_FROM\s*=/m);
-    expect(toml).toMatch(/^\s*PUBLIC_BASE_URL\s*=/m);
+  it("passes buildServerOptions's result to startServer, not a separate object", () => {
+    expect(read("src/index.ts")).toMatch(/startServer\(options\)/);
+  });
+
+  // PUBLIC_BASE_URL is not a secret (this deploy's own public origin), so it
+  // belongs in `[env]` like TRUST_PROXY_HEADERS above, and has one correct
+  // default (the app's own fly.dev hostname).
+  it("adds the non-secret PUBLIC_BASE_URL setting to the Fly config", () => {
+    expect(read("fly.toml")).toMatch(/^\s*PUBLIC_BASE_URL\s*=/m);
+  });
+
+  // Fix round 1, Minor 1: EMAIL_FROM is not a secret either, but unlike
+  // PUBLIC_BASE_URL it has no correct default — it must be an address on a
+  // domain verified with Resend. Shipping any committed value here would let
+  // setting only the RESEND_API_KEY secret look like a complete
+  // configuration when it isn't: every send would fail at Resend instead of
+  // the feature just staying off (`buildServerOptions` gates `sendEmail` on
+  // both `resendApiKey` and `emailFrom` together).
+  it("ships no default EMAIL_FROM value, so RESEND_API_KEY alone can't half-enable email export", () => {
+    expect(read("fly.toml")).not.toMatch(/^\s*EMAIL_FROM\s*=/m);
   });
 
   it("never commits the Resend API key to the Fly config", () => {

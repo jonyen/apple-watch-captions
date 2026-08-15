@@ -136,7 +136,7 @@ connectable:
 | Feature | Env | Notes |
 |---------|-----|-------|
 | Storing destinations at all | `ENCRYPTION_KEY` | AES-256-GCM key sealing the Notion token in the database. Generate with `openssl rand -base64 32`. Present-but-malformed fails loudly at boot (never silently generates a throwaway key); absent just disables the feature. |
-| Notion OAuth (`/v1/exports/notion/*`) | `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, `PUBLIC_BASE_URL` | Register a **public** Notion integration (not the internal-integration token below) — see "Registering the Notion integration". |
+| Notion OAuth (`/v1/exports/notion/*`) | `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, `PUBLIC_BASE_URL`, **and `ENCRYPTION_KEY`** | Register a **public** Notion integration (not the internal-integration token below) — see "Registering the Notion integration". `ENCRYPTION_KEY` is required here too, not just for storage: without it there is nowhere to put a granted token, so *Connect* stays a 503 rather than sending a user to Notion's real consent screen only to fail after they've already granted access. |
 | Email export (`/v1/exports/email`) | `RESEND_API_KEY`, `EMAIL_FROM`, `PUBLIC_BASE_URL` | Sends the confirmation link and, later, transcripts via [Resend](https://resend.com). |
 
 `PUBLIC_BASE_URL` is this deploy's own public origin, e.g.
@@ -177,13 +177,22 @@ omitted when no summary was generated.
 ### Legacy single-workspace Notion export (deprecated)
 
 `NOTION_TOKEN`/`NOTION_DATABASE_ID` (an *internal* integration token, not the
-public one above) predate per-user connections and only exist now to migrate
-an existing single-user install: on the one boot that adopts pre-multi-tenant
-transcripts into a fresh user (see "Authentication" above), the relay also
-folds this legacy Notion config onto that same user's destination row, so
-their exports keep working across the upgrade — logged once, and never
-overwriting a connection the user has since made through `/app/exports`. Once
-every real user has connected their own workspace, unset both.
+public one above) predate per-user connections and export nothing on their
+own anymore — every export now reads a user's own stored connection, and
+there is no fallback to this relay-wide setting. The only thing it still
+does is get folded onto a user's destination row automatically, on boot, so
+that user's exports don't just stop working the moment this version deploys.
+That only happens when the relay has **exactly one** registered user — the
+only case where "whoever this legacy config belongs to" is unambiguous. With
+zero or more than one user, the relay logs that it couldn't attribute the
+legacy config automatically and leaves it to `/app/exports` instead; this is
+independent of, and does not require, the separate one-time migration that
+adopts pre-multi-tenant transcript files into a fresh user (see
+"Authentication" above) — that migration may already be long done, or may
+never run at all on an install that started multi-tenant. The adoption never
+overwrites a connection the user has since made through `/app/exports`, and
+is safe to leave running on every boot. Once every real user has connected
+their own workspace, unset both env vars.
 
 Setup, if you still need it:
 

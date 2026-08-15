@@ -3,7 +3,11 @@ import { randomBytes } from "crypto";
 import { startServer, CaptionServer, StartServerOptions } from "./server";
 import { openDb } from "./db";
 import { IdentityStore } from "./identityStore";
-import { ExportDestinationStore, adoptLegacyNotion } from "./exportDestinations";
+import {
+  ExportDestinationStore,
+  adoptLegacyNotion,
+  adoptLegacyNotionIfUnambiguous,
+} from "./exportDestinations";
 import { OAuthStateStore } from "./notionOAuth";
 import { EmailVerificationStore } from "./emailVerification";
 import { SendEmailArgs } from "./emailSender";
@@ -69,6 +73,11 @@ describe("GET /app/exports", () => {
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toContain("Connect Notion");
+    // Fix round 1, Minor 2: the Connect link carries the device token in its
+    // URL (the one place in the app that happens) — `rel="noreferrer"` stops
+    // the browser from leaking this page's URL as a Referer on the
+    // navigation the link starts.
+    expect(body).toMatch(/connect\.rel\s*=\s*['"]noreferrer['"]/);
   });
 });
 
@@ -140,6 +149,22 @@ describe("GET /v1/exports/notion/start", () => {
 
   it("answers 503 when Notion OAuth is not configured", async () => {
     const { port, alice } = start({ notionOAuth: undefined });
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/notion/start`, {
+      headers: { authorization: `Bearer ${alice.token}` },
+      redirect: "manual",
+    });
+    expect(res.status).toBe(503);
+  });
+
+  // Fix round 1, Important 1: notionOAuth alone used to be enough to redirect
+  // a user to Notion's real consent screen, even with nowhere to store what
+  // they granted — a dead end reached only after they'd already handed over
+  // access to a real workspace. `oauthStates` (unlike `notionOAuth`) is what
+  // this route actually gates on, and index.ts now only wires it when
+  // `destinations` also exists (see serverOptions.test.ts for that gating
+  // logic in isolation) — this exercises the same guarantee at the route.
+  it("answers 503, never redirecting to Notion, when there is nowhere to store the connection", async () => {
+    const { port, alice } = start({ oauthStates: undefined });
     const res = await fetch(`http://127.0.0.1:${port}/v1/exports/notion/start`, {
       headers: { authorization: `Bearer ${alice.token}` },
       redirect: "manual",
@@ -570,5 +595,73 @@ describe("legacy Notion config migration", () => {
     adoptLegacyNotion(destinations, operator, { token: "ntn_legacy", databaseId: "db-legacy" });
 
     expect(destinations.getNotion(operator)!.token).toBe("ntn_current");
+  });
+});
+
+// Fix round 1, Critical 1: `adoptLegacyNotion` alone has no way to find its
+// "operator" — the boot wiring used to hand it the transcript migration's
+// adopted user id, but that migration runs (if at all) on a different
+// branch/plan and its result is null on every later boot, which meant this
+// silently never fired for the exact operators it exists to help: someone
+// upgrading a working single-workspace NOTION_TOKEN straight to per-user
+// destinations, with no prior multi-tenancy migration to hang the adoption
+// on. This wrapper decouples "who is the operator" from that migration
+// entirely, using only the identity store's own user count.
+describe("adoptLegacyNotionIfUnambiguous", () => {
+  function fixture() {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+    return { identity, destinations };
+  }
+
+  const legacy = { token: "ntn_legacy", databaseId: "db-legacy" };
+
+  it("adopts onto the one existing user", () => {
+    const { identity, destinations } = fixture();
+    const solo = identity.registerDevice("mac").userId;
+
+    const result = adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+
+    expect(result).toEqual({ outcome: "adopted", userId: solo });
+    expect(destinations.getNotion(solo)).toEqual({
+      token: "ntn_legacy",
+      config: { databaseId: "db-legacy" },
+    });
+  });
+
+  it("reports ambiguous and adopts nothing when there is more than one user", () => {
+    const { identity, destinations } = fixture();
+    const alice = identity.registerDevice("phone").userId;
+    const mallory = identity.registerDevice("phone").userId;
+
+    const result = adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+
+    expect(result).toEqual({ outcome: "ambiguous" });
+    expect(destinations.getNotion(alice)).toBeNull();
+    expect(destinations.getNotion(mallory)).toBeNull();
+  });
+
+  it("reports ambiguous when there are no users yet", () => {
+    const { identity, destinations } = fixture();
+    expect(adoptLegacyNotionIfUnambiguous(identity, destinations, legacy)).toEqual({
+      outcome: "ambiguous",
+    });
+  });
+
+  it("reports not-configured when there is nowhere to store the connection", () => {
+    const { identity } = fixture();
+    identity.registerDevice("mac");
+    expect(adoptLegacyNotionIfUnambiguous(identity, undefined, legacy)).toEqual({
+      outcome: "not-configured",
+    });
+  });
+
+  it("reports not-configured when there is no legacy config", () => {
+    const { identity, destinations } = fixture();
+    identity.registerDevice("mac");
+    expect(adoptLegacyNotionIfUnambiguous(identity, destinations, undefined)).toEqual({
+      outcome: "not-configured",
+    });
   });
 });

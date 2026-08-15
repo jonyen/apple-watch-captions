@@ -1,5 +1,6 @@
 import { Db } from "./db";
 import { seal, open } from "./secretBox";
+import { IdentityStore } from "./identityStore";
 
 export type DestinationKind = "notion" | "email";
 
@@ -126,4 +127,34 @@ export function adoptLegacyNotion(
 ): void {
   if (store.getNotion(userId)) return;
   store.putNotion(userId, legacy.token, { databaseId: legacy.databaseId });
+}
+
+export type LegacyNotionAdoption =
+  | { outcome: "adopted"; userId: string }
+  | { outcome: "ambiguous" }
+  | { outcome: "not-configured" };
+
+/**
+ * Decide whether the pre-OAuth `NOTION_TOKEN`/`NOTION_DATABASE_ID` pair can
+ * be attributed to a user at all, and adopt it if so.
+ *
+ * Deliberately independent of the flat-transcript migration (`tenantMigration.ts`):
+ * that migration ships on a different plan/branch, runs at most once per
+ * install, and its result is `null` on every boot after the first (and on
+ * any install that started multi-tenant to begin with) — tying this
+ * adoption to it would silently skip the exact operators it exists to help.
+ * "Exactly one user" is the only condition under which a relay-wide legacy
+ * setting maps onto a single destination row unambiguously; zero or several
+ * users both leave it to `/app/exports` instead.
+ */
+export function adoptLegacyNotionIfUnambiguous(
+  identity: IdentityStore,
+  destinations: ExportDestinationStore | undefined,
+  legacy: { token: string; databaseId: string } | undefined,
+): LegacyNotionAdoption {
+  if (!legacy || !destinations) return { outcome: "not-configured" };
+  const solo = identity.soleUserId();
+  if (!solo) return { outcome: "ambiguous" };
+  adoptLegacyNotion(destinations, solo, legacy);
+  return { outcome: "adopted", userId: solo };
 }

@@ -42,11 +42,14 @@ fly volumes create transcripts --size 1
 #    Without it, transcripts are still saved; only summaries are skipped.
 fly secrets set ANTHROPIC_API_KEY="<your-anthropic-key>"
 
-# 6. (Optional, deprecated) Export finished transcripts to one relay-wide
-#    Notion database. Verify access first — a 404 here means the database
-#    isn't shared with the integration. Prefer #7 below for a real
-#    deployment; see backend/README.md "Legacy single-workspace Notion
-#    export" for why this still exists and when it's read.
+# 6. (Optional, deprecated) Seed one user's Notion connection from an
+#    existing single-workspace setup — it does NOT export on its own; every
+#    export reads a user's own connection made via #7 below, with no
+#    fallback to this. Verify access first — a 404 here means the database
+#    isn't shared with the integration. Prefer #7 for a real deployment; see
+#    backend/README.md "Legacy single-workspace Notion export" for exactly
+#    when this gets read (only onto the relay's one user, if there is
+#    exactly one).
 node scripts/notion-check.mjs "<ntn_token>" "<database-id>"
 fly secrets set NOTION_TOKEN="<ntn_token>" NOTION_DATABASE_ID="<database-id>"
 

@@ -22,10 +22,13 @@ export interface Config {
   assemblyaiApiKey?: string;
   /**
    * Optional; deprecated. Once exported every finished transcript to one
-   * relay-wide Notion database; now only used to migrate an existing
-   * single-user install's connection onto that user's own destination row
-   * (see `adoptLegacyNotion`, called from `index.ts`). Superseded by
-   * `notionOAuth`, which lets each user connect their own workspace.
+   * relay-wide Notion database; exports nothing on its own now — every
+   * export reads a user's own stored connection, with no fallback to this.
+   * The only thing it still does is get folded onto the relay's one user's
+   * destination row, when there is exactly one (see
+   * `adoptLegacyNotionIfUnambiguous`, called from `index.ts` on every boot).
+   * Superseded by `notionOAuth`, which lets each user connect their own
+   * workspace.
    */
   notion?: NotionConfig;
   /**

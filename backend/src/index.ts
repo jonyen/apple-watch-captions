@@ -11,21 +11,14 @@ import { AssemblyAIProvider } from "./assemblyaiProvider";
 import { ChannelSplitProvider } from "./channelSplitProvider";
 import { UnavailableProvider } from "./unavailableProvider";
 import { TranscriptionProvider } from "./transcriptionProvider";
-import { TranscriptStore } from "./transcriptStore";
 import { Summarize, createClaudeSummarizer } from "./summarizer";
 import { createGeminiSummarizer } from "./geminiSummarizer";
-import { createFinalizer, ResolveExporters } from "./finalizer";
-import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
-import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
-import { ExportDestinationStore, adoptLegacyNotion } from "./exportDestinations";
-import { keyFromEnv } from "./secretBox";
-import { createResendSender, createTranscriptEmailSender } from "./emailSender";
-import { OAuthStateStore, createCodeExchange, createDatabaseFinder } from "./notionOAuth";
-import { EmailVerificationStore } from "./emailVerification";
+import { adoptLegacyNotionIfUnambiguous } from "./exportDestinations";
+import { buildServerOptions, buildResolveExporters } from "./serverOptions";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -71,100 +64,6 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 const db = openDb(config.dbPath);
 const identity = new IdentityStore(db);
 
-// Per-user export destinations are an add-on to captioning, not a
-// precondition for it: an operator who upgrades without provisioning
-// ENCRYPTION_KEY yet must still get working live captions, not a boot loop.
-// `keyFromEnv` still throws on a key that is present but malformed or the
-// wrong length — only *absent* is treated as a valid feature-off state here.
-const destinations = config.encryptionKey
-  ? new ExportDestinationStore(db, keyFromEnv(config.encryptionKey))
-  : undefined;
-if (!destinations) {
-  console.log("Export destinations disabled: ENCRYPTION_KEY is not set");
-}
-
-// Resend is a plain REST endpoint, so this needs no dependency and no
-// gating beyond the two settings it actually uses. Transcript email is a
-// further add-on on top of `destinations` (below): with no sender
-// configured, or no export destinations at all, nothing tries to mail
-// anyone and captioning is unaffected either way.
-const sendEmail =
-  config.resendApiKey && config.emailFrom
-    ? createResendSender(config.resendApiKey, config.emailFrom)
-    : undefined;
-if (!sendEmail) {
-  console.log("Transcript email disabled: RESEND_API_KEY and EMAIL_FROM are not both set");
-}
-
-// Per-user Notion OAuth: lets each user connect their own workspace instead
-// of the whole relay sharing one legacy NOTION_TOKEN. `config.notionOAuth` is
-// already all-or-nothing (see `loadNotionOAuth`), so every piece here gates
-// on that one flag rather than each needing its own check.
-const oauthStates = config.notionOAuth ? new OAuthStateStore(db) : undefined;
-const exchangeNotionCode = config.notionOAuth ? createCodeExchange(config.notionOAuth) : undefined;
-const findNotionDatabase = config.notionOAuth ? createDatabaseFinder() : undefined;
-if (!config.notionOAuth) {
-  console.log(
-    "Per-user Notion export disabled: set NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, and PUBLIC_BASE_URL",
-  );
-}
-if (config.notion) {
-  // The old single-workspace NOTION_TOKEN/NOTION_DATABASE_ID path still
-  // works (resolveExporters below falls back to it via adoptLegacyNotion),
-  // but it is deprecated now that each user connects their own workspace —
-  // this is the operator-visible replacement for the "NOTION_TOKEN not set"
-  // line Task 4 removed, so upgrading with a global token still gets a
-  // signal instead of silence.
-  console.log(
-    "NOTION_TOKEN/NOTION_DATABASE_ID are deprecated: connect each user's own workspace via " +
-      "/app/exports, then unset these once everyone has.",
-  );
-}
-
-// Verified proof of control over an email address, ahead of ever mailing a
-// transcript to it. Gated on the same settings that make /v1/exports/email
-// useful at all: no sender configured, or no public URL for the confirmation
-// link to point back to, means nothing could complete the flow anyway.
-const emailVerifications =
-  sendEmail && config.publicBaseUrl ? new EmailVerificationStore(db) : undefined;
-if (sendEmail && !config.publicBaseUrl) {
-  console.log("Transcript email confirmation disabled: PUBLIC_BASE_URL is not set");
-}
-
-/**
- * Build that user's Notion clients from their stored credentials. Constructed
- * per call rather than cached: a user can disconnect or reconnect at any time,
- * and a cached client would keep exporting to a workspace they revoked.
- * Returns undefined for every user when export destinations are disabled,
- * which the finalizer and both backfills already treat as "no connection".
- */
-const resolveExporters: ResolveExporters = (userId) => {
-  const connection = destinations?.getNotion(userId);
-  if (!connection) return undefined;
-  const opts = { token: connection.token, databaseId: connection.config.databaseId };
-  return {
-    export: createNotionExporter(opts),
-    update: createNotionUpdater(opts),
-    patchSummary: createNotionSummaryPatcher(opts),
-  };
-};
-
-const transcripts = new TranscriptStore({
-  root: config.transcriptsDir,
-  onFinalize: createFinalizer({
-    root: config.transcriptsDir,
-    summarize,
-    resolve: resolveExporters,
-    // Only sends to an address the user has actually verified —
-    // `createTranscriptEmailSender` is the single choke point that enforces
-    // that, so it's reused here rather than duplicated inline.
-    sendTranscriptEmail:
-      destinations && sendEmail
-        ? createTranscriptEmailSender(destinations, sendEmail)
-        : undefined,
-  }),
-});
-
 /**
  * Deepgram transcribes the 2-channel stream natively; OpenAI and AssemblyAI
  * are mono-only, so dual-channel sessions get a ChannelSplitProvider running
@@ -201,9 +100,68 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
   }
 }
 
+// `buildServerOptions` is the actual gating logic (see serverOptions.ts for
+// why it lives there rather than inline here): every optional piece is
+// constructed from `config` and gated on what actually makes it usable, so
+// an unconfigured relay still boots and captions normally. The console
+// output below is derived from the *returned* options object rather than
+// re-checking each config flag separately, so a log line can never claim a
+// wiring state that isn't the one actually passed to `startServer` (fix
+// round 1, Critical 2 was exactly this kind of drift — a comment asserting a
+// fallback that didn't exist).
+const options = buildServerOptions(config, {
+  db,
+  identity,
+  createProvider,
+  summarize,
+  usage: createUsageService({ env: process.env }),
+});
+
+if (!options.destinations) {
+  console.log("Export destinations disabled: ENCRYPTION_KEY is not set");
+}
+if (!options.sendEmail) {
+  console.log("Transcript email disabled: RESEND_API_KEY and EMAIL_FROM are not both set");
+}
+if (!config.notionOAuth) {
+  console.log(
+    "Per-user Notion export disabled: set NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, and PUBLIC_BASE_URL",
+  );
+} else if (!options.oauthStates) {
+  // notionOAuth is set but buildServerOptions still declined to wire the
+  // OAuth pieces — the only other thing it gates on is `destinations`. See
+  // serverOptions.ts's "does not offer to connect Notion..." test.
+  console.log(
+    "Per-user Notion export disabled: ENCRYPTION_KEY is not set (Notion OAuth is otherwise configured)",
+  );
+}
+if (options.sendEmail && !options.emailVerifications) {
+  console.log("Transcript email confirmation disabled: PUBLIC_BASE_URL is not set");
+}
+if (config.notion) {
+  // The old single-workspace NOTION_TOKEN/NOTION_DATABASE_ID path is
+  // deprecated now that each user connects their own workspace — this is
+  // the operator-visible replacement for the "NOTION_TOKEN not set" line
+  // Task 4 removed, so upgrading with a global token still gets a signal
+  // instead of silence. This config does NOT export on its own and never
+  // did in this per-user world: `resolveExporters` (built inside
+  // `buildServerOptions`) only ever reads a user's own stored connection.
+  // The only thing this legacy value still does is seed that connection for
+  // one user, below, via `adoptLegacyNotionIfUnambiguous` — attempted on
+  // every boot, but a no-op once that user has a connection of their own.
+  console.log(
+    "NOTION_TOKEN/NOTION_DATABASE_ID are deprecated: connect each user's own workspace via " +
+      "/app/exports, then unset these once everyone has.",
+  );
+}
+
 // One-time (per install) adoption of transcripts written before the relay was
 // multi-tenant. No-ops on every boot after the first, once the flat root
-// holds only per-user directories.
+// holds only per-user directories. Independent of the legacy-Notion
+// adoption below: that migration ships on a different branch/plan and may
+// already be long done (or may never run at all, on an install that started
+// multi-tenant), so the Notion adoption below cannot depend on catching this
+// one still pending.
 const migrated = migrateFlatTranscripts(config.transcriptsDir, identity);
 if (migrated) {
   // This is a live bearer token, printed exactly once because there is no
@@ -216,35 +174,26 @@ if (migrated) {
     `Migrated ${migrated.moved} file(s) to user ${migrated.userId}. ` +
       `Adopt existing installs with this token (shown once): ${migrated.token}`,
   );
-  // The pre-multi-tenant install had exactly one implicit owner — whichever
-  // user this same migration just adopted the flat transcripts into — so
-  // that is the one destination row the legacy NOTION_TOKEN can sensibly
-  // carry onto. Never overwrites a connection made since through OAuth.
-  if (config.notion && destinations) {
-    adoptLegacyNotion(destinations, migrated.userId, config.notion);
-    console.log(`Adopted the legacy Notion connection onto user ${migrated.userId}.`);
-  }
 }
 
-const server = startServer({
-  port: config.port,
-  identity,
-  adminToken: config.adminToken,
-  createProvider,
-  transcripts,
-  transcriptsRoot: config.transcriptsDir,
-  usage: createUsageService({ env: process.env }),
-  callForwardTo: config.twilioForwardTo,
-  trustProxyHeaders: config.trustProxyHeaders,
-  destinations,
-  oauthStates,
-  notionOAuth: config.notionOAuth,
-  exchangeNotionCode,
-  findNotionDatabase,
-  emailVerifications,
-  sendEmail,
-  publicBaseUrl: config.publicBaseUrl,
-});
+// The legacy single-workspace NOTION_TOKEN has no reliable owner once the
+// relay is multi-tenant — it only maps unambiguously onto a user when there
+// is exactly one. `adoptLegacyNotionIfUnambiguous` never overwrites a
+// connection the user has since made through OAuth, so this is safe to
+// re-run every boot; see its doc comment in exportDestinations.ts for why
+// it is deliberately independent of the flat-transcript migration above.
+const legacyNotion = adoptLegacyNotionIfUnambiguous(identity, options.destinations, config.notion);
+if (legacyNotion.outcome === "adopted") {
+  console.log(`Adopted the legacy Notion connection onto the relay's one user (${legacyNotion.userId}).`);
+} else if (legacyNotion.outcome === "ambiguous") {
+  console.log(
+    "NOTION_TOKEN/NOTION_DATABASE_ID could not be adopted onto a single user automatically " +
+      "(this relay has zero or more than one registered user) — connect each user's own " +
+      "workspace via /app/exports instead.",
+  );
+}
+
+const server = startServer(options);
 
 const addr = server.address();
 const port = typeof addr === "object" && addr ? addr.port : config.port;
@@ -281,6 +230,10 @@ function userDirs(root: string): { dir: string; userId: string }[] {
  */
 async function runBackfills(): Promise<void> {
   const dirs = userDirs(config.transcriptsDir);
+  // Same resolver the live finalizer uses (built from `options.destinations`
+  // inside `buildServerOptions`) — reconstructed here via the same pure
+  // helper rather than a second copy of the resolution logic.
+  const resolveExporters = buildResolveExporters(options.destinations);
 
   if (summarize) {
     const totals = { summarized: 0, patched: 0, failed: 0 };

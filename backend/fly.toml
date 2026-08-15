@@ -23,8 +23,14 @@ primary_region = "sjc"  # pick a region near you: fly platform regions
   PUBLIC_BASE_URL = "https://watch-captions-relay.fly.dev"
   # The From address transcript and verification emails are sent from. Not a
   # secret; the API key that actually authenticates sending (RESEND_API_KEY)
-  # is set with `fly secrets set` instead — see backend/DEPLOY.md.
-  EMAIL_FROM = "transcripts@example.com"
+  # is set with `fly secrets set` instead — see backend/DEPLOY.md. Left
+  # unset here on purpose, unlike PUBLIC_BASE_URL above: there is no correct
+  # default (it must be an address on a domain verified with Resend), and
+  # shipping a placeholder value would let setting RESEND_API_KEY alone look
+  # like a complete, working configuration when it isn't — every send would
+  # fail at Resend instead of the feature just staying off. Uncomment and set
+  # it to enable email export, alongside the secret:
+  # EMAIL_FROM = "transcripts@yourdomain.com"
 
 # Persistent volume for session transcripts + summaries.
 # Create once with: fly volumes create transcripts --size 1

@@ -58,6 +58,25 @@ describe("IdentityStore registration", () => {
   });
 });
 
+describe("soleUserId", () => {
+  it("returns null when there are no users", () => {
+    expect(store().soleUserId()).toBeNull();
+  });
+
+  it("returns the one user's id when there is exactly one", () => {
+    const s = store();
+    const { userId } = s.registerDevice("phone");
+    expect(s.soleUserId()).toBe(userId);
+  });
+
+  it("returns null when there is more than one user", () => {
+    const s = store();
+    s.registerDevice("phone");
+    s.registerDevice("watch");
+    expect(s.soleUserId()).toBeNull();
+  });
+});
+
 describe("last_seen_at throttling", () => {
   function lastSeenOf(db: ReturnType<typeof openDb>, deviceId: string): string | null {
     const row = db

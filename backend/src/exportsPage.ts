@@ -165,6 +165,10 @@ async function loadNotion() {
     // unavoidable spot rather than adopted more broadly.
     const connect = el('a', 'button', 'Connect Notion');
     connect.href = '/v1/exports/notion/start?token=' + encodeURIComponent(token);
+    // Cheap extra guard on top of the above, given the token is in this URL:
+    // stops the browser from sending this page's URL as a Referer to
+    // whatever the relay's 302 redirects on to.
+    connect.rel = 'noreferrer';
     card.append(connect);
   }
   notionBox.append(card);

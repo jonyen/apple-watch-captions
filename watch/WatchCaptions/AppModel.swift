@@ -487,8 +487,13 @@ final class AppModel: ObservableObject {
         }
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
-        await controller.start(mode: mode)
-        if case .saved(let name?) = mode, controller.isRunning {
+        // Gated on whether THIS call connected, not `controller.isRunning`:
+        // a call superseded while suspended on the permission check can
+        // resume after a later start already connected a different session,
+        // and `isRunning` alone can't tell the two apart — it would restore
+        // this call's `name` into that other session's transcript.
+        let started = await controller.start(mode: mode)
+        if started, case .saved(let name?) = mode {
             prefiller.restore(name: name, into: store, for: controller)
         }
     }
@@ -525,6 +530,7 @@ final class AppModel: ObservableObject {
     func pause() {
         guard capturing else { return }
         controller.stop()
+        prefiller.cancel()
         rememberCurrentSession()
     }
 

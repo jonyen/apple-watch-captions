@@ -34,8 +34,19 @@ public final class SessionController {
     /// `.saved(resuming:)` appends to an existing transcript instead of opening
     /// a new one — what the app does when you glance back mid-conversation.
     /// `.live` keeps nothing, so it never restores anything either.
-    public func start(mode: SessionMode = .saved(resuming: nil)) async {
-        guard !running else { return }
+    ///
+    /// Returns whether *this call* connected — false if the controller was
+    /// already running, permission was denied, or a later `start`/`stop`
+    /// superseded this one while it sat suspended on the permission check.
+    /// Callers that key follow-up work off `mode` (a `TranscriptPrefiller`
+    /// restore, notably) must gate on this return value rather than
+    /// `isRunning`: by the time a superseded call's `await` resumes,
+    /// `isRunning` can be true again for a *different* session that a
+    /// stop+start already started, and `isRunning` alone can't tell the two
+    /// apart — only knowing whether this particular call won the race can.
+    @discardableResult
+    public func start(mode: SessionMode = .saved(resuming: nil)) async -> Bool {
+        guard !running else { return false }
         running = true
         sessionToken = UUID()
         let token = sessionToken
@@ -43,12 +54,13 @@ public final class SessionController {
         guard await permission.ensureGranted() else {
             store.setError("Microphone access is off. Enable it in Settings › Privacy.")
             running = false
-            return
+            return false
         }
         // `running` alone can't tell this session apart from a stop+start that
         // reused the flag while we were suspended; compare the token too.
-        guard running, sessionToken == token else { return }
+        guard running, sessionToken == token else { return false }
         relay.connect(mode: mode)
+        return true
     }
 
     /// End the session and tear down audio + transport.

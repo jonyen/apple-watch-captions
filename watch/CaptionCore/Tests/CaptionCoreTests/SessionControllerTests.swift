@@ -237,4 +237,45 @@ final class SessionControllerTests: XCTestCase {
         XCTAssertEqual(relay.connectCount, 1)
         XCTAssertEqual(relay.mode, .saved(resuming: "current"))
     }
+
+    func testStartReturnsTrueWhenItConnects() async {
+        let (c, _, relay, _) = make()
+        let connected = await c.start()
+        XCTAssertTrue(connected)
+        XCTAssertTrue(relay.connected)
+    }
+
+    func testStartReturnsFalseWhenPermissionDenied() async {
+        let (c, _, relay, _) = make(granted: false)
+        let connected = await c.start()
+        XCTAssertFalse(connected)
+        XCTAssertFalse(relay.connected)
+    }
+
+    /// The return value, not `isRunning`, is what a caller must key
+    /// follow-up work off (a `TranscriptPrefiller` restore, notably): by the
+    /// time the stale call's `await` resumes, `isRunning` is true again for
+    /// the *other* session the second `start` connected, so `isRunning`
+    /// alone can't tell "my session is running" from "a session is running."
+    /// Same race as `testASupersededStartDoesNotConnect`, asserting on the
+    /// return value instead of the relay's observed connect count.
+    func testStartReturnsWhetherThisCallWonTheRace() async {
+        let permission = GatedPermission()
+        let controller = SessionController(store: CaptionStore(), relay: FakeRelay(),
+                                            audio: FakeAudio(), permission: permission)
+
+        let staleStart = Task { await controller.start(mode: .saved(resuming: "stale")) }
+        await permission.waitForArrival(1)
+
+        controller.stop()
+        let currentStart = Task { await controller.start(mode: .saved(resuming: "current")) }
+        await permission.waitForArrival(2)
+
+        await permission.releaseAll()
+        let staleConnected = await staleStart.value
+        let currentConnected = await currentStart.value
+
+        XCTAssertFalse(staleConnected)
+        XCTAssertTrue(currentConnected)
+    }
 }

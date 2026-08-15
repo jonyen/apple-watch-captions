@@ -46,14 +46,35 @@ surprise is found while the cheap work is already banked.
    `backfillSummaries` takes a `userId` and its transcript root is per user, so
    the CLI must iterate user directories rather than one flat root. Small, but
    not a copy.
-4. **Two-way call audio.** The unknown. Call sessions are *ephemeral by design* —
-   no transcript, no summary, no export — so they may need no user scoping at
-   all, in which case the port is mechanical. If instead call presence has to
-   become per-user, this is structural work and should be split into its own
-   task rather than absorbed here.
+4. **Two-way call audio.** Verified: structural, not mechanical. Nothing in
+   the five files persists — calls stay ephemeral end to end — and two of them
+   (`mulaw`, `ringback`) are pure functions that move as-is. But the other
+   three are in-memory call state that the single-tenant `server.ts` creates
+   once per process: whose watch is ready (`callPresence`), whose caller's
+   audio is waiting (`callAudioBuffer`), whose call the hangup handle ends
+   (`callUplink`). Ported unchanged, those globals are a live cross-tenant
+   hole, because device registration is open: any registered token could mark
+   presence, drain another user's caller audio, speak into their call, or
+   hang it up — the same single-global-slot flaw the base already fixed in
+   `CurrentCall` by keying it per user. The smallest correct scoping is that
+   same fix: key presence, downlink, and uplink by `userId`. The Twilio
+   number maps to a user through the device token already embedded in its
+   webhook URL — the base's `/twilio/voice` already resolves that token to a
+   principal — so a call routes only to its owner's watch, and no new
+   identity design is needed. The port is also a merge, not a copy, in
+   `twilioStreamHandler` and `CurrentCall`: the base's versions carry the
+   `userId`, the local versions carry the audio plumbing and the `twoWay`
+   flag, and the ported code needs both halves.
 
-**Verify item 4 first, before committing to a schedule.** Everything else is
-predictable; this is the only piece that can turn a day into a week.
+**Item 4 is settled: structural, so it runs as its own task** after the three
+mechanical ports. It is days, not a week — the per-user keying repeats a
+pattern the base already uses three times over (`CurrentCall`, `SessionStore`,
+`ReaderPresence`), and the cross-tenant call tests that must not regress
+already exist. It can honestly ship for the operator alone, but only because
+single-user-ness then lives in the Twilio configuration — one number, carrying
+the operator's device token — not in the code: the per-user keying must happen
+regardless, since keeping the process globals and documenting "single user"
+would not be a limitation but a leak any self-registered device could exploit.
 
 ## 2. Cutover
 

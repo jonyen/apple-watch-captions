@@ -149,6 +149,21 @@ const EMAIL_SENDS_PER_WINDOW = 5;
 const EMAIL_WINDOW_MS = 60 * 60_000;
 
 /**
+ * Confirmation links a client address may follow per window, and the window.
+ *
+ * Spec section 6 requires the confirmation endpoint to be rate limited. The
+ * token is 32 random bytes, so guessing one is not a realistic attack and
+ * this is a backstop rather than the defence; what it actually bounds is an
+ * unauthenticated endpoint that does a database read and a write per call.
+ * Keyed on the caller's address, since there is no bearer token here — the
+ * request comes from whatever inbox the link was opened in. A real user
+ * follows their link once, so the budget only has to leave room for a mail
+ * client prefetching it and the user clicking a couple of times.
+ */
+const EMAIL_CONFIRMS_PER_WINDOW = 10;
+const EMAIL_CONFIRM_WINDOW_MS = 60 * 60_000;
+
+/**
  * Per-key sliding-window limiter. Used both for `/v1/devices` registrations
  * (keyed by address) and for failed `/v1/pair/claim` attempts (keyed by
  * device) — same mechanism, different key, budget, and window.
@@ -267,6 +282,11 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     PAIR_CODE_WINDOW_MS,
   );
   const emailLimiter = new RegistrationLimiter(undefined, EMAIL_SENDS_PER_WINDOW, EMAIL_WINDOW_MS);
+  const confirmLimiter = new RegistrationLimiter(
+    undefined,
+    EMAIL_CONFIRMS_PER_WINDOW,
+    EMAIL_CONFIRM_WINDOW_MS,
+  );
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
@@ -281,6 +301,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       claimLimiter,
       codeLimiter,
       emailLimiter,
+      confirmLimiter,
     ).catch(
       () => {
         if (!res.headersSent) res.writeHead(500);
@@ -370,6 +391,7 @@ async function handleRequest(
   claimLimiter: RegistrationLimiter,
   codeLimiter: RegistrationLimiter,
   emailLimiter: RegistrationLimiter,
+  confirmLimiter: RegistrationLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -907,7 +929,14 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
-    sendJSON(res, 200, { removed: opts.destinations?.remove(principal.userId, "notion") ?? false });
+    // 503 rather than `{removed:false}`, like every sibling route: with no
+    // store there is nothing to disconnect *from*, and reporting that as a
+    // successful no-op tells `/app/exports` the Disconnect worked.
+    if (!opts.destinations) {
+      sendJSON(res, 503, { error: "notion export not configured" });
+      return;
+    }
+    sendJSON(res, 200, { removed: opts.destinations.remove(principal.userId, "notion") });
     return;
   }
 
@@ -976,6 +1005,14 @@ async function handleRequest(
   // Followed from an inbox, so there is no bearer token. The single-use token
   // is the proof, and it proves control of the address — which is the point.
   if (req.method === "GET" && url.pathname === "/v1/exports/email/confirm") {
+    // Keyed on the address rather than a device, because this request
+    // carries no credential at all — it arrives from the user's inbox.
+    // Spent before the token is looked at, so a caller cycling guesses pays
+    // for every attempt rather than only for the ones that hit a real row.
+    if (!confirmLimiter.allow(clientAddress(req, opts.trustProxyHeaders ?? false))) {
+      sendJSON(res, 429, { error: "too many confirmation attempts" });
+      return;
+    }
     const token = url.searchParams.get("token");
     const claim = token && opts.emailVerifications ? opts.emailVerifications.consume(token) : null;
     if (!claim || !opts.destinations) {
@@ -998,10 +1035,16 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
+    // Same as the Notion route above: no store, nothing to remove, so this
+    // fails closed rather than reporting a no-op as a successful delete.
+    if (!opts.destinations) {
+      sendJSON(res, 503, { error: "email export not configured" });
+      return;
+    }
     // A still-valid confirmation link must not be able to recreate the
     // destination this just deleted, already verified.
     opts.emailVerifications?.deleteForUser(principal.userId);
-    sendJSON(res, 200, { removed: opts.destinations?.remove(principal.userId, "email") ?? false });
+    sendJSON(res, 200, { removed: opts.destinations.remove(principal.userId, "email") });
     return;
   }
 

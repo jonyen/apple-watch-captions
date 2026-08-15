@@ -88,6 +88,20 @@ export class ExportDestinationStore {
     return out;
   }
 
+  /**
+   * Delete one destination. The **only** `DELETE FROM export_destinations` in
+   * the codebase, and the Disconnect guarantee depends on it staying that
+   * way: `legacy_notion_resolutions` is a separate table precisely so that
+   * removing a row here does not also erase the record that the legacy
+   * `NOTION_TOKEN` was already resolved for this user (see
+   * `hasResolvedLegacyNotion`). A future bulk cleanup — a retention sweep, a
+   * user-deletion path, a maintenance script — that deletes rows directly
+   * instead of calling this is fine on its own terms; what it must not do is
+   * leave `legacy_notion_resolutions` unconsidered, or the next boot's
+   * `adoptLegacyNotionIfUnambiguous` silently re-adopts a workspace the user
+   * deliberately disconnected. Route deletions through here, or update the
+   * marker table in the same breath.
+   */
   remove(userId: string, kind: DestinationKind): boolean {
     const before = this.row(userId, kind);
     if (!before) return false;

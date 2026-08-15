@@ -352,6 +352,18 @@ describe("DELETE /v1/exports/notion", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // Final review, smaller item 3: this used to answer `200 {removed:false}`
+  // with no store configured, where every sibling route 503s. That reads to
+  // `/app/exports` as a Disconnect that worked.
+  it("answers 503, not a successful no-op, when there is nowhere to disconnect from", async () => {
+    const { port, alice } = start({ destinations: undefined });
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/notion`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(res.status).toBe(503);
+  });
 });
 
 describe("POST /v1/exports/email", () => {
@@ -499,6 +511,22 @@ describe("GET /v1/exports/email/confirm", () => {
     expect(destinations.getEmail(alice.userId)).toBeNull();
   });
 
+  // Spec section 6: the confirmation endpoint must be rate limited. It is
+  // unauthenticated, so the key is the client address, not a device.
+  it("stops answering after too many attempts from one address", async () => {
+    const { port } = start();
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i += 1) {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/exports/email/confirm?token=guess-${i}`,
+        { redirect: "manual" },
+      );
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 10)).toEqual(Array(10).fill(302));
+    expect(statuses[10]).toBe(429);
+  });
+
   it("a token cannot be used a second time", async () => {
     const { port, destinations, sentEmails, alice } = start();
     await requestConfirmation(port, alice.token);
@@ -541,6 +569,15 @@ describe("DELETE /v1/exports/email", () => {
       method: "DELETE",
     });
     expect(res.status).toBe(401);
+  });
+
+  it("answers 503, not a successful no-op, when there is nowhere to disconnect from", async () => {
+    const { port, alice } = start({ destinations: undefined });
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(res.status).toBe(503);
   });
 
   // Fix-round Minor 1: deleting a destination must also invalidate any

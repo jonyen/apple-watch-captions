@@ -305,4 +305,47 @@ describe("createFinalizer", () => {
     }
     expect(rejections).toEqual([]);
   });
+
+  // Sibling of the test above, for the other thing `run` does before it ever
+  // touches the filesystem: `resolve` reaches `ExportDestinationStore` in
+  // production, which can throw (a sealed secret that fails to open — a
+  // rotated key, a database restored from another environment — a
+  // JSON.parse failure, a SQLite error). A throw here must not become an
+  // unhandled rejection either, since it would take the whole process down
+  // for every user on the very next finalize, not just this one.
+  it("does not produce an unhandled rejection when resolve throws", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (err: unknown) => rejections.push(err);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const finalize = createFinalizer({
+        root,
+        resolve: () => {
+          throw new Error("bad auth tag");
+        },
+      });
+      expect(() => finalize(transcript(LONG))).not.toThrow();
+      await settle();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections).toEqual([]);
+  });
+
+  it("still stores the summary when resolve throws", async () => {
+    const store = new TranscriptStore({ root, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    store.append(U, "abc", LONG[0]);
+    const name = listTranscripts(dir)[0].name;
+
+    createFinalizer({
+      root,
+      summarize: async () => "A chat happened.",
+      resolve: () => {
+        throw new Error("bad auth tag");
+      },
+    })({ ...transcript(LONG), name });
+    await settle();
+
+    expect(readTranscript(dir, name)?.summary).toBe("A chat happened.");
+  });
 });

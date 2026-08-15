@@ -50,9 +50,27 @@ export function isSubstantial(t: FinalizedTranscript): boolean {
 
 async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void> {
   if (!isSubstantial(t)) return;
-  // Nothing below here writes anything, so there is nothing worth resolving
-  // or creating a directory for.
-  if (!opts.summarize && !opts.resolve) return;
+
+  // Resolved up front (rather than at the export step below) so the
+  // "nothing to do" check just below is honest: `opts.resolve` being set
+  // does not mean *this* user has a connection, and `resolveExporters` in
+  // `index.ts` is always set even when export destinations are disabled
+  // entirely. Wrapped in `try` for the same reason the block below is: a
+  // sealed secret that fails to open (rotated key, restored database) must
+  // not become an unhandled promise rejection — `createFinalizer` invokes
+  // `run` fire-and-forget as `void run(opts, t)`, and by default an
+  // unhandled rejection kills the whole process, for every user, on every
+  // finalize.
+  let exporters: UserExporters | undefined;
+  try {
+    exporters = opts.resolve?.(t.userId);
+  } catch (err) {
+    console.error(`could not resolve export destination for ${t.name}:`, err);
+  }
+
+  // Nothing below here writes anything, so there is nothing worth creating a
+  // directory for.
+  if (!opts.summarize && !exporters) return;
 
   let dir: string;
   try {
@@ -91,7 +109,6 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
 
   // Export independently of the summary: a transcript is still worth having in
   // Notion when Claude is unconfigured or the summary call failed.
-  const exporters = opts.resolve?.(t.userId);
   if (exporters) {
     await exportOnce(exporters.export, dir, t, summary, exporters.update);
   }

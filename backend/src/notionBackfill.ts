@@ -4,7 +4,7 @@ import {
   readTranscript,
   rebuildFinalized,
 } from "./transcriptStore";
-import { ResolveExporters, exportOnce, isSubstantial } from "./finalizer";
+import { ResolveExporters, UserExporters, exportOnce, isSubstantial } from "./finalizer";
 
 export interface BackfillOptions {
   dir: string;
@@ -41,7 +41,17 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
   const delayMs = opts.delayMs ?? 400;
   const result: BackfillResult = { exported: 0, skipped: 0, failed: 0 };
 
-  const exporters = opts.resolve(opts.userId);
+  // Guarded per user: a sweep runs once per user directory in a loop over
+  // every user (see `runBackfills` in `index.ts`), and a sealed secret that
+  // fails to open for one of them (rotated key, restored database) must not
+  // abort export catch-up for everyone after them in the loop.
+  let exporters: UserExporters | undefined;
+  try {
+    exporters = opts.resolve(opts.userId);
+  } catch (err) {
+    console.error(`could not resolve Notion connection for ${opts.userId}:`, err);
+    return result;
+  }
   if (!exporters) return result;
 
   const pending = listTranscripts(opts.dir).reverse();

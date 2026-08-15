@@ -6,7 +6,7 @@ import {
   writeSummary,
 } from "./transcriptStore";
 import { Summarize } from "./summarizer";
-import { ResolveExporters, isSubstantial } from "./finalizer";
+import { ResolveExporters, UserExporters, isSubstantial } from "./finalizer";
 
 export interface SummaryBackfillOptions {
   dir: string;
@@ -55,7 +55,18 @@ export async function backfillSummaries(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const delayMs = opts.delayMs ?? 1000;
   const result: SummaryBackfillResult = { summarized: 0, skipped: 0, failed: 0, patched: 0 };
-  const exporters = opts.resolve?.(opts.userId);
+
+  // Guarded per user, same as `backfillNotion`: this sweep runs once per
+  // user directory in a loop over every user, and a sealed secret that fails
+  // to open for one of them must not abort summarizing for everyone after
+  // them in the loop — nor should it, on its own, stop *this* user's
+  // summaries from being generated (see `resolve` above).
+  let exporters: UserExporters | undefined;
+  try {
+    exporters = opts.resolve?.(opts.userId);
+  } catch (err) {
+    console.error(`could not resolve Notion connection for ${opts.userId}:`, err);
+  }
 
   for (const listed of listTranscripts(opts.dir).reverse()) {
     if (opts.limit !== undefined && result.summarized >= opts.limit) break;

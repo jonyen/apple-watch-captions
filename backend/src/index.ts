@@ -227,16 +227,14 @@ async function runBackfills(): Promise<void> {
       );
     }
   }
-  {
-    const totals = { exported: 0, failed: 0 };
-    for (const { dir, userId } of dirs) {
-      const r = await backfillNotion({ dir, userId, resolve: resolveExporters });
-      totals.exported += r.exported;
-      totals.failed += r.failed;
-    }
-    if (totals.exported || totals.failed) {
-      console.log(`Notion backfill: ${totals.exported} exported, ${totals.failed} failed`);
-    }
+  const notionTotals = { exported: 0, failed: 0 };
+  for (const { dir, userId } of dirs) {
+    const r = await backfillNotion({ dir, userId, resolve: resolveExporters });
+    notionTotals.exported += r.exported;
+    notionTotals.failed += r.failed;
+  }
+  if (notionTotals.exported || notionTotals.failed) {
+    console.log(`Notion backfill: ${notionTotals.exported} exported, ${notionTotals.failed} failed`);
   }
 }
 

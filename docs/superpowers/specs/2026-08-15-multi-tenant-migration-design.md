@@ -101,7 +101,13 @@ actually buy an untouched fallback.
 4. Capture the adoption token printed once to the log (`fly logs`). It is the
    only copy.
 5. Adopt it into watch and iPhone.
-6. Retire the deprecated env vars once exports are confirmed working.
+6. Update the Twilio number's **Voice webhook** to
+   `https://<host>/twilio/voice?token=<operator's device token>` — the token
+   captured from the migration log two steps earlier. The URL currently
+   carries the retired shared `AUTH_TOKEN`, which no longer resolves, so
+   inbound call captioning answers 401 to every caller until the webhook is
+   repointed.
+7. Retire the deprecated env vars once exports are confirmed working.
 
 ### Rollback
 

@@ -371,6 +371,14 @@ git commit -m "feat(summary): add force mode and bound backfill by attempts"
 - Consumes: `chooseSummarizer` and `userDirs` (Task 3), `force` and attempt-bounded `limit` (Task 4).
 - Produces: `export function parseArgs(argv: string[]): { last: number }` and an `npm run resummarize` script.
 
+> **Operational note.** `openDb` sets neither WAL mode nor a busy timeout, so
+> running `resummarize` opens a second SQLite handle against the live relay's
+> database. Run it during a quiet moment: a concurrent `last_seen_at` write on
+> the relay can collide with the CLI's handle — the CLI logs and skips that
+> user's Notion patch (summaries still land on disk), and the relay could see a
+> single `SQLITE_BUSY` 500. Adding WAL/busy-timeout to `openDb` would remove the
+> hazard entirely and is the better long-term fix.
+
 - [ ] **Step 1: Write the failing test**
 
 Create `backend/src/resummarize.test.ts`:

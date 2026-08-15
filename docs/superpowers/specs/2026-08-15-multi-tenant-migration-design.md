@@ -2,16 +2,21 @@
 
 ## Problem
 
-Two lineages of this repo diverged and both are real.
+Two lineages of this repo diverged and both are real. Throughout this spec,
+`main` means the remote `origin/main` — the branch GitHub shows.
 
 `main` carries the multi-tenant rewrite: per-device auth, pairing, per-user
 transcript scoping, and per-user export destinations with encrypted secrets. It
 has never been deployed.
 
-A local branch — preserved as `backup/local-main-2026-08-15` — carries 48
-commits the rewrite never saw: expansive transcript summaries, a `resummarize`
-CLI, a summarizer-provider chooser, and two-way Twilio call audio. That branch
-is what the production relay is actually running.
+The old single-tenant lineage — durably addressable as
+`origin/backup/local-main-2026-08-15` — carries 48 commits the rewrite never
+saw: expansive transcript summaries, a `resummarize` CLI, a summarizer-provider
+chooser, and two-way Twilio call audio. That lineage is what the production
+relay is actually running. The local ref `main` currently also points at it,
+not at `origin/main` — which is exactly the confusion these names pin down:
+anything reading the old lineage should say the backup ref, the name that stays
+correct even after local `main` is reset to track its remote.
 
 So the deployed service matches no branch, and deploying `main` as it stands
 would regress features in daily use.
@@ -138,13 +143,13 @@ makes day-one critical.
 
 It is also diverged, like everything else here:
 
-| Only on local `main` | Only on `main` |
+| Only on the old lineage | Only on `main` |
 |---|---|
 | `CallAudio.swift`, `CallVoice.swift`, `MuLaw.swift` | `PhoneAudio.swift`, `Settings.swift` |
 
 Extracting from either lineage silently drops the other's files. Taking `main`
 loses exactly the two-way call audio section 1 item 4 is porting forward; taking
-local `main` loses the settings the multi-tenant iOS app needs. **CaptionCore
+the old lineage loses the settings the multi-tenant iOS app needs. **CaptionCore
 must be reconciled before extraction, or the extraction must merge both sets
 deliberately.**
 

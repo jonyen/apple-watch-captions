@@ -15,7 +15,7 @@
 - **Backend only.** Every change is under `backend/`. Do not touch `watch/`, `ios/`, `mac/`, or `CaptionCore` — a separate session is extracting those concurrently, and the spec's "Division of work" section makes this the parallel-safe half.
 - **Do not deploy.** This plan produces a branch. The cutover is section 2 of the spec and needs client builds that do not exist yet.
 - **Cross-tenant isolation must not regress.** It is the property the multi-tenant suites exist to protect. Anything reading or writing transcripts takes a `userId`.
-- **The source of truth for ported code is `git show main:backend/src/<file>`** — the local lineage preserved as `backup/local-main-2026-08-15`. Copy from git rather than retyping.
+- **The source of truth for ported code is `git show origin/backup/local-main-2026-08-15:backend/src/<file>`** — the old single-tenant lineage. The local ref `main` currently points at the same commit and may be used interchangeably today, but the backup ref is the durable name: it stays correct even after local `main` is reset to track `origin/main` — the multi-tenant lineage — at which point copy commands using the local ref would silently read the wrong code. Copy from git rather than retyping.
 - Node's `--omit=dev` production install carries `tsx`; dev-only imports must not leak into runtime paths.
 
 ## File Structure
@@ -50,7 +50,7 @@ The five files exist only on the local lineage:
 ```bash
 cd /Users/jonyen/Projects/apple-watch-captions
 for f in callUplink callAudioBuffer callPresence mulaw ringback; do
-  echo "=== $f ==="; git show main:backend/src/$f.ts | head -40
+  echo "=== $f ==="; git show origin/backup/local-main-2026-08-15:backend/src/$f.ts | head -40
 done
 ```
 
@@ -112,7 +112,7 @@ Copy the expansive version verbatim rather than retyping it:
 
 ```bash
 cd /Users/jonyen/Projects/apple-watch-captions
-git show main:backend/src/summaryPrompt.ts > /tmp/expansive-prompt.ts
+git show origin/backup/local-main-2026-08-15:backend/src/summaryPrompt.ts > /tmp/expansive-prompt.ts
 ```
 
 Take **only** the `SUMMARY_SYSTEM_PROMPT` declaration from that file and replace the one in `backend/src/summaryPrompt.ts`. Leave everything else in the current file alone — `formatTranscript`, `summaryPrompt`, `parseSummary`, and `MAX_TITLE` are unchanged by this port, and the multi-tenant file may have diverged elsewhere.
@@ -526,8 +526,8 @@ Read the amended section 1 item 4 of the spec. Do not start until it says mechan
 ```bash
 cd /Users/jonyen/Projects/apple-watch-captions
 for f in mulaw ringback callAudioBuffer callPresence callUplink; do
-  git show main:backend/src/$f.ts > backend/src/$f.ts
-  git show main:backend/src/$f.test.ts > backend/src/$f.test.ts 2>/dev/null || true
+  git show origin/backup/local-main-2026-08-15:backend/src/$f.ts > backend/src/$f.ts
+  git show origin/backup/local-main-2026-08-15:backend/src/$f.test.ts > backend/src/$f.test.ts 2>/dev/null || true
 done
 ```
 
@@ -535,7 +535,7 @@ Then run `cd backend && npm test` and fix what fails. Expect failures where thes
 
 - [ ] **Step 3: Wire the routes**
 
-Compare `git show main:backend/src/index.ts` against the current one for the call routes only, and add them. Every route on this base authenticates with a bearer token; the Twilio webhook is the documented exception. Follow whatever the base already does for `/twilio/voice`.
+Compare `git show origin/backup/local-main-2026-08-15:backend/src/index.ts` against the current one for the call routes only, and add them. Every route on this base authenticates with a bearer token; the Twilio webhook is the documented exception. Follow whatever the base already does for `/twilio/voice`.
 
 - [ ] **Step 4: Run the full suite**
 

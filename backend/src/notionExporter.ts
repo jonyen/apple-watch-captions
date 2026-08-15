@@ -58,6 +58,9 @@ export function createRequest(opts: NotionExporterOptions): Request {
   };
 }
 
+/** Adds a Summary toggle to an already-exported page. */
+export type PatchSummary = (pageId: string, summary: string) => Promise<void>;
+
 /**
  * Adds a Summary toggle to a page that was exported before its summary
  * existed — used by the summary backfill so it updates the page in place
@@ -66,9 +69,7 @@ export function createRequest(opts: NotionExporterOptions): Request {
  * The toggle lands after the transcript on these pages, since Notion's append
  * API has no prepend; freshly exported pages still get Summary first.
  */
-export function createNotionSummaryPatcher(
-  opts: NotionExporterOptions,
-): (pageId: string, summary: string) => Promise<void> {
+export function createNotionSummaryPatcher(opts: NotionExporterOptions): PatchSummary {
   const request = createRequest(opts);
   return async (pageId, summary) => {
     const blocks = markdownToBlocks(parseSummary(summary).body);

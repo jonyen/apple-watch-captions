@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createFinalizer } from "./finalizer";
+import { createFinalizer, ResolveExporters, UserExporters } from "./finalizer";
 import {
   FinalizedTranscript,
   readTranscript,
@@ -25,8 +25,40 @@ function transcript(texts: string[]): FinalizedTranscript {
   };
 }
 
+function transcriptFor(userId: string): FinalizedTranscript {
+  return {
+    name: "2026-01-01T00-00-00Z_s1",
+    userId,
+    sessionId: "s1",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    endedAt: "2026-01-01T00:01:00.000Z",
+    segments: [{ at: "2026-01-01T00:00:30.000Z", text: "a".repeat(80) }],
+  };
+}
+
+/**
+ * Wraps a bare `export`/`update` pair from a test into the `resolve` shape
+ * `createFinalizer` now takes, standing in for one user's Notion connection.
+ * Scoped to `U`, the fixed user most tests in this file use.
+ */
+function resolveWith(
+  exportTranscript: UserExporters["export"],
+  update?: UserExporters["update"],
+): ResolveExporters {
+  return (userId) =>
+    userId === U
+      ? {
+          export: exportTranscript,
+          update: update ?? (async () => ({ pageId: "p1", url: "u1", exportedSegments: 0 })),
+          patchSummary: async () => {},
+        }
+      : undefined;
+}
+
 const LONG = ["this is a reasonably long caption about something", "and another one"];
 const settle = () => new Promise((r) => setTimeout(r, 20));
+/** `createFinalizer` fires and forgets; let its microtasks drain. */
+const flush = settle;
 
 describe("createFinalizer", () => {
   let root: string;
@@ -40,6 +72,48 @@ describe("createFinalizer", () => {
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it("exports through the transcript owner's own Notion connection", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wc-"));
+    const seen: string[] = [];
+    const resolve = (userId: string) =>
+      userId === "alice"
+        ? {
+            export: async () => {
+              seen.push("alice-export");
+              return { pageId: "p1", url: "https://notion/p1" };
+            },
+            update: async () => ({ pageId: "p1", url: "https://notion/p1", exportedSegments: 1 }),
+            patchSummary: async () => {},
+          }
+        : undefined;
+
+    const finalize = createFinalizer({ root: dir, resolve });
+    finalize(transcriptFor("alice"));
+    await flush();
+    expect(seen).toEqual(["alice-export"]);
+  });
+
+  it("does not export for a user with no connection", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wc-"));
+    const seen: string[] = [];
+    const resolve = (userId: string) =>
+      userId === "alice"
+        ? {
+            export: async () => {
+              seen.push("alice-export");
+              return { pageId: "p1", url: "https://notion/p1" };
+            },
+            update: async () => ({ pageId: "p1", url: "https://notion/p1", exportedSegments: 1 }),
+            patchSummary: async () => {},
+          }
+        : undefined;
+
+    const finalize = createFinalizer({ root: dir, resolve });
+    finalize(transcriptFor("mallory"));
+    await flush();
+    expect(seen).toEqual([]);
   });
 
   it("stores the summary next to the transcript", async () => {
@@ -66,7 +140,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
 
-    createFinalizer({ root, export: exportTranscript })(transcript(LONG));
+    createFinalizer({ root, resolve: resolveWith(exportTranscript) })(transcript(LONG));
     await settle();
 
     expect(exportTranscript).toHaveBeenCalledOnce();
@@ -81,7 +155,7 @@ describe("createFinalizer", () => {
     createFinalizer({
       root,
       summarize: async () => "A chat happened.",
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
     })(transcript(LONG));
     await settle();
 
@@ -92,7 +166,7 @@ describe("createFinalizer", () => {
     const exportTranscript = vi.fn(
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
-    const finalize = createFinalizer({ root, export: exportTranscript });
+    const finalize = createFinalizer({ root, resolve: resolveWith(exportTranscript) });
 
     finalize(transcript(LONG));
     await settle();
@@ -108,7 +182,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
 
-    createFinalizer({ root, export: exportTranscript })(transcript(LONG));
+    createFinalizer({ root, resolve: resolveWith(exportTranscript) })(transcript(LONG));
     await settle();
 
     expect(readExportMarker(dir, transcript(LONG).name)).toMatchObject({
@@ -122,7 +196,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
     const update = vi.fn(async () => ({ pageId: "p1", url: "u1", exportedSegments: 5 }));
-    const finalize = createFinalizer({ root, export: exportTranscript, update });
+    const finalize = createFinalizer({ root, resolve: resolveWith(exportTranscript, update) });
 
     finalize(transcript(LONG));
     await settle();
@@ -134,19 +208,12 @@ describe("createFinalizer", () => {
     expect(readExportMarker(dir, transcript(LONG).name)).toMatchObject({ exportedSegments: 5 });
   });
 
-  it("leaves an exported transcript alone when no updater is configured", async () => {
-    const exportTranscript = vi.fn(
-      async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
-    );
-    const finalize = createFinalizer({ root, export: exportTranscript });
-
-    finalize(transcript(LONG));
-    await settle();
-    finalize({ ...transcript(LONG), resumed: true });
-    await settle();
-
-    expect(exportTranscript).toHaveBeenCalledOnce();
-  });
+  // Previously exercised via a `FinalizerOptions` with `export` but no
+  // `update`, independently configurable. `resolve` now hands back both (and
+  // `patchSummary`) together as one `UserExporters` bundle built from a
+  // single Notion connection, so "export configured, update not" is no
+  // longer a reachable state through the public API — this scenario is
+  // retired rather than ported.
 
   it("keeps the old marker when updating the page fails, so it retries", async () => {
     const exportTranscript = vi.fn(
@@ -155,7 +222,7 @@ describe("createFinalizer", () => {
     const update = vi.fn(async () => {
       throw new Error("notion down");
     });
-    const finalize = createFinalizer({ root, export: exportTranscript, update });
+    const finalize = createFinalizer({ root, resolve: resolveWith(exportTranscript, update) });
 
     finalize(transcript(LONG));
     await settle();
@@ -169,7 +236,7 @@ describe("createFinalizer", () => {
     const exportTranscript = vi.fn(async () => {
       throw new Error("notion down");
     });
-    const finalize = createFinalizer({ root, export: exportTranscript });
+    const finalize = createFinalizer({ root, resolve: resolveWith(exportTranscript) });
 
     expect(() => finalize(transcript(LONG))).not.toThrow();
     await settle();
@@ -182,7 +249,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
 
-    createFinalizer({ root, export: exportTranscript })(transcript(["hi"]));
+    createFinalizer({ root, resolve: resolveWith(exportTranscript) })(transcript(["hi"]));
     await settle();
 
     expect(exportTranscript).not.toHaveBeenCalled();
@@ -196,9 +263,9 @@ describe("createFinalizer", () => {
     createFinalizer({
       root,
       summarize: async () => "A chat happened.",
-      export: async () => {
+      resolve: resolveWith(async () => {
         throw new Error("notion down");
-      },
+      }),
     })({ ...transcript(LONG), name });
     await settle();
 
@@ -229,7 +296,7 @@ describe("createFinalizer", () => {
     try {
       const finalize = createFinalizer({
         root,
-        export: async () => ({ pageId: "p1", url: "u1" }),
+        resolve: resolveWith(async () => ({ pageId: "p1", url: "u1" })),
       });
       expect(() => finalize({ ...transcript(LONG), userId: "" })).not.toThrow();
       await settle();

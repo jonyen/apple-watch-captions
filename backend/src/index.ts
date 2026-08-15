@@ -14,13 +14,15 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
 import { Summarize, createClaudeSummarizer } from "./summarizer";
 import { createGeminiSummarizer } from "./geminiSummarizer";
-import { createFinalizer } from "./finalizer";
+import { createFinalizer, ResolveExporters } from "./finalizer";
 import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
 import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
 import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
+import { ExportDestinationStore } from "./exportDestinations";
+import { keyFromEnv } from "./secretBox";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -51,18 +53,45 @@ console.log(
     : "No summary provider configured — transcripts are saved without summaries",
 );
 
-const exportTranscript = config.notion ? createNotionExporter(config.notion) : undefined;
-if (!exportTranscript) {
-  console.log("NOTION_TOKEN/NOTION_DATABASE_ID not set — transcripts are not exported to Notion");
-}
+// The directory has to exist before `openDb` runs: nothing else creates it
+// this early (TranscriptStore only creates it lazily, on the first write),
+// so on a fresh volume `openDb` would otherwise throw SQLITE_CANTOPEN at
+// import time and boot-loop the process. `dbPath` defaults beside the
+// transcripts on the same persistent volume, so identities survive a
+// redeploy; an in-memory store here would force every device to re-register.
+mkdirSync(config.transcriptsDir, { recursive: true });
+// And the database's own directory, which is only the same one by default: a
+// DB_PATH pointed anywhere else (a sibling directory on the volume, say) that
+// does not exist yet fails with SQLITE_CANTOPEN at import time, which on Fly
+// is a boot loop rather than an error anyone reads.
+mkdirSync(dirname(config.dbPath), { recursive: true });
+const db = openDb(config.dbPath);
+const identity = new IdentityStore(db);
+
+const destinations = new ExportDestinationStore(db, keyFromEnv(process.env.ENCRYPTION_KEY));
+
+/**
+ * Build that user's Notion clients from their stored credentials. Constructed
+ * per call rather than cached: a user can disconnect or reconnect at any time,
+ * and a cached client would keep exporting to a workspace they revoked.
+ */
+const resolveExporters: ResolveExporters = (userId) => {
+  const connection = destinations.getNotion(userId);
+  if (!connection) return undefined;
+  const opts = { token: connection.token, databaseId: connection.config.databaseId };
+  return {
+    export: createNotionExporter(opts),
+    update: createNotionUpdater(opts),
+    patchSummary: createNotionSummaryPatcher(opts),
+  };
+};
 
 const transcripts = new TranscriptStore({
   root: config.transcriptsDir,
   onFinalize: createFinalizer({
     root: config.transcriptsDir,
     summarize,
-    export: exportTranscript,
-    update: config.notion ? createNotionUpdater(config.notion) : undefined,
+    resolve: resolveExporters,
   }),
 });
 
@@ -101,20 +130,6 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
       );
   }
 }
-
-// The directory has to exist before `openDb` runs: nothing else creates it
-// this early (TranscriptStore only creates it lazily, on the first write),
-// so on a fresh volume `openDb` would otherwise throw SQLITE_CANTOPEN at
-// import time and boot-loop the process. `dbPath` defaults beside the
-// transcripts on the same persistent volume, so identities survive a
-// redeploy; an in-memory store here would force every device to re-register.
-mkdirSync(config.transcriptsDir, { recursive: true });
-// And the database's own directory, which is only the same one by default: a
-// DB_PATH pointed anywhere else (a sibling directory on the volume, say) that
-// does not exist yet fails with SQLITE_CANTOPEN at import time, which on Fly
-// is a boot loop rather than an error anyone reads.
-mkdirSync(dirname(config.dbPath), { recursive: true });
-const identity = new IdentityStore(openDb(config.dbPath));
 
 // One-time (per install) adoption of transcripts written before the relay was
 // multi-tenant. No-ops on every boot after the first, once the flat root
@@ -175,7 +190,8 @@ function userDirs(root: string): { dir: string; userId: string }[] {
  * Runs once per user directory and sums the results, rather than once over
  * the flat root: transcripts live under `userDir(root, userId)` now, so a
  * single sweep of the root itself would see no `.jsonl` files and do
- * nothing.
+ * nothing. Each directory's owner resolves their own Notion connection (or
+ * none), rather than this sweep being gated on one operator-wide setting.
  */
 async function runBackfills(): Promise<void> {
   const dirs = userDirs(config.transcriptsDir);
@@ -187,7 +203,7 @@ async function runBackfills(): Promise<void> {
         dir,
         userId,
         summarize,
-        patchPage: config.notion ? createNotionSummaryPatcher(config.notion) : undefined,
+        resolve: resolveExporters,
       });
       totals.summarized += r.summarized;
       totals.patched += r.patched;
@@ -199,10 +215,10 @@ async function runBackfills(): Promise<void> {
       );
     }
   }
-  if (exportTranscript) {
+  {
     const totals = { exported: 0, failed: 0 };
     for (const { dir, userId } of dirs) {
-      const r = await backfillNotion({ dir, userId, export: exportTranscript });
+      const r = await backfillNotion({ dir, userId, resolve: resolveExporters });
       totals.exported += r.exported;
       totals.failed += r.failed;
     }

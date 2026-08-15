@@ -8,18 +8,28 @@ import {
   userDir,
 } from "./transcriptStore";
 import { Summarize } from "./summarizer";
-import { ExportTranscript } from "./notionExporter";
+import { ExportTranscript, PatchSummary } from "./notionExporter";
 import { UpdateExport } from "./notionUpdater";
+
+export interface UserExporters {
+  export: ExportTranscript;
+  update: UpdateExport;
+  patchSummary: PatchSummary;
+}
+
+/** That user's Notion connection, or undefined if they have not connected one. */
+export type ResolveExporters = (userId: string) => UserExporters | undefined;
 
 export interface FinalizerOptions {
   /** Root transcript directory; the per-user summary directory is derived from `t.userId`. */
   root: string;
   /** Optional Claude summarizer. */
   summarize?: Summarize;
-  /** Optional external export (Notion). */
-  export?: ExportTranscript;
-  /** Optional in-place update, used when a resumed session ends. */
-  update?: UpdateExport;
+  /**
+   * Resolved per transcript rather than captured once, because each user
+   * exports to their own workspace with their own credentials.
+   */
+  resolve?: ResolveExporters;
 }
 
 /**
@@ -42,7 +52,7 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
   if (!isSubstantial(t)) return;
   // Nothing below here writes anything, so there is nothing worth resolving
   // or creating a directory for.
-  if (!opts.summarize && !opts.export) return;
+  if (!opts.summarize && !opts.resolve) return;
 
   let dir: string;
   try {
@@ -81,7 +91,10 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
 
   // Export independently of the summary: a transcript is still worth having in
   // Notion when Claude is unconfigured or the summary call failed.
-  if (opts.export) await exportOnce(opts.export, dir, t, summary, opts.update);
+  const exporters = opts.resolve?.(t.userId);
+  if (exporters) {
+    await exportOnce(exporters.export, dir, t, summary, exporters.update);
+  }
 }
 
 /**

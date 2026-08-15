@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { backfillNotion } from "./notionBackfill";
+import { ResolveExporters, UserExporters } from "./finalizer";
 import {
   TranscriptStore,
   FinalizedTranscript,
@@ -35,6 +36,21 @@ const ok = () => vi.fn(async (_t: FinalizedTranscript, _s: string | null) => ({
   url: "https://notion.so/p1",
 }));
 
+/** Wraps an `export` fn into the `resolve` shape `backfillNotion` now takes, for user `U`. */
+function resolveWith(exportTranscript: UserExporters["export"]): ResolveExporters {
+  return (userId) =>
+    userId === U
+      ? {
+          export: exportTranscript,
+          update: async () => ({ pageId: "p1", url: "https://notion.so/p1", exportedSegments: 0 }),
+          patchSummary: async () => {},
+        }
+      : undefined;
+}
+
+/** A user with no Notion connection at all. */
+const noConnection: ResolveExporters = () => undefined;
+
 describe("backfillNotion", () => {
   let root: string;
   beforeEach(() => {
@@ -54,7 +70,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -70,7 +86,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -92,7 +108,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -107,7 +123,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -122,7 +138,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -142,7 +158,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -158,7 +174,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -175,7 +191,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
       limit: 2,
     });
@@ -190,7 +206,7 @@ describe("backfillNotion", () => {
     const result = await backfillNotion({
       dir: join(scoped(root), "missing"),
       userId: U,
-      export: exportTranscript,
+      resolve: resolveWith(exportTranscript),
       delayMs: 0,
     });
 
@@ -206,7 +222,7 @@ describe("backfillNotion", () => {
     await backfillNotion({
       dir: scoped(root),
       userId: U,
-      export: ok(),
+      resolve: resolveWith(ok()),
       delayMs: 400,
       sleep: async (ms) => {
         waits.push(ms);
@@ -214,5 +230,18 @@ describe("backfillNotion", () => {
     });
 
     expect(waits).toEqual([400, 400]);
+  });
+
+  it("does nothing for a user with no Notion connection", async () => {
+    storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+
+    const result = await backfillNotion({
+      dir: scoped(root),
+      userId: U,
+      resolve: noConnection,
+      delayMs: 0,
+    });
+
+    expect(result).toEqual({ exported: 0, skipped: 0, failed: 0 });
   });
 });

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { backfillSummaries } from "./summaryBackfill";
+import { ResolveExporters } from "./finalizer";
 import {
   TranscriptStore,
   FinalizedTranscript,
@@ -30,6 +31,21 @@ function storeSession(root: string, id: string, at: number, texts: string[] = [L
 }
 
 const summarizer = () => vi.fn(async (_t: FinalizedTranscript) => "A chat happened.");
+
+/** Wraps a `patchSummary` fn into the `resolve` shape `backfillSummaries` now takes, for user `U`. */
+function resolveWith(patchSummary: (pageId: string, summary: string) => Promise<void>): ResolveExporters {
+  return (userId) =>
+    userId === U
+      ? {
+          export: async () => ({ pageId: "p1", url: "u" }),
+          update: async () => ({ pageId: "p1", url: "u", exportedSegments: 0 }),
+          patchSummary,
+        }
+      : undefined;
+}
+
+/** A user with no Notion connection at all. */
+const noConnection: ResolveExporters = () => undefined;
 
 describe("backfillSummaries", () => {
   let root: string;
@@ -144,7 +160,7 @@ describe("backfillSummaries", () => {
       userId: U,
       summarize: summarizer(),
       delayMs: 0,
-      patchPage,
+      resolve: resolveWith(patchPage),
     });
 
     expect(patchPage).toHaveBeenCalledWith("page-1", "A chat happened.");
@@ -160,7 +176,7 @@ describe("backfillSummaries", () => {
       userId: U,
       summarize: summarizer(),
       delayMs: 0,
-      patchPage,
+      resolve: resolveWith(patchPage),
     });
 
     expect(patchPage).not.toHaveBeenCalled();
@@ -179,7 +195,7 @@ describe("backfillSummaries", () => {
       userId: U,
       summarize: summarizer(),
       delayMs: 0,
-      patchPage,
+      resolve: resolveWith(patchPage),
     });
 
     expect(readTranscript(scoped(root), name)?.summary).toBe("A chat happened.");
@@ -202,5 +218,52 @@ describe("backfillSummaries", () => {
     });
 
     expect(waits).toEqual([500, 500]);
+  });
+
+  // A user with no Notion connection still wants their summaries generated
+  // and written to disk — that is local work with nothing to do with Notion.
+  // Unlike `backfillNotion`, `backfillSummaries` must not bail out early on
+  // a missing connection.
+  it("still summarizes for a user with no Notion connection", async () => {
+    const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({
+      dir: scoped(root),
+      userId: U,
+      summarize,
+      delayMs: 0,
+      resolve: noConnection,
+    });
+
+    expect(summarize).toHaveBeenCalledOnce();
+    expect(result.summarized).toBe(1);
+    expect(readTranscript(scoped(root), name)?.summary).toBe("A chat happened.");
+  });
+
+  it("does not patch an already-exported page for a user with no Notion connection", async () => {
+    const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+    writeExportMarker(scoped(root), name, { pageId: "page-1", url: "u" });
+
+    const result = await backfillSummaries({
+      dir: scoped(root),
+      userId: U,
+      summarize: summarizer(),
+      delayMs: 0,
+      resolve: noConnection,
+    });
+
+    expect(result).toMatchObject({ summarized: 1, patched: 0 });
+  });
+
+  it("omitting resolve entirely still summarizes without patching", async () => {
+    const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({ dir: scoped(root), userId: U, summarize, delayMs: 0 });
+
+    expect(result.summarized).toBe(1);
+    expect(result.patched).toBe(0);
+    expect(readTranscript(scoped(root), name)?.summary).toBe("A chat happened.");
   });
 });

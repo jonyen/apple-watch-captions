@@ -4,8 +4,7 @@ import {
   readTranscript,
   rebuildFinalized,
 } from "./transcriptStore";
-import { ExportTranscript } from "./notionExporter";
-import { exportOnce, isSubstantial } from "./finalizer";
+import { ResolveExporters, exportOnce, isSubstantial } from "./finalizer";
 
 export interface BackfillOptions {
   dir: string;
@@ -16,7 +15,7 @@ export interface BackfillOptions {
    * export work that will read it) cannot use.
    */
   userId: string;
-  export: ExportTranscript;
+  resolve: ResolveExporters;
   /** Stop after this many exports (a boot sweep shouldn't run forever). */
   limit?: number;
   /** Pause between transcripts; Notion allows roughly 3 requests/second. */
@@ -42,6 +41,9 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
   const delayMs = opts.delayMs ?? 400;
   const result: BackfillResult = { exported: 0, skipped: 0, failed: 0 };
 
+  const exporters = opts.resolve(opts.userId);
+  if (!exporters) return result;
+
   const pending = listTranscripts(opts.dir).reverse();
   for (const listed of pending) {
     if (opts.limit !== undefined && result.exported >= opts.limit) break;
@@ -60,7 +62,7 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
       continue;
     }
     if (delayMs > 0) await sleep(delayMs);
-    const done = await exportOnce(opts.export, opts.dir, transcript, detail.summary);
+    const done = await exportOnce(exporters.export, opts.dir, transcript, detail.summary);
     done ? result.exported++ : result.failed++;
   }
   return result;

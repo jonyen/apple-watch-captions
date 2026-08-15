@@ -6,7 +6,7 @@ import {
   writeSummary,
 } from "./transcriptStore";
 import { Summarize } from "./summarizer";
-import { isSubstantial } from "./finalizer";
+import { ResolveExporters, isSubstantial } from "./finalizer";
 
 export interface SummaryBackfillOptions {
   dir: string;
@@ -19,10 +19,14 @@ export interface SummaryBackfillOptions {
   userId: string;
   summarize: Summarize;
   /**
-   * Optional: add the freshly generated summary to a Notion page that was
-   * already exported without one. Skipped for transcripts never exported.
+   * Optional: this user's Notion connection, used to add the freshly
+   * generated summary to a page that was already exported without one. A
+   * user with no connection (`resolve` unset, or it returns `undefined` for
+   * them) still gets their summaries generated and written to disk — that is
+   * local work with nothing to do with Notion — the patch step is just
+   * skipped.
    */
-  patchPage?: (pageId: string, summary: string) => Promise<void>;
+  resolve?: ResolveExporters;
   /** Stop after this many summaries (each one is a paid model call). */
   limit?: number;
   /** Pause between transcripts, to stay clear of API rate limits. */
@@ -51,6 +55,7 @@ export async function backfillSummaries(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const delayMs = opts.delayMs ?? 1000;
   const result: SummaryBackfillResult = { summarized: 0, skipped: 0, failed: 0, patched: 0 };
+  const exporters = opts.resolve?.(opts.userId);
 
   for (const listed of listTranscripts(opts.dir).reverse()) {
     if (opts.limit !== undefined && result.summarized >= opts.limit) break;
@@ -92,9 +97,9 @@ export async function backfillSummaries(
     // The transcript may already be a Notion page created before the summary
     // existed. Update that page rather than exporting a duplicate.
     const marker = readExportMarker(opts.dir, listed.name);
-    if (opts.patchPage && marker) {
+    if (exporters?.patchSummary && marker) {
       try {
-        await opts.patchPage(marker.pageId, summary);
+        await exporters.patchSummary(marker.pageId, summary);
         result.patched++;
         console.log(`summary added to ${marker.url}`);
       } catch (err) {

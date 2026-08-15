@@ -21,6 +21,12 @@ export interface Config {
   assemblyaiApiKey?: string;
   /** Optional; when set, finished transcripts are exported to Notion. */
   notion?: NotionConfig;
+  /**
+   * Optional; seals/opens the secrets in `export_destinations`. Unset means
+   * per-user export destinations are disabled — captioning itself must not
+   * depend on this being configured.
+   */
+  encryptionKey?: string;
   /** Deepgram model for phone audio. Overridable — the right one is an open question. */
   deepgramPhoneModel: string;
   /** Optional; the number Twilio bridges an inbound captioned call to. */
@@ -61,6 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     openaiApiKey: env.OPENAI_API_KEY || undefined,
     assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
     notion: loadNotion(env),
+    encryptionKey: env.ENCRYPTION_KEY || undefined,
     // "phonecall" is the safe baseline: @deepgram/sdk@3.13.0 only exposes
     // listen.live() against the v1 `:version/listen` endpoint, and Flux
     // models are served by a separate v2 streaming API this relay does not

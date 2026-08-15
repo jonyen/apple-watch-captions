@@ -68,15 +68,27 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 const db = openDb(config.dbPath);
 const identity = new IdentityStore(db);
 
-const destinations = new ExportDestinationStore(db, keyFromEnv(process.env.ENCRYPTION_KEY));
+// Per-user export destinations are an add-on to captioning, not a
+// precondition for it: an operator who upgrades without provisioning
+// ENCRYPTION_KEY yet must still get working live captions, not a boot loop.
+// `keyFromEnv` still throws on a key that is present but malformed or the
+// wrong length — only *absent* is treated as a valid feature-off state here.
+const destinations = config.encryptionKey
+  ? new ExportDestinationStore(db, keyFromEnv(config.encryptionKey))
+  : undefined;
+if (!destinations) {
+  console.log("Export destinations disabled: ENCRYPTION_KEY is not set");
+}
 
 /**
  * Build that user's Notion clients from their stored credentials. Constructed
  * per call rather than cached: a user can disconnect or reconnect at any time,
  * and a cached client would keep exporting to a workspace they revoked.
+ * Returns undefined for every user when export destinations are disabled,
+ * which the finalizer and both backfills already treat as "no connection".
  */
 const resolveExporters: ResolveExporters = (userId) => {
-  const connection = destinations.getNotion(userId);
+  const connection = destinations?.getNotion(userId);
   if (!connection) return undefined;
   const opts = { token: connection.token, databaseId: connection.config.databaseId };
   return {

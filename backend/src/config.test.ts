@@ -123,6 +123,16 @@ describe("loadConfig", () => {
     warn.mockRestore();
   });
 
+  it("leaves the encryption key unset when ENCRYPTION_KEY is not configured", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    expect(cfg.encryptionKey).toBeUndefined();
+  });
+
+  it("reads ENCRYPTION_KEY when set", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", ENCRYPTION_KEY: "base64-key-value" });
+    expect(cfg.encryptionKey).toBe("base64-key-value");
+  });
+
   it("defaults the port to 8080 when unset", () => {
     const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.port).toBe(8080);

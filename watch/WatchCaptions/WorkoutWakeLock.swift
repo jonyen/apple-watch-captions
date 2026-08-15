@@ -31,6 +31,17 @@ final class WorkoutWakeLock: DisplayWakeLocking {
     /// Retained so a release arriving before authorization finishes can cancel it.
     private var startTask: Task<Void, Never>?
     private let delegate = WorkoutSessionDelegate()
+    /// Identifies the current acquire/release cycle. `startTask?.cancel()` in
+    /// `release()` is only a best-effort request — HealthKit does not observe
+    /// Swift task cancellation, so `requestAuthorization` can still resume
+    /// long after the task that awaits it was cancelled, possibly after a
+    /// later `acquire()` has already started a new attempt. `Task.isCancelled`
+    /// alone can't tell that stale resumption apart from a current one, so
+    /// every write the task makes to `startTask`/`session` is guarded by
+    /// comparing against this instead. Bumped by `acquire()` (once it clears
+    /// the re-entrancy guard) and by `release()`, mirroring
+    /// `SessionController.generation`.
+    private var generation = 0
 
     func acquire() {
         guard HKHealthStore.isHealthDataAvailable() else {
@@ -38,24 +49,29 @@ final class WorkoutWakeLock: DisplayWakeLocking {
             return
         }
         guard session == nil, startTask == nil else { return }
+        generation += 1
+        let generation = self.generation
         startTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.store.requestAuthorization(toShare: [HKObjectType.workoutType()], read: [])
             } catch {
                 print("[wakelock] authorization failed: \(error); screen will dim")
-                self.startTask = nil
+                if self.generation == generation { self.startTask = nil }
                 return
             }
-            guard !Task.isCancelled else {
-                self.startTask = nil
-                return
-            }
+            // A generation mismatch here means release() (or a superseding
+            // acquire()) already moved on without us; don't touch startTask
+            // or session, and don't start a session this instance no longer
+            // wants running.
+            guard self.generation == generation else { return }
+            self.startTask = nil
             self.beginSession()
         }
     }
 
     func release() {
+        generation += 1
         startTask?.cancel()
         startTask = nil
         session?.end()
@@ -63,7 +79,6 @@ final class WorkoutWakeLock: DisplayWakeLocking {
     }
 
     private func beginSession() {
-        startTask = nil
         let configuration = HKWorkoutConfiguration()
         configuration.activityType = .other
         configuration.locationType = .indoor

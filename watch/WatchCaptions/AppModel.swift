@@ -39,6 +39,12 @@ final class AppModel: ObservableObject {
         didSet { defaults.set(stoppedExplicitly, forKey: Keys.stoppedExplicitly) }
     }
 
+    /// Whether the next session should hold the screen awake. Remembered,
+    /// because propping the watch on a table is a habit, not a one-off.
+    @Published var keepScreenOn = false {
+        didSet { defaults.set(keepScreenOn, forKey: Keys.keepScreenOn) }
+    }
+
     /// True while the call screen is up but no call has arrived yet. The
     /// screen is entered by choice, before anyone has dialled — without this
     /// the user faced a blank caption view whose indicator claimed a call was
@@ -111,10 +117,12 @@ final class AppModel: ObservableObject {
             permission: micPermission,
             // Resuming a session restores its transcript; this reads it. Kept
             // off HistoryStore, whose `detail` belongs to the history screen.
-            history: historyClient
+            history: historyClient,
+            wakeLock: WorkoutWakeLock()
         )
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
+        keepScreenOn = defaults.bool(forKey: Keys.keepScreenOn)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
         // The wait ends when the relay says a call is live. Nothing before
         // that point should start audio or accept a talk gesture — there is
@@ -385,7 +393,7 @@ final class AppModel: ObservableObject {
         }
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
-        await controller.start(mode: mode)
+        await controller.start(mode: mode, keepAwake: keepScreenOn)
     }
 
     /// End the session and remember it, so reopening can offer to continue.
@@ -529,6 +537,7 @@ final class AppModel: ObservableObject {
         static let transcriptName = "lastTranscriptName"
         static let endedAt = "lastSessionEndedAt"
         static let stoppedExplicitly = "stoppedExplicitly"
+        static let keepScreenOn = "keepScreenOn"
     }
 
     private static func loadLastSession(from defaults: UserDefaults) -> LastSession? {

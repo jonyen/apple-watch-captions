@@ -53,7 +53,9 @@ private struct RootView: View {
                     onLive: { Task { await model.startLive() } },
                     onContinue: { Task { await model.continueLast() } },
                     onBrowse: { Task { await model.showHistory() } },
-                    onTakeCall: { model.takeCall() })
+                    onTakeCall: { model.takeCall() },
+                    keepScreenOn: model.keepScreenOn,
+                    onKeepScreenOnChange: { model.keepScreenOn = $0 })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:

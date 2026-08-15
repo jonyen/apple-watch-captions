@@ -10,6 +10,9 @@ struct HomeView: View {
     let onContinue: () -> Void
     let onBrowse: () -> Void
     let onTakeCall: () -> Void
+    /// Whether the next session holds the screen awake.
+    let keepScreenOn: Bool
+    let onKeepScreenOnChange: (Bool) -> Void
     /// Which build this is, so a bug report can name one. Injectable for previews.
     var versionLabel: String = AppBuild.versionLabel
 
@@ -58,6 +61,9 @@ struct HomeView: View {
                 Button(action: onContinue) {
                     Label("Continue last", systemImage: "arrow.clockwise")
                 }
+            }
+            Toggle(isOn: Binding(get: { keepScreenOn }, set: onKeepScreenOnChange)) {
+                Label("Keep screen on", systemImage: "sun.max")
             }
             Button(action: onTakeCall) {
                 Label("Take call", systemImage: "phone.badge.waveform")

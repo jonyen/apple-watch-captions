@@ -17,7 +17,7 @@ import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
 import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
-import { adoptLegacyNotionIfUnambiguous } from "./exportDestinations";
+import { adoptLegacyNotionAtBoot } from "./exportDestinations";
 import { buildServerOptions, buildResolveExporters } from "./serverOptions";
 
 const config = loadConfig(process.env);
@@ -178,13 +178,19 @@ if (migrated) {
 
 // The legacy single-workspace NOTION_TOKEN has no reliable owner once the
 // relay is multi-tenant — it only maps unambiguously onto a user when there
-// is exactly one. Safe to re-run every boot: `adoptLegacyNotionIfUnambiguous`
-// resolves a user (adopted, or found already connected) at most once ever,
-// via a marker that survives that user later disconnecting — so this can
-// never silently undo a deliberate Disconnect. See its doc comment in
-// exportDestinations.ts for the rest of the reasoning, including why it is
-// deliberately independent of the flat-transcript migration above.
-const legacyNotion = adoptLegacyNotionIfUnambiguous(identity, options.destinations, config.notion);
+// is exactly one. Safe to re-run every boot: the adoption resolves a user
+// (adopted, or found already connected) at most once ever, via a marker that
+// survives that user later disconnecting — so this can never silently undo a
+// deliberate Disconnect. See its doc comment in exportDestinations.ts for the
+// rest of the reasoning, including why it is deliberately independent of the
+// flat-transcript migration above.
+//
+// `adoptLegacyNotionAtBoot`, not `adoptLegacyNotionIfUnambiguous`: this is
+// module scope, so an exception here is not a failed adoption but a relay
+// that never listens, on a Fly restart loop, with captioning down for an
+// export-only reason (a rotated ENCRYPTION_KEY, a database restored from
+// another environment). The wrapper logs and returns `failed` instead.
+const legacyNotion = adoptLegacyNotionAtBoot(identity, options.destinations, config.notion);
 if (legacyNotion.outcome === "adopted") {
   console.log(`Adopted the legacy Notion connection onto the relay's one user (${legacyNotion.userId}).`);
 } else if (legacyNotion.outcome === "already-resolved") {

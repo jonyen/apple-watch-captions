@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { randomBytes } from "crypto";
 import { startServer, CaptionServer, StartServerOptions } from "./server";
 import { openDb } from "./db";
@@ -6,6 +6,7 @@ import { IdentityStore } from "./identityStore";
 import {
   ExportDestinationStore,
   adoptLegacyNotion,
+  adoptLegacyNotionAtBoot,
   adoptLegacyNotionIfUnambiguous,
 } from "./exportDestinations";
 import { OAuthStateStore } from "./notionOAuth";
@@ -708,5 +709,64 @@ describe("adoptLegacyNotionIfUnambiguous", () => {
 
     expect(result).toEqual({ outcome: "already-resolved", userId: solo });
     expect(destinations.getNotion(solo)!.token).toBe("ntn_own");
+  });
+});
+
+// Final review, Important 1: the entrypoint calls this at module scope, so a
+// throw here is not "adoption failed" — it is the relay failing to boot at
+// all, on a loop, with captioning down for an export-only reason. There is no
+// test that can boot `index.ts` (real API keys, a writable volume, a listening
+// port), so the guarantee is asserted one layer down, on the function the
+// entrypoint is required — by `deployWiring.test.ts` — to call instead of the
+// throwing one.
+describe("adoptLegacyNotionAtBoot", () => {
+  const legacy = { token: "ntn_legacy", databaseId: "db-legacy" };
+
+  /**
+   * A sole user whose stored Notion secret cannot be opened under the store's
+   * current key: `ENCRYPTION_KEY` rotated, or the database restored into
+   * another environment. `open()` throws on the auth-tag check.
+   */
+  function unopenableFixture() {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const solo = identity.registerDevice("mac").userId;
+    new ExportDestinationStore(db, randomBytes(32)).putNotion(solo, "ntn_own", {
+      databaseId: "db-own",
+    });
+    return { identity, destinations: new ExportDestinationStore(db, randomBytes(32)) };
+  }
+
+  it("survives an adoption that throws, instead of taking the process down with it", () => {
+    const { identity, destinations } = unopenableFixture();
+    // Pins the premise: without this, the test would still pass if the
+    // scenario quietly stopped being a throwing one.
+    expect(() => adoptLegacyNotionIfUnambiguous(identity, destinations, legacy)).toThrow();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    let result: unknown;
+    expect(() => {
+      result = adoptLegacyNotionAtBoot(identity, destinations, legacy);
+    }).not.toThrow();
+
+    expect(result).toEqual({ outcome: "failed" });
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it("is otherwise the same adoption, so guarding it costs nothing", () => {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const solo = identity.registerDevice("mac").userId;
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+
+    expect(adoptLegacyNotionAtBoot(identity, destinations, legacy)).toEqual({
+      outcome: "adopted",
+      userId: solo,
+    });
+    expect(destinations.getNotion(solo)).toEqual({
+      token: "ntn_legacy",
+      config: { databaseId: "db-legacy" },
+    });
   });
 });

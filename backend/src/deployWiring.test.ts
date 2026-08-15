@@ -69,6 +69,19 @@ describe("deployment wiring", () => {
     expect(read("src/index.ts")).toMatch(/startServer\(options\)/);
   });
 
+  // Final review, Important 1: the legacy-Notion adoption runs at module
+  // scope in `index.ts` and reaches `secretBox.open()`, which throws on a bad
+  // auth tag or an unknown version prefix. Unguarded, that is a boot loop
+  // that takes captioning down for an export reason. The guard lives in
+  // `adoptLegacyNotionAtBoot` (behaviour covered in `server.exports.test.ts`);
+  // what no unit test can see is which of the two functions the entrypoint
+  // actually calls, since nothing in the suite boots `index.ts`.
+  it("adopts the legacy Notion config through the boot-safe wrapper, never the throwing one", () => {
+    const source = read("src/index.ts");
+    expect(source).toMatch(/adoptLegacyNotionAtBoot\(identity, options\.destinations,/);
+    expect(source).not.toMatch(/adoptLegacyNotionIfUnambiguous\(identity/);
+  });
+
   // PUBLIC_BASE_URL is not a secret (this deploy's own public origin), so it
   // belongs in `[env]` like TRUST_PROXY_HEADERS above, and has one correct
   // default (the app's own fly.dev hostname).

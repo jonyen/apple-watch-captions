@@ -158,7 +158,9 @@ export type LegacyNotionAdoption =
   | { outcome: "adopted"; userId: string }
   | { outcome: "already-resolved"; userId: string }
   | { outcome: "ambiguous" }
-  | { outcome: "not-configured" };
+  | { outcome: "not-configured" }
+  /** Something threw on the way; see `adoptLegacyNotionAtBoot`. */
+  | { outcome: "failed" };
 
 /**
  * Decide whether the pre-OAuth `NOTION_TOKEN`/`NOTION_DATABASE_ID` pair can
@@ -203,4 +205,35 @@ export function adoptLegacyNotionIfUnambiguous(
   return alreadyConnected
     ? { outcome: "already-resolved", userId: solo }
     : { outcome: "adopted", userId: solo };
+}
+
+/**
+ * `adoptLegacyNotionIfUnambiguous`, wrapped so it cannot stop the relay
+ * booting. Call this from the entrypoint; call the unwrapped function only
+ * where a throw is something the caller can actually handle.
+ *
+ * The adoption reaches `getNotion` → `secretBox.open()`, which throws on a bad
+ * auth tag, an unrecognized version prefix, or config that will not parse —
+ * all reachable in production (`ENCRYPTION_KEY` rotated, a database restored
+ * into another environment) and all of them *export* problems. Unwrapped, at
+ * module scope, that throw exits the process before `startServer` is ever
+ * reached, and Fly restarts it into the same throw: captioning — the actual
+ * product — dies for an add-on's broken secret. Same rule, and the same
+ * shape, as `finalizer.ts`'s guard around `opts.resolve`: log it and carry
+ * on with exports simply not adopted.
+ */
+export function adoptLegacyNotionAtBoot(
+  identity: IdentityStore,
+  destinations: ExportDestinationStore | undefined,
+  legacy: { token: string; databaseId: string } | undefined,
+): LegacyNotionAdoption {
+  try {
+    return adoptLegacyNotionIfUnambiguous(identity, destinations, legacy);
+  } catch (err) {
+    console.error(
+      "could not adopt the legacy Notion connection (the relay is otherwise unaffected):",
+      err,
+    );
+    return { outcome: "failed" };
+  }
 }

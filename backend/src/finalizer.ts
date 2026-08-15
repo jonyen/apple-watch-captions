@@ -142,6 +142,15 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
 }
 
 /**
+ * What one `exportOnce` call did. Three outcomes rather than a boolean,
+ * because "nothing to do" and "tried and failed" are different things to a
+ * caller that counts them: the boot sweep reports its totals to the operator,
+ * and calling an already-exported transcript a failure sends them looking for
+ * a Notion problem that does not exist.
+ */
+export type ExportOutcome = "exported" | "skipped" | "failed";
+
+/**
  * Send this transcript to Notion. A transcript with no marker is created; one
  * that already has a page is updated in place when an updater is configured
  * (a resumed session), and otherwise left alone.
@@ -155,19 +164,23 @@ export async function exportOnce(
   t: FinalizedTranscript,
   summary: string | null,
   update?: UpdateExport,
-): Promise<boolean> {
+): Promise<ExportOutcome> {
   const marker = readExportMarker(dir, t.name);
 
   if (marker) {
-    if (!update) return false;
+    // Already exported and no updater configured: there is nothing this call
+    // can usefully do, and nothing went wrong. In the backfill this is the
+    // boot sweep racing a live finalize that landed the marker in between —
+    // routine, so it stays quiet and counts as skipped, not failed.
+    if (!update) return "skipped";
     try {
       const result = await update(t, summary, marker);
       writeExportMarker(dir, t.name, result);
       console.log(`updated ${t.name} at ${result.url}`);
-      return true;
+      return "exported";
     } catch (err) {
       console.error(`page update failed for ${t.name}:`, err);
-      return false;
+      return "failed";
     }
   }
 
@@ -178,9 +191,9 @@ export async function exportOnce(
       exportedSegments: t.segments.length,
     });
     console.log(`exported ${t.name} to ${result.url}`);
-    return true;
+    return "exported";
   } catch (err) {
     console.error(`export failed for ${t.name}:`, err);
-    return false;
+    return "failed";
   }
 }

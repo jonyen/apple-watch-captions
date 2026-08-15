@@ -72,8 +72,13 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
       continue;
     }
     if (delayMs > 0) await sleep(delayMs);
-    const done = await exportOnce(exporters.export, opts.dir, transcript, detail.summary);
-    done ? result.exported++ : result.failed++;
+    // Three-way, not a boolean: the loop's own marker check above and
+    // `exportOnce`'s re-read are two separate reads, and a live finalize can
+    // land the marker in between (this sweep runs at boot, while sessions are
+    // finishing). That is ordinary, and counting it as `failed` put "Notion
+    // backfill: 0 exported, 1 failed" in the boot log for a case where
+    // nothing failed.
+    result[await exportOnce(exporters.export, opts.dir, transcript, detail.summary)]++;
   }
   return result;
 }

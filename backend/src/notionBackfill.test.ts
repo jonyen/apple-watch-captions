@@ -301,17 +301,24 @@ describe("backfillNotion", () => {
   // transcript concurrently. `backfillNotion` never passes an updater, so
   // `exportOnce`'s `if (!update) return false` must fire quietly here.
   //
-  // The exporter-not-called / marker-unchanged / failed:1 assertions below
-  // hold identically whether that branch exists or not: without it,
+  // The exporter-not-called / marker-unchanged assertions below hold
+  // identically whether that branch exists or not: without it,
   // `update(t, summary, marker)` calls `undefined` as a function, throws
-  // synchronously, is caught by the catch two lines down, and returns
-  // `false` — same externally observable result, except it logs "page
-  // update failed for ...". That log line is the one thing that actually
-  // discriminates the two implementations, and it matters on its own: this
+  // synchronously, is caught by the catch two lines down, and returns a
+  // failure — same externally observable result, except it logs "page
+  // update failed for ...". That log line is one of the two things that
+  // discriminate the two implementations, and it matters on its own: this
   // path is the boot sweep racing a live finalize, which is expected and
   // benign, not an export failure — logging one would mislead an operator
-  // grepping for real problems. So the assertion that proves this test
-  // covers the branch it is named for is `consoleError` staying silent.
+  // grepping for real problems. So `consoleError` staying silent is part of
+  // what proves this test covers the branch it is named for.
+  //
+  // The other is the count. The final review's smaller item 4: silencing the
+  // log left this case still counted as `failed`, so the boot log said
+  // "Notion backfill: 0 exported, 1 failed" for a routine race — the
+  // misleading signal moved one line down rather than going away. It is
+  // `skipped` now, which is what "there was nothing to do here" already
+  // means everywhere else in this sweep.
   it("leaves a marker written between listing and export alone, rather than re-exporting or overwriting it", async () => {
     const name = storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3));
     const exportTranscript = ok();
@@ -330,7 +337,7 @@ describe("backfillNotion", () => {
     });
 
     expect(exportTranscript).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ exported: 0, failed: 1 });
+    expect(result).toEqual({ exported: 0, skipped: 1, failed: 0 });
     expect(readExportMarker(scoped(root), name)).toMatchObject({ pageId: "live-export" });
     expect(consoleError).not.toHaveBeenCalled();
   });

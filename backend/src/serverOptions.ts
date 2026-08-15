@@ -51,6 +51,7 @@ export interface ServerDeps {
 function revokeOn401<A extends unknown[], R>(
   destinations: ExportDestinationStore,
   userId: string,
+  failedToken: string,
   call: (...args: A) => Promise<R>,
 ): (...args: A) => Promise<R> {
   return async (...args) => {
@@ -58,7 +59,10 @@ function revokeOn401<A extends unknown[], R>(
       return await call(...args);
     } catch (err) {
       if (err instanceof NotionApiError && err.status === 401) {
-        destinations.markNotionRevoked(userId);
+        // Scoped to the token this client was built with. A sweep can run for
+        // minutes, and the badge asks the user to reconnect meanwhile — an
+        // unscoped revoke would kill the fresh connection they just made.
+        destinations.markNotionRevoked(userId, failedToken);
       }
       throw err;
     }
@@ -85,7 +89,7 @@ export function buildResolveExporters(
       ...(deps.fetchImpl ? { fetch: deps.fetchImpl } : {}),
     };
     const revoking = <A extends unknown[], R>(call: (...args: A) => Promise<R>) =>
-      revokeOn401(destinations, userId, call);
+      revokeOn401(destinations, userId, connection.token, call);
     return {
       export: revoking(createNotionExporter(opts)),
       update: revoking(createNotionUpdater(opts)),

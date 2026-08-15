@@ -79,6 +79,19 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
     // backfill: 0 exported, 1 failed" in the boot log for a case where
     // nothing failed.
     result[await exportOnce(exporters.export, opts.dir, transcript, detail.summary)]++;
+
+    // A 401 mid-sweep means the token is dead and revoked, and `exporters`
+    // still holds a client built around it. Without this the loop would spend
+    // the rest of the sweep — one paced request per pending transcript —
+    // re-proving the same failure and counting each one. Re-resolving is the
+    // cheapest way to notice, since a revoked connection no longer resolves.
+    if (!opts.resolve(opts.userId)) {
+      console.error(
+        `Notion connection for ${opts.userId} was revoked mid-sweep; stopping with ` +
+          `${pending.length - result.exported - result.skipped - result.failed} transcript(s) left`,
+      );
+      break;
+    }
   }
   return result;
 }

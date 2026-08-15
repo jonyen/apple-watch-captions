@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { randomBytes } from "crypto";
 import { openDb } from "./db";
 import { IdentityStore } from "./identityStore";
-import { ExportDestinationStore } from "./exportDestinations";
+import {
+  ExportDestinationStore,
+  adoptLegacyNotionIfUnambiguous,
+} from "./exportDestinations";
 
 const key = randomBytes(32);
 
@@ -196,5 +199,56 @@ describe("ExportDestinationStore revoked notion connections", () => {
     const { store, alice } = fixture();
     expect(() => store.markNotionRevoked(alice)).not.toThrow();
     expect(store.list(alice)).toEqual([]);
+  });
+});
+
+describe("legacy adoption never overwrites a revoked connection", () => {
+  it("leaves a revoked connection alone instead of adopting over it", () => {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const alice = identity.registerDevice("phone").userId;
+    const destinations = new ExportDestinationStore(db, key);
+    destinations.putNotion(alice, "ntn_alice", { databaseId: "alice-db" });
+    destinations.markNotionRevoked(alice);
+
+    // Sole user, no resolution marker — the state a relay reaches after an
+    // earlier boot was `ambiguous` and left no marker behind.
+    adoptLegacyNotionIfUnambiguous(identity, destinations, {
+      token: "ntn_operator",
+      databaseId: "operator-db",
+    });
+
+    const row = db
+      .prepare("SELECT config FROM export_destinations WHERE user_id = ? AND kind = ?")
+      .get(alice, "notion") as { config: string };
+    expect(JSON.parse(row.config).databaseId).toBe("alice-db");
+  });
+
+  it("reports a row as present even when it is revoked", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "ntn_secret", { databaseId: "db1" });
+    store.markNotionRevoked(alice);
+    expect(store.hasNotion(alice)).toBe(true);
+    expect(store.hasNotion("nobody")).toBe(false);
+  });
+});
+
+describe("markNotionRevoked is scoped to the token that failed", () => {
+  it("does not revoke a connection the user has since replaced", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "old-token", { databaseId: "db1" });
+    // The user reconnects while a doomed export against the old token is
+    // still in flight; its 401 lands afterwards and must not touch the new one.
+    store.putNotion(alice, "fresh-token", { databaseId: "db2" });
+    store.markNotionRevoked(alice, "old-token");
+    expect(store.getNotion(alice)).not.toBeNull();
+    expect(store.list(alice)[0]!.connected).toBe(true);
+  });
+
+  it("revokes when the failing token is the current one", () => {
+    const { store, alice } = fixture();
+    store.putNotion(alice, "current", { databaseId: "db1" });
+    store.markNotionRevoked(alice, "current");
+    expect(store.getNotion(alice)).toBeNull();
   });
 });

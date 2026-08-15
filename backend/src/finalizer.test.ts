@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { randomBytes } from "crypto";
 import { createFinalizer, ResolveExporters, UserExporters } from "./finalizer";
 import {
   FinalizedTranscript,
@@ -11,6 +12,10 @@ import {
   readExportMarker,
   userDir,
 } from "./transcriptStore";
+import { openDb } from "./db";
+import { IdentityStore } from "./identityStore";
+import { ExportDestinationStore } from "./exportDestinations";
+import { createTranscriptEmailSender } from "./emailSender";
 
 const U = "user-1";
 
@@ -330,6 +335,80 @@ describe("createFinalizer", () => {
       process.off("unhandledRejection", onRejection);
     }
     expect(rejections).toEqual([]);
+  });
+
+  // Fix-round: `run` used to return before ever reaching the email block
+  // when neither a summarizer nor a Notion connection was configured — a
+  // relay with only email export configured would never send anything, with
+  // the feature otherwise working end to end.
+  it("sends the transcript email even when neither a summarizer nor a Notion connection is configured", async () => {
+    const sent: string[] = [];
+    const finalize = createFinalizer({
+      root,
+      sendTranscriptEmail: async (userId) => {
+        sent.push(userId);
+      },
+    });
+    finalize(transcript(LONG));
+    await settle();
+    expect(sent).toEqual([U]);
+  });
+
+  // Sibling of the unhandled-rejection tests above, for the third thing
+  // `run` calls that a caller supplies: a throwing email sender (network
+  // failure, a rejected Resend call) must not become an unhandled
+  // rejection either, since `run` is invoked fire-and-forget.
+  it("does not produce an unhandled rejection when sendTranscriptEmail throws", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (err: unknown) => rejections.push(err);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const finalize = createFinalizer({
+        root,
+        sendTranscriptEmail: async () => {
+          throw new Error("resend down");
+        },
+      });
+      expect(() => finalize(transcript(LONG))).not.toThrow();
+      await settle();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections).toEqual([]);
+  });
+
+  // A user who re-submits a new address must not have it inherit their
+  // prior verification. This only holds because `ExportDestinationStore.put`
+  // replaces the whole config blob rather than merging fields — a real
+  // dependency this test pins, not an implementation detail of the sender
+  // above. Exercised at the finalizer layer (via a real
+  // `ExportDestinationStore` and `createTranscriptEmailSender`, not a fake)
+  // so a regression in either collaborator, or in the wiring between them,
+  // is caught here — including the guard bug fixed just above, which would
+  // otherwise let this test pass for the wrong reason.
+  it("does not email a re-submitted address that has not been reverified", async () => {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const userId = identity.registerDevice("phone").userId;
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+    destinations.putEmail(userId, {
+      address: "old@example.com",
+      verifiedAt: "2026-01-01T00:00:00.000Z",
+    });
+    // Re-submitting a new address is exactly what POST /v1/exports/email
+    // does: it stores the new address with no verifiedAt.
+    destinations.putEmail(userId, { address: "new@example.com" });
+
+    const sent: unknown[] = [];
+    const finalize = createFinalizer({
+      root,
+      sendTranscriptEmail: createTranscriptEmailSender(destinations, async (args) => {
+        sent.push(args);
+      }),
+    });
+    finalize({ ...transcript(LONG), userId });
+    await settle();
+    expect(sent).toEqual([]);
   });
 
   it("still stores the summary when resolve throws", async () => {

@@ -355,6 +355,35 @@ describe("POST /v1/exports/email", () => {
     expect(destinations.getEmail(alice.userId)).toBeNull();
   });
 
+  // Fix-round Minor 2: a failed provider call must not destroy a
+  // previously-working, already-verified destination — the user should be
+  // left with the working address they had, not nothing.
+  it("does not overwrite an existing verified destination when the send fails", async () => {
+    const { port, destinations, alice } = start({
+      sendEmail: async () => {
+        throw new Error("resend down");
+      },
+    });
+    destinations.putEmail(alice.userId, {
+      address: "old@example.com",
+      verifiedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${alice.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ address: "new@example.com" }),
+    });
+    expect(res.status).toBe(502);
+    expect(destinations.getEmail(alice.userId)).toEqual({
+      address: "old@example.com",
+      verifiedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
   it("stores the address unverified and mails a confirmation link, without marking it verified", async () => {
     const { port, destinations, sentEmails, alice } = start();
     const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
@@ -475,5 +504,32 @@ describe("DELETE /v1/exports/email", () => {
       method: "DELETE",
     });
     expect(res.status).toBe(401);
+  });
+
+  // Fix-round Minor 1: deleting a destination must also invalidate any
+  // outstanding confirmation link for it — otherwise a still-valid link,
+  // followed after the delete, recreates the destination already verified.
+  it("invalidates a pending confirmation link, so it cannot resurrect a deleted destination", async () => {
+    const { port, destinations, sentEmails, alice } = start();
+    await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${alice.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ address: "a@example.com" }),
+    });
+    const link = sentEmails[0].text.match(/https:\S+/)![0];
+    const token = new URL(link).searchParams.get("token")!;
+
+    const del = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(await del.json()).toEqual({ removed: true });
+
+    const confirm = await fetch(
+      `http://127.0.0.1:${port}/v1/exports/email/confirm?token=${token}`,
+      { redirect: "manual" },
+    );
+    expect(confirm.headers.get("location")).toBe("/app/exports?email=failed");
+    expect(destinations.getEmail(alice.userId)).toBeNull();
   });
 });

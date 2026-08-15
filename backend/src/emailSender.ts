@@ -31,7 +31,18 @@ export function createResendSender(
   };
 }
 
-/** Plain text, because a transcript is plain text and HTML would add nothing. */
+/**
+ * Plain text, because a transcript is plain text and HTML would add nothing.
+ *
+ * The subject line carries the conversation's topic in the clear — visible
+ * in notification previews, inbox list views, and to every intermediate
+ * mail system that reads headers for triage or filtering, none of which
+ * require opening the message the way the body does. That topic can
+ * describe a bystander's speech, not just the account holder's, and this
+ * function accepts that exposure rather than solving it; a deployment that
+ * needs the subject blind to content would need a different design (a
+ * generic subject, detail only in the body).
+ */
 export function transcriptEmail(
   t: FinalizedTranscript,
   summary: string | null,

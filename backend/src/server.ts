@@ -914,7 +914,11 @@ async function handleRequest(
       return;
     }
     // The relay sends mail to whatever address this call names, so an
-    // unlimited caller could use it to deliver mail to strangers.
+    // unlimited caller could use it to deliver mail to strangers. Checked
+    // before the body is even read — deliberately: a typo'd address still
+    // spends budget, but that is the right trade for abuse resistance, since
+    // the alternative (parse first) lets a caller retry a bad address for
+    // free and never actually pay for the attempts that matter.
     if (!emailLimiter.allow(principal.deviceId)) {
       sendJSON(res, 429, { error: "too many verification emails" });
       return;
@@ -937,9 +941,12 @@ async function handleRequest(
       sendJSON(res, 400, { error: "invalid address" });
       return;
     }
-    opts.destinations.putEmail(principal.userId, { address });
     const token = opts.emailVerifications.mint(principal.userId, address);
     const link = `${opts.publicBaseUrl.replace(/\/$/, "")}/v1/exports/email/confirm?token=${token}`;
+    // Sent before the destination is written: a 502 here must leave any
+    // existing (possibly already-verified) destination untouched, rather
+    // than wiping a working address out from under the user just because
+    // the replacement one failed to send.
     try {
       await opts.sendEmail({
         to: address,
@@ -953,6 +960,7 @@ async function handleRequest(
       sendJSON(res, 502, { error: "could not send verification email" });
       return;
     }
+    opts.destinations.putEmail(principal.userId, { address });
     sendJSON(res, 200, { pending: true });
     return;
   }
@@ -982,6 +990,9 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
+    // A still-valid confirmation link must not be able to recreate the
+    // destination this just deleted, already verified.
+    opts.emailVerifications?.deleteForUser(principal.userId);
     sendJSON(res, 200, { removed: opts.destinations?.remove(principal.userId, "email") ?? false });
     return;
   }

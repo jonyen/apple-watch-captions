@@ -46,6 +46,15 @@ export class EmailVerificationStore {
   }
 
   /**
+   * Drop any outstanding verification for this user, e.g. because the
+   * destination it would confirm was just deleted — otherwise a still-valid
+   * link, followed afterward, recreates the destination already verified.
+   */
+  deleteForUser(userId: string): void {
+    this.db.prepare("DELETE FROM email_verifications WHERE user_id = ?").run(userId);
+  }
+
+  /**
    * The user and address this token was minted for, or null. Consumes the
    * token either way — deleted before the expiry check runs, so an expired
    * token cannot be retried by calling consume again.

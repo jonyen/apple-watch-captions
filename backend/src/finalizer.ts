@@ -80,9 +80,9 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
     console.error(`could not resolve export destination for ${t.name}:`, err);
   }
 
-  // Nothing below here writes anything, so there is nothing worth creating a
-  // directory for.
-  if (!opts.summarize && !exporters) return;
+  // Nothing below here writes anything or sends an email, so there is
+  // nothing worth creating a directory for.
+  if (!opts.summarize && !exporters && !opts.sendTranscriptEmail) return;
 
   let dir: string;
   try {

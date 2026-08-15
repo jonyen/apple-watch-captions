@@ -80,49 +80,56 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
     console.error(`could not resolve export destination for ${t.name}:`, err);
   }
 
-  // Nothing below here writes anything or sends an email, so there is
-  // nothing worth creating a directory for.
-  if (!opts.summarize && !exporters && !opts.sendTranscriptEmail) return;
-
-  let dir: string;
-  try {
-    dir = userDir(opts.root, t.userId);
-    // In the live flow this directory already exists — `TranscriptStore.append`
-    // created it before the session could ever reach `finalize` — but nothing
-    // else guarantees that (a directly-constructed `FinalizedTranscript`, or a
-    // future backfill re-running this path), and `writeSummary`/
-    // `writeExportMarker` do not create directories themselves.
-    mkdirSync(dir, { recursive: true });
-  } catch (err) {
-    // Best-effort, like the rest of this function: the transcript is
-    // already safely on disk. This must not become an unhandled promise
-    // rejection — `createFinalizer` invokes `run` fire-and-forget as
-    // `void run(opts, t)`, and by default an unhandled rejection kills the
-    // whole process. Reachable on an unsafe/empty `userId` (`userDir`
-    // throws), `EACCES`, `ENOSPC`, or `root` having been replaced by a
-    // plain file.
-    console.error(`could not resolve transcript directory for ${t.name}:`, err);
-    return;
-  }
-
+  // The summary and Notion export both live under the per-user transcript
+  // directory; email does not touch the filesystem at all. So the directory
+  // is resolved only when one of the two disk-based features is actually
+  // configured, and a failure to resolve or create it must only cost those
+  // two — it must not also take email down with it, which is exactly the
+  // bug fixed below by keeping the email send outside this block entirely.
   let summary: string | null = null;
-  if (opts.summarize) {
+  if (opts.summarize || exporters) {
+    let dir: string | undefined;
     try {
-      const generated = await opts.summarize(t);
-      if (generated.length > 0) {
-        summary = generated;
-        writeSummary(dir, t.name, generated);
-        console.log(`summary written for ${t.name}`);
-      }
+      dir = userDir(opts.root, t.userId);
+      // In the live flow this directory already exists — `TranscriptStore.append`
+      // created it before the session could ever reach `finalize` — but nothing
+      // else guarantees that (a directly-constructed `FinalizedTranscript`, or a
+      // future backfill re-running this path), and `writeSummary`/
+      // `writeExportMarker` do not create directories themselves.
+      mkdirSync(dir, { recursive: true });
     } catch (err) {
-      console.error(`summary failed for ${t.name}:`, err);
+      // Best-effort, like the rest of this function: the transcript is
+      // already safely on disk. This must not become an unhandled promise
+      // rejection — `createFinalizer` invokes `run` fire-and-forget as
+      // `void run(opts, t)`, and by default an unhandled rejection kills the
+      // whole process. Reachable on an unsafe/empty `userId` (`userDir`
+      // throws), `EACCES`, `ENOSPC`, or `root` having been replaced by a
+      // plain file.
+      console.error(`could not resolve transcript directory for ${t.name}:`, err);
+      dir = undefined;
     }
-  }
 
-  // Export independently of the summary: a transcript is still worth having in
-  // Notion when Claude is unconfigured or the summary call failed.
-  if (exporters) {
-    await exportOnce(exporters.export, dir, t, summary, exporters.update);
+    if (dir) {
+      if (opts.summarize) {
+        try {
+          const generated = await opts.summarize(t);
+          if (generated.length > 0) {
+            summary = generated;
+            writeSummary(dir, t.name, generated);
+            console.log(`summary written for ${t.name}`);
+          }
+        } catch (err) {
+          console.error(`summary failed for ${t.name}:`, err);
+        }
+      }
+
+      // Export independently of the summary: a transcript is still worth
+      // having in Notion when Claude is unconfigured or the summary call
+      // failed.
+      if (exporters) {
+        await exportOnce(exporters.export, dir, t, summary, exporters.update);
+      }
+    }
   }
 
   if (opts.sendTranscriptEmail) {

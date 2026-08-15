@@ -411,6 +411,27 @@ describe("createFinalizer", () => {
     expect(sent).toEqual([]);
   });
 
+  // Fix-round 2: email needs no directory, so a directory failure (bad
+  // userId, EACCES, ENOSPC) — which only the summary/export path actually
+  // depends on — must not take the email send down with it too. Forces the
+  // directory branch to run and fail (an unsafe userId, with a summarizer
+  // configured so the directory is actually needed) while a
+  // `sendTranscriptEmail` is also configured, and asserts the email still
+  // goes out regardless.
+  it("still sends the transcript email when the transcript directory cannot be resolved", async () => {
+    const sent: string[] = [];
+    const finalize = createFinalizer({
+      root,
+      summarize: async () => "A chat happened.",
+      sendTranscriptEmail: async (userId) => {
+        sent.push(userId);
+      },
+    });
+    finalize({ ...transcript(LONG), userId: "" });
+    await settle();
+    expect(sent).toEqual([""]);
+  });
+
   it("still stores the summary when resolve throws", async () => {
     const store = new TranscriptStore({ root, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
     store.append(U, "abc", LONG[0]);

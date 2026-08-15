@@ -546,3 +546,45 @@ This is design-and-implement work, not transcription: the implementer owns the c
 git add backend/src docs/superpowers/specs/2026-08-15-multi-tenant-migration-design.md
 git commit -m "feat(relay): port two-way call audio, keyed per user"
 ```
+
+---
+
+### Task 7: Carry the summary token ceiling and truncation guards
+
+**Added after the fact.** A cross-session review asked whether anything on the old lineage went uncarried. It had: Task 2 ported the expansive *prompt* but not the rest of the same feature. The prompt asks for long, topic-sectioned summaries; `summarizer.ts` and `geminiSummarizer.ts` on the base still cap output at `max_tokens: 2048` (Claude) / uncapped-but-unguarded (Gemini) and store a truncated result silently. So the port as it stood shipped the ask without the room to answer it — reproducing the exact "thins out after the opening" bug the expansive-summaries work fixed. This task closes that.
+
+**Files:**
+- Modify: `backend/src/summarizer.ts`
+- Modify: `backend/src/geminiSummarizer.ts`
+- Test: `backend/src/summarizer.test.ts` (create or extend), `backend/src/geminiSummarizer.test.ts`
+
+**Interfaces:**
+- Consumes: nothing from other tasks.
+- Produces: `createClaudeSummarizer` gains an optional injectable client (`opts?: { client?: MessageCreator }`) so the truncation path is testable without a network call; both summarizers throw rather than return a truncated summary. The one-arg production call site (`createClaudeSummarizer(apiKey)`) stays valid.
+
+**Source of truth:** `git show origin/backup/local-main-2026-08-15:backend/src/summarizer.ts`, `:geminiSummarizer.ts`, and their `.test.ts`. HEAD's versions are the older pre-expansive shape and are NOT userId-scoped (summarizers are user-agnostic), so this is a near-wholesale carry — but diff HEAD against backup for each file and reconcile any base-side change rather than blind-overwriting.
+
+- [ ] **Step 1: Write the failing tests**
+
+Carry the truncation tests from `git show origin/backup/local-main-2026-08-15:backend/src/summarizer.test.ts` and `:geminiSummarizer.test.ts` — the cases that assert a `stop_reason: "max_tokens"` (Claude) / truncated `finishReason`/status (Gemini) response throws rather than returns. Use the injected-fake pattern the backup tests use; no test may make a network call.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd backend && npx vitest run src/summarizer.test.ts src/geminiSummarizer.test.ts`
+Expected: FAIL — HEAD's summarizers neither cap high nor detect truncation, and `createClaudeSummarizer` has no injectable client, so the fakes can't be wired.
+
+- [ ] **Step 3: Carry the implementations**
+
+Bring backup's `summarizer.ts` (16000 ceiling, `stop_reason === "max_tokens"` throw, injectable `MessageCreator`) and `geminiSummarizer.ts` (`MAX_OUTPUT_TOKENS = 16000`, `truncationReason()` guard) onto HEAD. Keep the comments explaining *why* the ceiling is shared between the request and the check, and why a truncated summary must never be stored (the summary file is the done-marker, so a stored truncation is permanent).
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `cd backend && npm test && npm run build`
+Expected: all passing, `tsc --noEmit` clean. The boot sweep and `resummarize` both call these summarizers unchanged — their existing tests must stay green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/src/summarizer.ts backend/src/geminiSummarizer.ts backend/src/summarizer.test.ts backend/src/geminiSummarizer.test.ts
+git commit -m "feat(summary): carry the token ceiling and truncation guards"
+```

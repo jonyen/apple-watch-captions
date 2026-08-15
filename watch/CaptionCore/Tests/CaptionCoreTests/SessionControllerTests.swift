@@ -5,7 +5,7 @@ import XCTest
 final class SessionControllerTests: XCTestCase {
 
     final class FakeRelay: Relay {
-        var onMessage: (@MainActor (ServerMessage) -> Void)?
+        var onMessage: (@MainActor (CaptionEvent) -> Void)?
         var onClose: (@MainActor () -> Void)?
         var connected = false
         var connectCount = 0
@@ -16,7 +16,7 @@ final class SessionControllerTests: XCTestCase {
         func connect(mode: SessionMode) { connected = true; connectCount += 1; self.mode = mode }
         func send(_ audio: Data) { sent.append(audio) }
         func close() { closed = true }
-        @MainActor func deliver(_ m: ServerMessage) { onMessage?(m) }
+        @MainActor func deliver(_ m: CaptionEvent) { onMessage?(m) }
         @MainActor func dropConnection() { onClose?() }
     }
 

@@ -2,7 +2,7 @@ import Foundation
 
 /// Transport to the caption relay. Callbacks are delivered on the main actor.
 public protocol Relay: AnyObject {
-    var onMessage: (@MainActor (ServerMessage) -> Void)? { get set }
+    var onMessage: (@MainActor (CaptionEvent) -> Void)? { get set }
     var onClose: (@MainActor () -> Void)? { get set }
     /// `mode` decides what the relay does with this session's captions —
     /// whether it persists them, and which transcript it appends to.

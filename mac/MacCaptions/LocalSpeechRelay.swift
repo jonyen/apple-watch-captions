@@ -9,7 +9,7 @@ import CaptionCore
 /// same interleaved stereo PCM the relay gets and feeds one recognizer per
 /// channel; captions come back as `.caption` messages. No backend involved.
 final class LocalSpeechRelay: NSObject, Relay {
-    var onMessage: (@MainActor (ServerMessage) -> Void)?
+    var onMessage: (@MainActor (CaptionEvent) -> Void)?
     var onClose: (@MainActor () -> Void)?
 
     private let queue = DispatchQueue(label: "localspeech")
@@ -81,7 +81,7 @@ final class LocalSpeechRelay: NSObject, Relay {
         tickTimer = timer
     }
 
-    private func emit(_ message: ServerMessage) {
+    private func emit(_ message: CaptionEvent) {
         guard let onMessage else { return }
         Task { @MainActor in onMessage(message) }
     }

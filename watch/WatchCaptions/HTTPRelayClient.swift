@@ -5,7 +5,7 @@ import CaptionCore
 /// but high-level `URLSession` requests are always allowed. Audio is batched and
 /// POSTed roughly once per second; new caption events come back in each response.
 final class HTTPRelayClient: Relay {
-    var onMessage: (@MainActor (ServerMessage) -> Void)?
+    var onMessage: (@MainActor (CaptionEvent) -> Void)?
     var onClose: (@MainActor () -> Void)?
     /// Fires once with the transcript this session is writing to, so the app
     /// can offer to resume it later. The relay assigns the name — and sends
@@ -221,7 +221,7 @@ final class HTTPRelayClient: Relay {
         emit(.error(message: "This relay can't do live captions"))
     }
 
-    private func emit(_ message: ServerMessage) {
+    private func emit(_ message: CaptionEvent) {
         if let onMessage { Task { @MainActor in onMessage(message) } }
     }
 }

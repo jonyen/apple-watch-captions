@@ -72,7 +72,7 @@ public final class SessionController {
         relay.close()
     }
 
-    private func handle(_ message: ServerMessage) {
+    private func handle(_ message: CaptionEvent) {
         guard running else { return }
         store.apply(message)
         switch message {

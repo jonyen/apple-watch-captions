@@ -1,5 +1,6 @@
 import SwiftUI
 import CaptionCore
+import CaptionRelay
 
 /// Where a launch lands when the last session is old enough to be a new sitting.
 struct HomeView: View {

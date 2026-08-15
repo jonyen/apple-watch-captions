@@ -1,5 +1,6 @@
 import Foundation
 import CaptionCore
+import CaptionRelay
 
 /// The relay's call-audio endpoints. Binary bodies rather than base64 in JSON:
 /// a third less data on a link that is already the bottleneck.

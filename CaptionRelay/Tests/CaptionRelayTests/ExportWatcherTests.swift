@@ -1,5 +1,6 @@
+import CaptionCore
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 private final class FakeExportClient: ExportStatusClient, @unchecked Sendable {
     var status = ExportStatus(exported: false, url: nil, title: nil)

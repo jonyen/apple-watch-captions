@@ -6,6 +6,8 @@ options:
 packages:
   CaptionCore:
     path: CaptionCore
+  CaptionRelay:
+    path: ../CaptionRelay
 targets:
   WatchCaptions:
     type: application
@@ -17,6 +19,7 @@ targets:
           - Icon
     dependencies:
       - package: CaptionCore
+      - package: CaptionRelay
     postCompileScripts:
       # Stamps GitCommit into the built Info.plist for the home screen's build
       # line. After the plist is processed, before signing, and every build —

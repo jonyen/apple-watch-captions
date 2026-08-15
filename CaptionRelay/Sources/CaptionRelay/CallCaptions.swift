@@ -1,3 +1,4 @@
+import CaptionCore
 import Foundation
 
 /// Why the call being captioned stopped.

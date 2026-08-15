@@ -1,5 +1,6 @@
 import SwiftUI
 import CaptionCore
+import CaptionRelay
 
 @main
 struct WatchCaptionsApp: App {

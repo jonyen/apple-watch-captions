@@ -4,8 +4,8 @@ options:
   deploymentTarget:
     iOS: "17.0"
 packages:
-  CaptionCore:
-    path: ../watch/CaptionCore
+  CaptionRelay:
+    path: ../CaptionRelay
 targets:
   PhoneCaptions:
     type: application
@@ -52,7 +52,7 @@ targets:
         excludes:
           - Secrets.example.swift
     dependencies:
-      - package: CaptionCore
+      - package: CaptionRelay
     info:
       path: PhoneCaptionsUpload/Info.plist
       properties:

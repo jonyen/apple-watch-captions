@@ -1,5 +1,6 @@
 import Foundation
 import CaptionCore
+import CaptionRelay
 
 /// Which build is installed, read from the bundle. `GitCommit` is written into
 /// the built Info.plist by `Scripts/stamp-git-commit.sh` at compile time.

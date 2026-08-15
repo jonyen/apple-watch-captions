@@ -1,6 +1,6 @@
 import ReplayKit
 import AVFoundation
-import CaptionCore
+import CaptionRelay
 
 /// Turns the playback audio of whatever app is on screen into relay audio.
 ///

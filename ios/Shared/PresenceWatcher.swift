@@ -1,5 +1,5 @@
 import Foundation
-import CaptionCore
+import CaptionRelay
 
 /// Asks the relay whether anything is reading the phone's session.
 ///

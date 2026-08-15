@@ -1,5 +1,6 @@
+import CaptionCore
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 private final class FakeVoiceClient: CallVoiceClient, @unchecked Sendable {
     private(set) var sent: [Data] = []

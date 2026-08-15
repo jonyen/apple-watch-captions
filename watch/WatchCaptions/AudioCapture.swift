@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import CaptionCore
+import CaptionRelay
 
 /// Captures the mic and emits 16 kHz mono Int16 PCM chunks.
 final class AudioCapture: AudioCapturing {

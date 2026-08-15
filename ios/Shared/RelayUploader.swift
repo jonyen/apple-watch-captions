@@ -1,5 +1,5 @@
 import Foundation
-import CaptionCore
+import CaptionRelay
 
 /// Posts captured audio to the relay, roughly once a second.
 ///

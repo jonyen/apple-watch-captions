@@ -1,6 +1,7 @@
 import Foundation
 import WatchKit
 import CaptionCore
+import CaptionRelay
 
 @MainActor
 final class AppModel: ObservableObject {

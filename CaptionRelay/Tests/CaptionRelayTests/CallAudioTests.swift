@@ -1,5 +1,6 @@
+import CaptionCore
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 private final class FakeAudioClient: CallAudioClient, @unchecked Sendable {
     var chunks: [AudioChunk] = []

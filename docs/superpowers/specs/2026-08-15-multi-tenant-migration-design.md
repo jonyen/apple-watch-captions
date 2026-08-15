@@ -99,16 +99,46 @@ storage, and a pairing path, per the multi-tenancy spec's client steps.
 The iPhone is the natural place to run pairing: it has a keyboard and a browser,
 and it is where the destination picker lands.
 
-### The mac app is retired
+### The mac app is extracted, not deleted
 
 Its captioning duplicates the watch and iPhone against a third client that would
-otherwise need the same registration work.
+otherwise need the same registration work. It leaves this repo by extraction —
+carried out separately — which preserves `LocalSpeechRelay.swift` by
+construction. That matters: the multi-tenancy spec names that file as the
+reference implementation for on-device iPhone transcription, which section 5
+makes the free tier of the expansion plan.
 
-**`mac/MacCaptions/LocalSpeechRelay.swift` must be preserved deliberately.** The
-multi-tenancy spec names it as the reference implementation for on-device
-iPhone transcription, which section 5 makes the free tier of the expansion
-plan. Deleting the mac target without extracting that file first throws away the
-seed of a tier this project intends to ship. Move it, do not delete it.
+### CaptionCore is extracted alongside it, and has two traps
+
+`CaptionCore` lives at `watch/CaptionCore` and is consumed by **three** targets
+on `main` — watch, mac, **and iOS** — each by relative path. So its extraction is
+not a mac-app cleanup; it is surgery on the iPhone app, which this migration
+makes day-one critical.
+
+It is also diverged, like everything else here:
+
+| Only on local `main` | Only on `main` |
+|---|---|
+| `CallAudio.swift`, `CallVoice.swift`, `MuLaw.swift` | `PhoneAudio.swift`, `Settings.swift` |
+
+Extracting from either lineage silently drops the other's files. Taking `main`
+loses exactly the two-way call audio section 1 item 4 is porting forward; taking
+local `main` loses the settings the multi-tenant iOS app needs. **CaptionCore
+must be reconciled before extraction, or the extraction must merge both sets
+deliberately.**
+
+### Division of work
+
+The extraction runs separately from this migration. To keep them from colliding:
+
+- **Parallel-safe:** section 1's port. It is entirely under `backend/` and
+  touches nothing the extraction does.
+- **Blocked on the extraction:** the client work above. `DeviceIdentity`,
+  Keychain storage, and pairing land in the watch and iPhone targets and likely
+  in `CaptionCore` itself.
+
+This plan therefore covers the backend port only. Client pairing and the
+destination picker follow once `CaptionCore` has settled.
 
 ## 4. Destination picker
 

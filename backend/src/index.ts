@@ -1,5 +1,5 @@
-import { join, dirname } from "path";
-import { mkdirSync, readdirSync, statSync, existsSync } from "fs";
+import { dirname } from "path";
+import { mkdirSync } from "fs";
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
 import { startServer, ProviderOptions } from "./server";
@@ -11,38 +11,19 @@ import { AssemblyAIProvider } from "./assemblyaiProvider";
 import { ChannelSplitProvider } from "./channelSplitProvider";
 import { UnavailableProvider } from "./unavailableProvider";
 import { TranscriptionProvider } from "./transcriptionProvider";
-import { Summarize, createClaudeSummarizer } from "./summarizer";
-import { createGeminiSummarizer } from "./geminiSummarizer";
 import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
 import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
 import { adoptLegacyNotionAtBoot } from "./exportDestinations";
 import { buildServerOptions, buildResolveExporters } from "./serverOptions";
+import { chooseSummarizer } from "./chooseSummarizer";
+import { userDirs } from "./userDirs";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
 
-/**
- * Pick the summarizer backend: an explicit SUMMARY_PROVIDER wins, otherwise
- * whichever key is configured (Claude first, since it is the better model).
- */
-function chooseSummarizer(): Summarize | undefined {
-  const wanted =
-    config.summaryProvider ??
-    (config.anthropicApiKey ? "claude" : config.geminiApiKey ? "gemini" : undefined);
-
-  if (wanted === "claude") {
-    if (config.anthropicApiKey) return createClaudeSummarizer(config.anthropicApiKey);
-    console.warn("SUMMARY_PROVIDER=claude but ANTHROPIC_API_KEY is not set");
-  } else if (wanted === "gemini") {
-    if (config.geminiApiKey) return createGeminiSummarizer(config.geminiApiKey);
-    console.warn("SUMMARY_PROVIDER=gemini but GEMINI_API_KEY is not set");
-  }
-  return undefined;
-}
-
-const summarize = chooseSummarizer();
+const summarize = chooseSummarizer(config);
 console.log(
   summarize
     ? `Summaries via ${config.summaryProvider ?? (config.anthropicApiKey ? "claude" : "gemini")}`
@@ -216,22 +197,6 @@ const addr = server.address();
 const port = typeof addr === "object" && addr ? addr.port : config.port;
 console.log(`Caption relay listening on ws://0.0.0.0:${port}/stream`);
 console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app, export destinations at /app/exports`);
-
-/**
- * The per-user subdirectories under the transcripts root — each backfill
- * sweep runs once per user rather than once over the (now-empty, once
- * migration has run) flat root, since transcripts live under
- * `userDir(root, userId)` rather than directly in `root`.
- */
-function userDirs(root: string): { dir: string; userId: string }[] {
-  if (!existsSync(root)) return [];
-  return readdirSync(root)
-    .filter((entry) => statSync(join(root, entry)).isDirectory())
-    // The directory name *is* the user id — `userDir` joins it verbatim — so
-    // the sweeps below can attribute what they rebuild instead of handing
-    // downstream an ownerless transcript.
-    .map((entry) => ({ dir: join(root, entry), userId: entry }));
-}
 
 /**
  * Catch up on stored transcripts: summarize any that never got one (the key

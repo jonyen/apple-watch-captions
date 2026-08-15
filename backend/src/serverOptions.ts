@@ -171,6 +171,7 @@ export function buildServerOptions(config: Config, deps: ServerDeps): StartServe
     transcriptsRoot: config.transcriptsDir,
     usage: deps.usage,
     callForwardTo: config.twilioForwardTo,
+    waitAttempts: config.callWaitAttempts,
     trustProxyHeaders: config.trustProxyHeaders,
     destinations,
     oauthStates,

@@ -42,6 +42,13 @@ export interface Config {
   /** Optional; the number Twilio bridges an inbound captioned call to. */
   twilioForwardTo?: string;
   /**
+   * How many ringback rounds the caller hears before the call falls back to
+   * the second line. Roughly four seconds each, so the default 5 is about
+   * twenty seconds of ringing. The right number is a matter of taste, which
+   * is exactly why it is configurable rather than baked in.
+   */
+  callWaitAttempts?: number;
+  /**
    * Trust `Fly-Client-IP` as the caller's address when rate-limiting
    * registrations, instead of the raw socket address. Must only be on when
    * the relay genuinely sits behind a proxy that overwrites that header —
@@ -94,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     // use. Defaulting to a Flux model would fail the first real call.
     deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
     twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
+    callWaitAttempts: loadWaitAttempts(env),
     trustProxyHeaders: loadTrustProxyHeaders(env),
     notionOAuth: loadNotionOAuth(env, publicBaseUrl),
     publicBaseUrl,
@@ -170,6 +178,23 @@ function loadTrustProxyHeaders(env: NodeJS.ProcessEnv): boolean {
 }
 
 /** Only the backends we actually implement; anything else is a typo. */
+/**
+ * A ring budget only means something as a whole number of rounds, at least
+ * one. Anything else — a typo, a negative, a fraction — is left unset so the
+ * server's own default applies, rather than booting with a budget that would
+ * make every call fall back immediately or ring forever.
+ */
+function loadWaitAttempts(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env.CALL_WAIT_ATTEMPTS;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (Number.isSafeInteger(value) && value >= 1) return value;
+  console.warn(
+    `Ignoring CALL_WAIT_ATTEMPTS="${raw}" — expected a whole number of rounds, 1 or more`,
+  );
+  return undefined;
+}
+
 function loadSummaryProvider(env: NodeJS.ProcessEnv): SummaryProvider | undefined {
   const value = env.SUMMARY_PROVIDER;
   if (!value) return undefined;

@@ -223,4 +223,26 @@ describe("call captioning config", () => {
     expect(loadConfig({ ...base, TWILIO_FORWARD_TO: "+15551234567" }).twilioForwardTo)
       .toBe("+15551234567");
   });
+
+  it("reads the ring budget", () => {
+    expect(loadConfig({ ...base, CALL_WAIT_ATTEMPTS: "3" }).callWaitAttempts).toBe(3);
+  });
+
+  it("leaves the ring budget unset when not configured", () => {
+    expect(loadConfig(base).callWaitAttempts).toBeUndefined();
+  });
+
+  // A budget below one would send every call straight to the fallback, and a
+  // typo would send it to NaN. Neither is worth booting with — fall back to
+  // the server's own default and say so.
+  it.each(["0", "-2", "2.5", "many"])(
+    "ignores an unusable ring budget of %s rather than failing to boot",
+    (value) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const cfg = loadConfig({ ...base, CALL_WAIT_ATTEMPTS: value });
+      expect(cfg.callWaitAttempts).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    },
+  );
 });

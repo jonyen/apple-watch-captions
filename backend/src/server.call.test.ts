@@ -47,10 +47,16 @@ function withToken(db: Db, identity: IdentityStore, token: string): void {
 const base = (port: number) => `http://127.0.0.1:${port}`;
 
 describe("POST /twilio/voice", () => {
+  // attempt=99 is past the wait budget, landing on the fallback branch —
+  // phase 1's shape, still the one this test pins. (A first attempt with the
+  // watch absent now rings the caller back instead; server.twoway.test.ts
+  // covers that half.)
   it("returns TwiML pointing the stream at this relay", async () => {
     const { port, token } = start("+15551234567");
 
-    const res = await fetch(`${base(port)}/twilio/voice?token=${token}`, { method: "POST" });
+    const res = await fetch(`${base(port)}/twilio/voice?token=${token}&attempt=99`, {
+      method: "POST",
+    });
 
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/xml");
@@ -201,8 +207,10 @@ describe("POST /twilio/voice with a token containing XML metacharacters", () => 
     running = server;
     const port = (server.address() as AddressInfo).port;
 
+    // attempt=99: past the wait budget, so the response is the fallback
+    // <Start><Stream> + <Dial> shape whose stream URL this test dissects.
     const res = await fetch(
-      `${base(port)}/twilio/voice?token=${encodeURIComponent(token)}`,
+      `${base(port)}/twilio/voice?token=${encodeURIComponent(token)}&attempt=99`,
       { method: "POST" });
 
     expect(res.status).toBe(200);

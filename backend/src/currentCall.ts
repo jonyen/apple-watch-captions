@@ -11,6 +11,14 @@ export interface ActiveCall {
    * `SessionStore`, which is now keyed by user as well as session id.
    */
   userId: string;
+  /**
+   * True when the watch holds this call: `<Connect><Stream>`, audio both ways,
+   * hangup by closing the socket. False on the fallback shape
+   * (`<Start><Stream>` + `<Dial>`), which is captions only — the phone holds
+   * that call, the stream is unidirectional, and neither speaking nor hanging
+   * up from the watch is possible.
+   */
+  twoWay: boolean;
 }
 
 /**
@@ -39,8 +47,8 @@ export class CurrentCall {
   private readonly active = new Map<string, ActiveCall>();
   private readonly reasons = new Map<string, CallEndReason>();
 
-  begin(sessionId: string, callSid: string, userId: string): void {
-    this.active.set(userId, { sessionId, callSid, userId });
+  begin(sessionId: string, callSid: string, userId: string, twoWay = true): void {
+    this.active.set(userId, { sessionId, callSid, userId, twoWay });
     this.reasons.delete(userId);
   }
 

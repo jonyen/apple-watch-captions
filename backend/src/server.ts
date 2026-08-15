@@ -11,6 +11,11 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { CurrentCall } from "./currentCall";
 import { ReaderPresence } from "./readerPresence";
+import { CallPresence } from "./callPresence";
+import { CallAudioBuffer } from "./callAudioBuffer";
+import { CallUplink } from "./callUplink";
+import { pcm16kToMuLaw8k } from "./mulaw";
+import { ringbackWav } from "./ringback";
 import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
@@ -25,7 +30,7 @@ import { VIEWER_HTML } from "./viewerPage";
 import { EXPORTS_HTML } from "./exportsPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
-import { voiceResponse } from "./twiml";
+import { voiceResponse, ringbackResponse, connectStreamResponse } from "./twiml";
 import { ExportDestinationStore } from "./exportDestinations";
 import { OAuthStateStore, authorizeUrl, NotionOAuthConfig, ExchangeCode } from "./notionOAuth";
 import { EmailVerificationStore } from "./emailVerification";
@@ -63,6 +68,11 @@ export interface StartServerOptions {
   usage?: { getUsage(): Promise<ReportData> };
   /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
   callForwardTo?: string;
+  /**
+   * How many ringback rounds before falling back. Defaults to 5 (~20s).
+   * Fed by `CALL_WAIT_ATTEMPTS` — see `config.ts`.
+   */
+  waitAttempts?: number;
   /** Optional; where each user's export destinations live. Enables /v1/exports*. */
   destinations?: ExportDestinationStore;
   /** Optional; single-use CSRF state for the Notion OAuth flow. Required alongside `notionOAuth` to enable connecting. */
@@ -270,6 +280,12 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   });
   const currentCall = new CurrentCall();
   const readers = new ReaderPresence();
+  const callPresence = new CallPresence();
+  // Ephemeral, like everything else about a call: mirrors audio both ways
+  // between each user's Twilio stream and their watch-facing routes. Keyed
+  // per user inside — see each class for why the keying is load-bearing.
+  const downlink = new CallAudioBuffer();
+  const uplink = new CallUplink();
   const limiter = new RegistrationLimiter();
   const claimLimiter = new RegistrationLimiter(
     undefined,
@@ -297,6 +313,9 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       store,
       currentCall,
       readers,
+      callPresence,
+      downlink,
+      uplink,
       limiter,
       claimLimiter,
       codeLimiter,
@@ -323,9 +342,21 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     // travels in the path, which Twilio does preserve. The query form is still
     // accepted so the endpoint can be exercised directly with a normal client.
     if (url.pathname === "/twilio/stream" || url.pathname.startsWith(TWILIO_STREAM_PREFIX)) {
-      const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
-        ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
+      // Which TwiML we served rides in the path too, for the same reason the
+      // token does — Twilio discards the query string. The fallback shape
+      // (`<Start><Stream>` + `<Dial>`) reaches this same endpoint but is
+      // one-way, and treating it as a held call would put media frames on a
+      // stream that cannot accept them and the caller on the watch speaker
+      // while the user is talking to them on the phone.
+      let rest = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
+        ? url.pathname.slice(TWILIO_STREAM_PREFIX.length)
         : undefined;
+      let twoWay = true;
+      if (rest !== undefined && rest.endsWith(TWILIO_FALLBACK_SUFFIX)) {
+        twoWay = false;
+        rest = rest.slice(0, -TWILIO_FALLBACK_SUFFIX.length);
+      }
+      const fromPath = rest !== undefined ? safeDecode(rest) : undefined;
       const principal = resolveToken(opts.identity, fromPath ?? token);
       if (!principal) {
         console.log("twilio upgrade rejected: token missing or wrong");
@@ -337,7 +368,10 @@ export function startServer(opts: StartServerOptions): CaptionServer {
           ws as unknown as TwilioSocketLike,
           store,
           currentCall,
+          downlink,
+          uplink,
           principal.userId,
+          { twoWay },
         ));
       return;
     }
@@ -387,6 +421,9 @@ async function handleRequest(
   store: SessionStore,
   calls: CurrentCall,
   readers: ReaderPresence,
+  callPresence: CallPresence,
+  downlink: CallAudioBuffer,
+  uplink: CallUplink,
   limiter: RegistrationLimiter,
   claimLimiter: RegistrationLimiter,
   codeLimiter: RegistrationLimiter,
@@ -526,8 +563,19 @@ async function handleRequest(
     return;
   }
 
-  // Twilio asks what to do with an inbound call. Answer: fork the caller's
-  // audio to this relay, then bridge the call onward.
+  // Twilio fetches this itself, with no token, so it must be open. It carries
+  // no information beyond a ringing sound.
+  if (req.method === "GET" && url.pathname === "/twilio/ringback.wav") {
+    const wav = ringbackWav();
+    res.writeHead(200, { "content-type": "audio/wav", "content-length": wav.length });
+    res.end(wav);
+    return;
+  }
+
+  // Twilio asks what to do with an inbound call. Answer depends on whether
+  // this user's watch is here: connect the call straight to it, ring the
+  // caller and ask Twilio to check again, or — once the wait budget is
+  // spent — fall back to the second line, still captioned.
   if (req.method === "POST" && url.pathname === "/twilio/voice") {
     const principal = principalFor(req, url, opts);
     if (!principal) {
@@ -545,14 +593,53 @@ async function handleRequest(
     // from principalFor because it is the raw token that must travel in the
     // outgoing URLs, not the principal it resolved to.
     const token = bearerToken(req.headers.authorization) ?? url.searchParams.get("token") ?? "";
-    const streamUrl =
-      `wss://${req.headers.host ?? ""}${TWILIO_STREAM_PREFIX}` +
-      `${encodeURIComponent(token)}`;
-    const streamStatusUrl =
-      `https://${req.headers.host ?? ""}/twilio/stream-status` +
-      `?token=${encodeURIComponent(token)}`;
+    const encoded = encodeURIComponent(token);
+    const host = req.headers.host ?? "";
+    const streamUrl = `wss://${host}${TWILIO_STREAM_PREFIX}${encoded}`;
+    const streamStatusUrl = `https://${host}/twilio/stream-status?token=${encoded}`;
+    const budget = opts.waitAttempts ?? 5;
+    const requestedAttempt = Number(url.searchParams.get("attempt") ?? "1");
+    // A well-formed attempt is a whole number within the wait budget.
+    // Anything else — negative, fractional, NaN, or absurdly large (where
+    // `+ 1` below can silently no-op under IEEE-754 and loop forever) — is
+    // untrusted input reachable by anyone holding the token, so it is
+    // treated as the budget already being spent rather than trusted to keep
+    // ringing.
+    const attempt =
+      Number.isInteger(requestedAttempt) && requestedAttempt >= 1 && requestedAttempt <= budget
+        ? requestedAttempt
+        : budget;
+
     res.writeHead(200, { "content-type": "text/xml" });
-    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo, streamStatusUrl }));
+
+    // Presence is consulted for THIS webhook's resolved principal and no one
+    // else's: the token in the number's webhook URL names whose watch this
+    // call may be handed to. Any other scope would let a stranger's `ready=1`
+    // arm `<Connect>` for this user's caller — see CallPresence and the
+    // cross-tenant tests in server.tenancy.test.ts.
+    if (callPresence.isPresent(principal.userId)) {
+      res.end(connectStreamResponse({ streamUrl, streamStatusUrl }));
+      return;
+    }
+
+    if (attempt < budget) {
+      res.end(ringbackResponse({
+        ringbackUrl: `https://${host}/twilio/ringback.wav`,
+        nextUrl: `https://${host}/twilio/voice?token=${encoded}&attempt=${attempt + 1}`,
+      }));
+      return;
+    }
+
+    // Out of patience: ring the second line, whose carrier voicemail catches
+    // it. Still `voiceResponse` — the `<Start><Stream>` + `<Dial>` shape —
+    // deliberately, so a call that rings out to the phone is still captioned.
+    // The stream URL carries the fallback marker so the relay treats it as
+    // the one-way stream it is.
+    res.end(voiceResponse({
+      streamUrl: `${streamUrl}${TWILIO_FALLBACK_SUFFIX}`,
+      dialTo: opts.callForwardTo,
+      streamStatusUrl,
+    }));
     return;
   }
 
@@ -582,6 +669,75 @@ async function handleRequest(
     return;
   }
 
+  // The caller's audio, for the watch to play. Binary rather than base64 in
+  // JSON: a third less data on the link that is already the bottleneck.
+  // Drains only the poller's own compartment: the principal the token
+  // resolves to is the key into the downlink, so another user's caller can
+  // be neither heard nor consumed here.
+  if (req.method === "GET" && url.pathname === "/v1/call/audio") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const since = Number(url.searchParams.get("since") ?? "0") || 0;
+    const { audio, seq } = downlink.drain(principal.userId, since);
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": audio.length,
+      "x-seq": String(seq),
+    });
+    res.end(audio);
+    return;
+  }
+
+  // Hang up. Under `<Connect><Stream>` the call lives exactly as long as the
+  // Twilio WebSocket, and the watch is not a party to that socket — so this is
+  // the only thing that can end a call. Without it, tapping Stop returns the
+  // watch to its menu and leaves the caller connected to silence, billed,
+  // until they give up. Scoped to the principal: `end` can only reach the
+  // caller's own uplink slot, so nobody can hang up a stranger's call.
+  if (req.method === "POST" && url.pathname === "/v1/call/end") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    // False on a fallback call too: the phone holds that one, so there is no
+    // socket here whose closing would end it.
+    if (!uplink.end(principal.userId)) {
+      sendJSON(res, 409, { error: "no call is live" });
+      return;
+    }
+    sendJSON(res, 200, { ended: true });
+    return;
+  }
+
+  // Your voice, while push-to-talk is held. 16 kHz Int16 in, mu-law 8 kHz out.
+  // Writes only into the principal's own live call; with no call of their
+  // own, the answer is 409 — never a write into someone else's socket.
+  if (req.method === "POST" && url.pathname === "/v1/call/audio") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    let body: Buffer = Buffer.from("");
+    try {
+      body = await readBody(req, MAX_AUDIO_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    if (!uplink.write(principal.userId, pcm16kToMuLaw8k(body))) {
+      sendJSON(res, 409, { error: "no call is live" });
+      return;
+    }
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   // Presence and captions in one request: the watch uses this both to notice a
   // call is live and to read it. Read-only — unlike /v1/audio it never creates
   // a session, so polling when no call exists costs nothing upstream.
@@ -591,6 +747,17 @@ async function handleRequest(
       sendJSON(res, 401, { error: "unauthorized" });
       return;
     }
+    // Presence is claimed explicitly, not inferred from any poll at all.
+    // The watch also probes this route on every launch — to decide whether to
+    // open the call screen — and counting that as presence would mean opening
+    // the app to browse transcripts silently arms `<Connect>`: a call arriving
+    // within the next ten seconds would be handed to a watch sitting on the
+    // History screen, with nothing polling, no ringback left to fall back on,
+    // and no indication anything had happened. `ready=1` says something
+    // stronger: the call screen is up and waiting. Marked for the polling
+    // principal only — it arms `<Connect>` for their own number, nobody
+    // else's.
+    if (url.searchParams.get("ready") === "1") callPresence.mark(principal.userId);
     const since = Number(url.searchParams.get("since") ?? "0") || 0;
     // Scoped to the poller: `CurrentCall` holds one call per user, so a call
     // this poller does not own is not merely filtered out here — it is never
@@ -620,7 +787,10 @@ async function handleRequest(
       return;
     }
     const { events, seq } = store.drain(principal.userId, active.sessionId, since);
-    sendJSON(res, 200, { active: true, events: flatten(events), seq });
+    // `twoWay` tells the watch whether this is a call it holds — hear the
+    // caller, speak back, hang up — or the fallback, which is captions only
+    // because the phone holds it.
+    sendJSON(res, 200, { active: true, twoWay: active.twoWay, events: flatten(events), seq });
     return;
   }
 
@@ -1054,6 +1224,14 @@ async function handleRequest(
 
 /** Where the media-stream token lives, since Twilio drops the query string. */
 const TWILIO_STREAM_PREFIX = "/twilio/stream/";
+
+/**
+ * Appended to the stream path on the fallback branch, so the upgrade handler
+ * knows which TwiML it served. In the path rather than the query string for
+ * the same reason the token is, and unambiguous because the token is
+ * percent-encoded, which turns any `/` of its own into `%2F`.
+ */
+const TWILIO_FALLBACK_SUFFIX = "/fallback";
 
 /** A malformed percent-escape is a bad token, not a crash. */
 function safeDecode(value: string): string | undefined {

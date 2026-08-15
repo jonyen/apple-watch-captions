@@ -205,6 +205,13 @@ Twilio webhook signature validation is also still absent, so anyone who learns
 the URL can drive the call path. That is a pre-existing gap, not one this
 migration introduces, but it grows teeth once the relay is not a single-user toy.
 
+`callForwardTo` (`TWILIO_FORWARD_TO`) also stays a single global: it is the
+operator's second line, and every call that rings out falls back to it. Call
+state is fully per-user, so a second inbound-call user needs only their own
+Twilio number with their own device token in its webhook URL — but until
+forward numbers move per-user (future work), their unanswered calls would
+ring the operator's phone.
+
 ## 6. Testing
 
 The port carries its own tests forward; the multi-tenant suites already cover

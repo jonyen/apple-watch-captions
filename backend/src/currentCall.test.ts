@@ -11,7 +11,7 @@ describe("CurrentCall", () => {
   it("holds the call it was given", () => {
     const calls = new CurrentCall();
     calls.begin("CA1", "CA1", "user-a");
-    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
+    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a", twoWay: true });
   });
 
   it("records how the call ended", () => {
@@ -33,7 +33,7 @@ describe("CurrentCall", () => {
 
     expect(calls.end("CA1", "user-a", "stream_lost")).toBe(false);
 
-    expect(calls.current("user-a")).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-a" });
+    expect(calls.current("user-a")).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-a", twoWay: true });
     expect(calls.lastReason("user-a")).toBeNull();
   });
 
@@ -45,7 +45,7 @@ describe("CurrentCall", () => {
 
     expect(calls.end("CA1", "user-b", "ended")).toBe(false);
 
-    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
+    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a", twoWay: true });
     expect(calls.lastReason("user-a")).toBeNull();
   });
 
@@ -68,8 +68,8 @@ describe("CurrentCall", () => {
 
     calls.begin("CA2", "CA2", "user-b");
 
-    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
-    expect(calls.current("user-b")).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-b" });
+    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a", twoWay: true });
+    expect(calls.current("user-b")).toEqual({ sessionId: "CA2", callSid: "CA2", userId: "user-b", twoWay: true });
   });
 
   it("does not report one user's call to another user", () => {
@@ -88,7 +88,7 @@ describe("CurrentCall", () => {
 
     expect(calls.end("CA1", "user-b", "ended")).toBe(true);
 
-    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a" });
+    expect(calls.current("user-a")).toEqual({ sessionId: "CA1", callSid: "CA1", userId: "user-a", twoWay: true });
     expect(calls.lastReason("user-a")).toBeNull();
   });
 
@@ -101,5 +101,21 @@ describe("CurrentCall", () => {
 
     expect(calls.lastReason("user-b")).toBeNull();
     expect(calls.lastReason("user-a")).toBe("ended");
+  });
+
+  // `twoWay` tells the watch whether this is a call it holds — hear the
+  // caller, speak back, hang up — or the fallback, which is captions only
+  // because the phone holds it. Carried here so `GET /v1/call` can answer
+  // both questions from the one object it already returns.
+  it("records when a call is the one-way fallback shape", () => {
+    const calls = new CurrentCall();
+    calls.begin("CA1", "CA1", "user-a", false);
+
+    expect(calls.current("user-a")).toEqual({
+      sessionId: "CA1",
+      callSid: "CA1",
+      userId: "user-a",
+      twoWay: false,
+    });
   });
 });

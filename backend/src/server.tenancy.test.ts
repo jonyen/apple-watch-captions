@@ -359,3 +359,168 @@ describe("cross-tenant isolation", () => {
     expect(aliceTranscripts[0].preview).toBe("alice's real session");
   });
 });
+
+// The two-way half of the same property. Presence decides where an inbound
+// call goes; the downlink is the caller's voice, played into the room; the
+// uplink speaks into the call; end hangs it up. Every one of these was a
+// process-global on the old lineage, and registration is open — so each test
+// below is a real attack any self-registered device could have run, scripted
+// from the Task 1 spike's walk. Each also carries a positive control (the
+// owner's own path still works), so a pass means isolation, not breakage.
+describe("cross-tenant isolation for two-way call audio", () => {
+  function startTwoUsers() {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const alice = identity.registerDevice("watch");
+    const mallory = identity.registerDevice("watch");
+    const providers: FakeTranscriptionProvider[] = [];
+    server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => {
+        const p = new FakeTranscriptionProvider();
+        providers.push(p);
+        return p;
+      },
+      callForwardTo: "+15551234567",
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    return { alice, mallory, providers, port };
+  }
+
+  /** Open a live two-way call for whoever owns `token`. */
+  async function liveCall(port: number, token: string, callSid: string) {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/${token}`);
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start",
+      streamSid: `MZ-${callSid}`,
+      start: { callSid, streamSid: `MZ-${callSid}` },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return ws;
+  }
+
+  // Attack 1: presence. Mallory's watch says "ready"; Alice's number rings.
+  // With one shared presence scalar, Alice's webhook would see "a watch is
+  // ready" and serve <Connect> — handing Alice's caller to whichever stream
+  // the TwiML names while Alice's own watch is dark.
+  it("does not let one user's ready watch arm another user's inbound call", async () => {
+    const { alice, mallory, port } = startTwoUsers();
+
+    // Mallory marks presence with her own, valid token.
+    await fetch(`http://127.0.0.1:${port}/v1/call?token=${mallory.token}&ready=1`);
+
+    // Alice's inbound call — her webhook token resolves to her principal —
+    // must consult Alice's presence only: her watch is dark, so the caller
+    // hears ringback, and <Connect> is never armed.
+    const xml = await (
+      await fetch(`http://127.0.0.1:${port}/twilio/voice?token=${alice.token}`, {
+        method: "POST",
+      })
+    ).text();
+    expect(xml).not.toContain("<Connect>");
+    expect(xml).toContain("ringback.wav");
+
+    // Positive control: when Alice's own watch is ready, her call connects —
+    // proving the refusal above was isolation, not ringback-for-everyone.
+    await fetch(`http://127.0.0.1:${port}/v1/call?token=${alice.token}&ready=1`);
+    const readyXml = await (
+      await fetch(`http://127.0.0.1:${port}/twilio/voice?token=${alice.token}`, {
+        method: "POST",
+      })
+    ).text();
+    expect(readyXml).toContain("<Connect>");
+  });
+
+  // Attack 2: the downlink. With one shared buffer, Mallory's poll would be
+  // handed Alice's caller's voice — and, because drain prunes as it serves,
+  // would steal it out from under Alice's watch at the same time.
+  it("does not let one user drain another user's caller audio", async () => {
+    const { alice, mallory, port } = startTwoUsers();
+    const ws = await liveCall(port, alice.token, "CA-alice");
+    ws.send(JSON.stringify({
+      event: "media",
+      media: { payload: Buffer.from([0xff, 0xfe]).toString("base64") },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Mallory polls with her own valid token: she gets her own (empty)
+    // compartment, not Alice's audio.
+    const malloryRes = await fetch(
+      `http://127.0.0.1:${port}/v1/call/audio?token=${mallory.token}&since=0`,
+    );
+    expect(malloryRes.status).toBe(200);
+    expect((await malloryRes.arrayBuffer()).byteLength).toBe(0);
+    expect(malloryRes.headers.get("x-seq")).toBe("0");
+
+    // And Alice's audio is still waiting for Alice — Mallory's poll neither
+    // read it nor consumed it.
+    const aliceRes = await fetch(
+      `http://127.0.0.1:${port}/v1/call/audio?token=${alice.token}&since=0`,
+    );
+    expect([...Buffer.from(await aliceRes.arrayBuffer())]).toEqual([0xff, 0xfe]);
+    ws.close();
+  });
+
+  // Attack 3: the uplink. With one shared sender, Mallory's POST would be
+  // spoken into Alice's live call, in Alice's caller's ear.
+  it("does not let one user speak into another user's call", async () => {
+    const { alice, mallory, port } = startTwoUsers();
+    const ws = await liveCall(port, alice.token, "CA-alice");
+    const framesToAlice: any[] = [];
+    ws.on("message", (data: Buffer) => framesToAlice.push(JSON.parse(data.toString())));
+
+    // Mallory has no live call, so her audio has nowhere hers to go: 409,
+    // never a write into someone else's socket.
+    const malloryRes = await fetch(`http://127.0.0.1:${port}/v1/call/audio?token=${mallory.token}`, {
+      method: "POST",
+      body: Buffer.alloc(800),
+    });
+    expect(malloryRes.status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(framesToAlice.filter((f) => f.event === "media")).toHaveLength(0);
+
+    // Positive control: Alice's own voice does reach her call's socket.
+    const aliceRes = await fetch(`http://127.0.0.1:${port}/v1/call/audio?token=${alice.token}`, {
+      method: "POST",
+      body: Buffer.alloc(800),
+    });
+    expect(aliceRes.status).toBe(204);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(framesToAlice.filter((f) => f.event === "media")).toHaveLength(1);
+    ws.close();
+  });
+
+  // Attack 4: the hangup handle. Under <Connect><Stream> closing the socket
+  // IS the hangup — with one shared closer, Mallory's POST would disconnect
+  // Alice mid-sentence, and the base's own CurrentCall comment names this
+  // exact attack for the eviction path.
+  it("does not let one user end another user's call", async () => {
+    const { alice, mallory, port } = startTwoUsers();
+    const ws = await liveCall(port, alice.token, "CA-alice");
+    let aliceSocketClosed = false;
+    ws.on("close", () => {
+      aliceSocketClosed = true;
+    });
+
+    const malloryRes = await fetch(`http://127.0.0.1:${port}/v1/call/end?token=${mallory.token}`, {
+      method: "POST",
+    });
+    expect(malloryRes.status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(aliceSocketClosed).toBe(false);
+    const aliceBody = await (
+      await fetch(`http://127.0.0.1:${port}/v1/call?token=${alice.token}`)
+    ).json();
+    expect(aliceBody.active).toBe(true);
+
+    // Positive control: Alice can end her own call, which closes the socket.
+    const aliceRes = await fetch(`http://127.0.0.1:${port}/v1/call/end?token=${alice.token}`, {
+      method: "POST",
+    });
+    expect(aliceRes.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(aliceSocketClosed).toBe(true);
+  });
+});

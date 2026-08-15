@@ -5,6 +5,8 @@ import { openDb } from "./db";
 import { IdentityStore } from "./identityStore";
 import { ExportDestinationStore } from "./exportDestinations";
 import { OAuthStateStore } from "./notionOAuth";
+import { EmailVerificationStore } from "./emailVerification";
+import { SendEmailArgs } from "./emailSender";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
 
 let server: CaptionServer | undefined;
@@ -24,6 +26,11 @@ function start(overrides: Partial<StartServerOptions> = {}) {
   const identity = new IdentityStore(db);
   const destinations = new ExportDestinationStore(db, randomBytes(32));
   const oauthStates = new OAuthStateStore(db);
+  const emailVerifications = new EmailVerificationStore(db);
+  const sentEmails: SendEmailArgs[] = [];
+  const sendEmail = async (args: SendEmailArgs) => {
+    sentEmails.push(args);
+  };
   const alice = identity.registerDevice("phone");
   const mallory = identity.registerDevice("phone");
   server = startServer({
@@ -32,6 +39,9 @@ function start(overrides: Partial<StartServerOptions> = {}) {
     destinations,
     oauthStates,
     notionOAuth,
+    emailVerifications,
+    sendEmail,
+    publicBaseUrl: "https://relay.example",
     exchangeNotionCode: async (code) => {
       if (code !== "good-code") throw new Error("bad code");
       return { accessToken: "ntn_granted", databaseId: "db1", workspaceName: "Alice's Notes" };
@@ -44,6 +54,8 @@ function start(overrides: Partial<StartServerOptions> = {}) {
     port: typeof addr === "object" && addr ? addr.port : 0,
     destinations,
     oauthStates,
+    emailVerifications,
+    sentEmails,
     alice,
     mallory,
   };
@@ -299,6 +311,167 @@ describe("DELETE /v1/exports/notion", () => {
   it("requires authentication", async () => {
     const { port } = start();
     const res = await fetch(`http://127.0.0.1:${port}/v1/exports/notion`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /v1/exports/email", () => {
+  it("requires authentication", async () => {
+    const { port } = start();
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address: "a@example.com" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("answers 503 when email export is not configured", async () => {
+    const { port, alice } = start({ sendEmail: undefined });
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${alice.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ address: "a@example.com" }),
+    });
+    expect(res.status).toBe(503);
+  });
+
+  it("rejects a malformed address with 400 and stores nothing", async () => {
+    const { port, destinations, alice } = start();
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${alice.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ address: "not-an-email" }),
+    });
+    expect(res.status).toBe(400);
+    expect(destinations.getEmail(alice.userId)).toBeNull();
+  });
+
+  it("stores the address unverified and mails a confirmation link, without marking it verified", async () => {
+    const { port, destinations, sentEmails, alice } = start();
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${alice.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ address: "a@example.com" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ pending: true });
+
+    // Stored, but not yet usable to receive a transcript — that only happens
+    // once the confirmation link below is followed.
+    const stored = destinations.getEmail(alice.userId);
+    expect(stored?.address).toBe("a@example.com");
+    expect(stored?.verifiedAt).toBeUndefined();
+
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0].to).toBe("a@example.com");
+    const link = sentEmails[0].text.match(/https:\S+/)?.[0];
+    expect(link).toContain("/v1/exports/email/confirm?token=");
+  });
+
+  it("rate limits repeated verification sends", async () => {
+    const { port, alice } = start();
+    const attempt = () =>
+      fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${alice.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ address: "a@example.com" }),
+      });
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      statuses.push((await attempt()).status);
+    }
+    expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
+    expect(statuses[5]).toBe(429);
+  });
+});
+
+describe("GET /v1/exports/email/confirm", () => {
+  async function requestConfirmation(port: number, token: string) {
+    return fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ address: "a@example.com" }),
+    });
+  }
+
+  it("verifies the address when the mailed link is followed", async () => {
+    const { port, destinations, sentEmails, alice } = start();
+    await requestConfirmation(port, alice.token);
+    const link = sentEmails[0].text.match(/https:\S+/)![0];
+    const token = new URL(link).searchParams.get("token")!;
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email/confirm?token=${token}`, {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/app/exports?email=confirmed");
+    expect(destinations.getEmail(alice.userId)?.verifiedAt).toBeTruthy();
+  });
+
+  it("a forged token verifies nothing", async () => {
+    const { port, destinations, alice } = start();
+    const res = await fetch(
+      `http://127.0.0.1:${port}/v1/exports/email/confirm?token=forged-token`,
+      { redirect: "manual" },
+    );
+    expect(res.headers.get("location")).toBe("/app/exports?email=failed");
+    expect(destinations.getEmail(alice.userId)).toBeNull();
+  });
+
+  it("a token cannot be used a second time", async () => {
+    const { port, destinations, sentEmails, alice } = start();
+    await requestConfirmation(port, alice.token);
+    const link = sentEmails[0].text.match(/https:\S+/)![0];
+    const token = new URL(link).searchParams.get("token")!;
+
+    await fetch(`http://127.0.0.1:${port}/v1/exports/email/confirm?token=${token}`, {
+      redirect: "manual",
+    });
+    // Un-verify to make a replay's effect observable.
+    destinations.putEmail(alice.userId, { address: "a@example.com" });
+
+    const replay = await fetch(
+      `http://127.0.0.1:${port}/v1/exports/email/confirm?token=${token}`,
+      { redirect: "manual" },
+    );
+    expect(replay.headers.get("location")).toBe("/app/exports?email=failed");
+    expect(destinations.getEmail(alice.userId)?.verifiedAt).toBeUndefined();
+  });
+});
+
+describe("DELETE /v1/exports/email", () => {
+  it("removes only the caller's own destination", async () => {
+    const { port, destinations, alice, mallory } = start();
+    destinations.putEmail(alice.userId, { address: "a@example.com" });
+    destinations.putEmail(mallory.userId, { address: "m@example.com" });
+
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(await res.json()).toEqual({ removed: true });
+    expect(destinations.getEmail(alice.userId)).toBeNull();
+    expect(destinations.getEmail(mallory.userId)).not.toBeNull();
+  });
+
+  it("requires authentication", async () => {
+    const { port } = start();
+    const res = await fetch(`http://127.0.0.1:${port}/v1/exports/email`, {
       method: "DELETE",
     });
     expect(res.status).toBe(401);

@@ -23,6 +23,7 @@ import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
 import { ExportDestinationStore } from "./exportDestinations";
 import { keyFromEnv } from "./secretBox";
+import { createResendSender, createTranscriptEmailSender } from "./emailSender";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -80,6 +81,19 @@ if (!destinations) {
   console.log("Export destinations disabled: ENCRYPTION_KEY is not set");
 }
 
+// Resend is a plain REST endpoint, so this needs no dependency and no
+// gating beyond the two settings it actually uses. Transcript email is a
+// further add-on on top of `destinations` (below): with no sender
+// configured, or no export destinations at all, nothing tries to mail
+// anyone and captioning is unaffected either way.
+const sendEmail =
+  config.resendApiKey && config.emailFrom
+    ? createResendSender(config.resendApiKey, config.emailFrom)
+    : undefined;
+if (!sendEmail) {
+  console.log("Transcript email disabled: RESEND_API_KEY and EMAIL_FROM are not both set");
+}
+
 /**
  * Build that user's Notion clients from their stored credentials. Constructed
  * per call rather than cached: a user can disconnect or reconnect at any time,
@@ -104,6 +118,13 @@ const transcripts = new TranscriptStore({
     root: config.transcriptsDir,
     summarize,
     resolve: resolveExporters,
+    // Only sends to an address the user has actually verified —
+    // `createTranscriptEmailSender` is the single choke point that enforces
+    // that, so it's reused here rather than duplicated inline.
+    sendTranscriptEmail:
+      destinations && sendEmail
+        ? createTranscriptEmailSender(destinations, sendEmail)
+        : undefined,
   }),
 });
 

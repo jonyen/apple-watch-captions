@@ -27,6 +27,8 @@ import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
 import { voiceResponse } from "./twiml";
 import { ExportDestinationStore } from "./exportDestinations";
 import { OAuthStateStore, authorizeUrl, NotionOAuthConfig, ExchangeCode } from "./notionOAuth";
+import { EmailVerificationStore } from "./emailVerification";
+import { SendEmail } from "./emailSender";
 
 export * from "./providerOptions";
 
@@ -79,6 +81,12 @@ export interface StartServerOptions {
    * Injectable for tests — production wiring calls Notion's `/v1/search`.
    */
   findNotionDatabase?: (accessToken: string) => Promise<{ id: string; title?: string } | null>;
+  /** Optional; single-use, expiring proof of control over an email address. Required alongside `sendEmail`, `destinations`, and `publicBaseUrl` to enable /v1/exports/email. */
+  emailVerifications?: EmailVerificationStore;
+  /** Optional; sends the verification email. Injectable for tests. */
+  sendEmail?: SendEmail;
+  /** Public origin the confirmation link points back to, e.g. https://relay.fly.dev. Required alongside the email options above. */
+  publicBaseUrl?: string;
 }
 
 export interface CaptionServer {
@@ -128,6 +136,16 @@ const PAIR_CLAIM_WINDOW_MS = 10 * 60_000;
  */
 const PAIR_CODE_ISSUES_PER_WINDOW = 10;
 const PAIR_CODE_WINDOW_MS = 60 * 60_000;
+/**
+ * Verification emails a device may trigger per window, and the window.
+ *
+ * The relay sends mail to whatever address `/v1/exports/email` names, so an
+ * unlimited caller could use it to deliver mail to strangers — this is the
+ * only thing standing between that and an open remailer, alongside the
+ * single-use expiring confirmation token itself.
+ */
+const EMAIL_SENDS_PER_WINDOW = 5;
+const EMAIL_WINDOW_MS = 60 * 60_000;
 
 /**
  * Per-key sliding-window limiter. Used both for `/v1/devices` registrations
@@ -247,6 +265,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     PAIR_CODE_ISSUES_PER_WINDOW,
     PAIR_CODE_WINDOW_MS,
   );
+  const emailLimiter = new RegistrationLimiter(undefined, EMAIL_SENDS_PER_WINDOW, EMAIL_WINDOW_MS);
   const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
@@ -260,6 +279,7 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       limiter,
       claimLimiter,
       codeLimiter,
+      emailLimiter,
     ).catch(
       () => {
         if (!res.headersSent) res.writeHead(500);
@@ -348,6 +368,7 @@ async function handleRequest(
   limiter: RegistrationLimiter,
   claimLimiter: RegistrationLimiter,
   codeLimiter: RegistrationLimiter,
+  emailLimiter: RegistrationLimiter,
 ): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
 
@@ -879,6 +900,89 @@ async function handleRequest(
       return;
     }
     sendJSON(res, 200, { removed: opts.destinations?.remove(principal.userId, "notion") ?? false });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/exports/email") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.emailVerifications || !opts.sendEmail || !opts.destinations || !opts.publicBaseUrl) {
+      sendJSON(res, 503, { error: "email export not configured" });
+      return;
+    }
+    // The relay sends mail to whatever address this call names, so an
+    // unlimited caller could use it to deliver mail to strangers.
+    if (!emailLimiter.allow(principal.deviceId)) {
+      sendJSON(res, 429, { error: "too many verification emails" });
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBody(req, MAX_REGISTRATION_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    let address: unknown;
+    try {
+      address = (JSON.parse(body.toString("utf8")) as { address?: unknown } | null)?.address;
+    } catch {
+      sendJSON(res, 400, { error: "invalid json" });
+      return;
+    }
+    if (typeof address !== "string" || !/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(address)) {
+      sendJSON(res, 400, { error: "invalid address" });
+      return;
+    }
+    opts.destinations.putEmail(principal.userId, { address });
+    const token = opts.emailVerifications.mint(principal.userId, address);
+    const link = `${opts.publicBaseUrl.replace(/\/$/, "")}/v1/exports/email/confirm?token=${token}`;
+    try {
+      await opts.sendEmail({
+        to: address,
+        subject: "Confirm transcript delivery",
+        text:
+          `Confirm this address to start receiving your caption transcripts:\n\n${link}\n\n` +
+          `If you did not ask for this, ignore this message and nothing will be sent.`,
+      });
+    } catch (err) {
+      console.error("verification email failed:", err);
+      sendJSON(res, 502, { error: "could not send verification email" });
+      return;
+    }
+    sendJSON(res, 200, { pending: true });
+    return;
+  }
+
+  // Followed from an inbox, so there is no bearer token. The single-use token
+  // is the proof, and it proves control of the address — which is the point.
+  if (req.method === "GET" && url.pathname === "/v1/exports/email/confirm") {
+    const token = url.searchParams.get("token");
+    const claim = token && opts.emailVerifications ? opts.emailVerifications.consume(token) : null;
+    if (!claim || !opts.destinations) {
+      res.writeHead(302, { location: "/app/exports?email=failed" });
+      res.end();
+      return;
+    }
+    opts.destinations.putEmail(claim.userId, {
+      address: claim.address,
+      verifiedAt: new Date().toISOString(),
+    });
+    res.writeHead(302, { location: "/app/exports?email=confirmed" });
+    res.end();
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/v1/exports/email") {
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    sendJSON(res, 200, { removed: opts.destinations?.remove(principal.userId, "email") ?? false });
     return;
   }
 

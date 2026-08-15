@@ -43,6 +43,10 @@ export interface Config {
   notionOAuth?: NotionOAuthConfig;
   /** Public origin the OAuth redirect returns to, e.g. https://relay.fly.dev. Required alongside notionOAuth. */
   publicBaseUrl?: string;
+  /** Optional; Resend API key. Required alongside emailFrom to enable /v1/exports/email. */
+  resendApiKey?: string;
+  /** Optional; the From address transcript and verification emails are sent from. */
+  emailFrom?: string;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -82,6 +86,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     trustProxyHeaders: loadTrustProxyHeaders(env),
     notionOAuth: loadNotionOAuth(env, env.PUBLIC_BASE_URL || undefined),
     publicBaseUrl: env.PUBLIC_BASE_URL || undefined,
+    resendApiKey: env.RESEND_API_KEY || undefined,
+    emailFrom: env.EMAIL_FROM || undefined,
   };
 }
 

@@ -30,6 +30,18 @@ export interface FinalizerOptions {
    * exports to their own workspace with their own credentials.
    */
   resolve?: ResolveExporters;
+  /**
+   * Optional; mails the finished transcript to the user's own verified email
+   * destination. Whether it actually sends anything (e.g. gating on a
+   * verified address) is entirely the callback's decision — this function
+   * only guarantees the call is best-effort, same as the Notion export
+   * above.
+   */
+  sendTranscriptEmail?: (
+    userId: string,
+    t: FinalizedTranscript,
+    summary: string | null,
+  ) => Promise<void>;
 }
 
 /**
@@ -111,6 +123,14 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
   // Notion when Claude is unconfigured or the summary call failed.
   if (exporters) {
     await exportOnce(exporters.export, dir, t, summary, exporters.update);
+  }
+
+  if (opts.sendTranscriptEmail) {
+    try {
+      await opts.sendTranscriptEmail(t.userId, t, summary);
+    } catch (err) {
+      console.error(`transcript email failed for ${t.name}:`, err);
+    }
   }
 }
 

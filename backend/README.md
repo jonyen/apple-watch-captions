@@ -142,7 +142,13 @@ connectable:
 `PUBLIC_BASE_URL` is this deploy's own public origin, e.g.
 `https://watch-captions-relay.fly.dev` — both the OAuth redirect and the
 emailed confirmation link point back at it, so it must match whatever the app
-is actually reachable at.
+is actually reachable at. It ships in `fly.toml` naming the upstream app, and
+`fly.dev` names are globally unique, so **rename it whenever you rename
+`app`** (see [DEPLOY.md](./DEPLOY.md) step 2): left stale, it hands another
+host a live Notion authorization code and a live email verification token
+along with the user's address. The relay compares it against `FLY_APP_NAME`
+at boot and warns, naming both, when they disagree — a custom domain warns
+too and is fine to ignore.
 
 **Email delivery sends the full transcript** of a finished session to the
 address a user names — including anything other people in the conversation

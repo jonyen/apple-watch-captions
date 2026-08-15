@@ -22,6 +22,7 @@ import {
   TRANSCRIPT_SUFFIXES,
 } from "./transcriptStore";
 import { VIEWER_HTML } from "./viewerPage";
+import { EXPORTS_HTML } from "./exportsPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
 import { voiceResponse } from "./twiml";
@@ -383,6 +384,13 @@ async function handleRequest(
   if (req.method === "GET" && url.pathname === "/app") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(VIEWER_HTML);
+    return;
+  }
+
+  // Export destinations web app — same static-page shape as /app above.
+  if (req.method === "GET" && url.pathname === "/app/exports") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(EXPORTS_HTML);
     return;
   }
 

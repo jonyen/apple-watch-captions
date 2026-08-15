@@ -45,6 +45,7 @@ export const VIEWER_HTML = `<!doctype html>
 </head>
 <body>
 <h1>Watch Captions — Transcripts</h1>
+<p><a href="/app/exports">Export destinations (Notion, email) &rarr;</a></p>
 <div id="auth" style="display:none">
   <p>Enter your device token to view transcripts.</p>
   <input id="token" type="password" placeholder="device token" autocomplete="off">

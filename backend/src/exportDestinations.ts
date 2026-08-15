@@ -113,3 +113,17 @@ export class ExportDestinationStore {
     return row ? { ...row } : null;
   }
 }
+
+/**
+ * Carry a pre-OAuth `NOTION_TOKEN`/`NOTION_DATABASE_ID` pair onto the user who
+ * owns the transcripts, so exports keep working across the upgrade. Never
+ * overwrites a connection the user has since made through OAuth.
+ */
+export function adoptLegacyNotion(
+  store: ExportDestinationStore,
+  userId: string,
+  legacy: { token: string; databaseId: string },
+): void {
+  if (store.getNotion(userId)) return;
+  store.putNotion(userId, legacy.token, { databaseId: legacy.databaseId });
+}

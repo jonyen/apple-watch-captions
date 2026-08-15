@@ -20,7 +20,13 @@ export interface Config {
   openaiApiKey?: string;
   /** Optional; enables the `assemblyai` caption provider. */
   assemblyaiApiKey?: string;
-  /** Optional; when set, finished transcripts are exported to Notion. */
+  /**
+   * Optional; deprecated. Once exported every finished transcript to one
+   * relay-wide Notion database; now only used to migrate an existing
+   * single-user install's connection onto that user's own destination row
+   * (see `adoptLegacyNotion`, called from `index.ts`). Superseded by
+   * `notionOAuth`, which lets each user connect their own workspace.
+   */
   notion?: NotionConfig;
   /**
    * Optional; seals/opens the secrets in `export_destinations`. Unset means

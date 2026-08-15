@@ -1,5 +1,45 @@
 import { randomBytes } from "crypto";
 import { Db } from "./db";
+import { NOTION_VERSION } from "./notionExporter";
+
+/**
+ * Find a database to export into, using the token just granted.
+ *
+ * A normal (non-template) Notion integration never returns a database id
+ * from the token exchange — the user picks pages to share on the consent
+ * screen instead, and `/v1/search` is the only way to discover what that
+ * granted. `Notion-Version` matches `notionExporter.ts`'s `createRequest`
+ * (the same header, imported from the same constant) so the two never drift
+ * apart. Injectable `fetchImpl`, matching `createCodeExchange`, so this stays
+ * testable without a network.
+ */
+export function createDatabaseFinder(
+  fetchImpl: typeof fetch = fetch,
+): (accessToken: string) => Promise<{ id: string; title?: string } | null> {
+  return async (accessToken) => {
+    const res = await fetchImpl("https://api.notion.com/v1/search", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Notion-Version": NOTION_VERSION,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ filter: { value: "database", property: "object" } }),
+    } as RequestInit);
+    if (!res.ok) {
+      throw new Error(`notion database search failed: ${res.status} ${await res.text()}`);
+    }
+    const body = (await res.json()) as {
+      results?: { id: string; title?: { plain_text: string }[] }[];
+    };
+    const found = body.results?.[0];
+    if (!found) return null;
+    return {
+      id: found.id,
+      title: found.title?.map((t) => t.plain_text).join("") || undefined,
+    };
+  };
+}
 
 export interface NotionOAuthConfig {
   clientId: string;

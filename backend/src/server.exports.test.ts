@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import { startServer, CaptionServer, StartServerOptions } from "./server";
 import { openDb } from "./db";
 import { IdentityStore } from "./identityStore";
-import { ExportDestinationStore } from "./exportDestinations";
+import { ExportDestinationStore, adoptLegacyNotion } from "./exportDestinations";
 import { OAuthStateStore } from "./notionOAuth";
 import { EmailVerificationStore } from "./emailVerification";
 import { SendEmailArgs } from "./emailSender";
@@ -60,6 +60,17 @@ function start(overrides: Partial<StartServerOptions> = {}) {
     mallory,
   };
 }
+
+describe("GET /app/exports", () => {
+  it("serves the export destinations page", async () => {
+    const { port } = start();
+    const res = await fetch(`http://127.0.0.1:${port}/app/exports`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const body = await res.text();
+    expect(body).toContain("Connect Notion");
+  });
+});
 
 describe("GET /v1/exports", () => {
   it("requires authentication", async () => {
@@ -531,5 +542,33 @@ describe("DELETE /v1/exports/email", () => {
     );
     expect(confirm.headers.get("location")).toBe("/app/exports?email=failed");
     expect(destinations.getEmail(alice.userId)).toBeNull();
+  });
+});
+
+describe("legacy Notion config migration", () => {
+  it("folds NOTION_TOKEN into the operator's destination row", () => {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const operator = identity.registerDevice("mac").userId;
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+
+    adoptLegacyNotion(destinations, operator, { token: "ntn_legacy", databaseId: "db-legacy" });
+
+    expect(destinations.getNotion(operator)).toEqual({
+      token: "ntn_legacy",
+      config: { databaseId: "db-legacy" },
+    });
+  });
+
+  it("does not overwrite a connection the user already made", () => {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const operator = identity.registerDevice("mac").userId;
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+    destinations.putNotion(operator, "ntn_current", { databaseId: "db-current" });
+
+    adoptLegacyNotion(destinations, operator, { token: "ntn_legacy", databaseId: "db-legacy" });
+
+    expect(destinations.getNotion(operator)!.token).toBe("ntn_current");
   });
 });

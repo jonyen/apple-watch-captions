@@ -5,8 +5,10 @@ import {
   OAuthStateStore,
   authorizeUrl,
   createCodeExchange,
+  createDatabaseFinder,
   OAUTH_STATE_TTL_MS,
 } from "./notionOAuth";
+import { NOTION_VERSION } from "./notionExporter";
 
 const config = {
   clientId: "client-1",
@@ -106,5 +108,64 @@ describe("createCodeExchange", () => {
       text: async () => "invalid_grant",
     })) as unknown as typeof fetch;
     await expect(createCodeExchange(config, fakeFetch)("bad")).rejects.toThrow(/400/);
+  });
+});
+
+describe("createDatabaseFinder", () => {
+  it("searches Notion for a database with the granted token", async () => {
+    let seen: { url: string; init: RequestInit } | undefined;
+    const fakeFetch = (async (url: string, init: RequestInit) => {
+      seen = { url: String(url), init };
+      return { ok: true, json: async () => ({ results: [] }) };
+    }) as unknown as typeof fetch;
+
+    await createDatabaseFinder(fakeFetch)("ntn_granted");
+
+    expect(seen!.url).toBe("https://api.notion.com/v1/search");
+    const headers = seen!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer ntn_granted");
+    expect(headers["Notion-Version"]).toBe(NOTION_VERSION);
+    expect(headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(String(seen!.init.body))).toEqual({
+      filter: { value: "database", property: "object" },
+    });
+  });
+
+  it("returns the id and title of the first result", async () => {
+    const fakeFetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            id: "db-first",
+            title: [{ plain_text: "My " }, { plain_text: "Notes" }],
+          },
+          { id: "db-second", title: [{ plain_text: "Other" }] },
+        ],
+      }),
+    })) as unknown as typeof fetch;
+
+    const found = await createDatabaseFinder(fakeFetch)("ntn_granted");
+
+    expect(found).toEqual({ id: "db-first", title: "My Notes" });
+  });
+
+  it("returns null when the search finds no database", async () => {
+    const fakeFetch = (async () => ({
+      ok: true,
+      json: async () => ({ results: [] }),
+    })) as unknown as typeof fetch;
+
+    expect(await createDatabaseFinder(fakeFetch)("ntn_granted")).toBeNull();
+  });
+
+  it("throws when Notion rejects the search", async () => {
+    const fakeFetch = (async () => ({
+      ok: false,
+      status: 401,
+      text: async () => "invalid token",
+    })) as unknown as typeof fetch;
+
+    await expect(createDatabaseFinder(fakeFetch)("ntn_granted")).rejects.toThrow(/401/);
   });
 });

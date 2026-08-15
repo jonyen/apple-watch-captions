@@ -3,7 +3,9 @@ import { NotionBlock, batches, markdownToBlocks, paragraph, toggle } from "./not
 import { parseSummary } from "./summaryPrompt";
 
 const API = "https://api.notion.com/v1";
-const NOTION_VERSION = "2022-06-28";
+// Exported so other Notion callers (e.g. notionOAuth's post-grant database
+// search) send the same version rather than a copy that can drift from it.
+export const NOTION_VERSION = "2022-06-28";
 
 export interface ExportResult {
   pageId: string;

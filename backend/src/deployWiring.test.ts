@@ -35,4 +35,51 @@ describe("deployment wiring", () => {
   it("turns proxy-header trust on in the Fly config", () => {
     expect(read("fly.toml")).toMatch(/^\s*TRUST_PROXY_HEADERS\s*=\s*"true"\s*$/m);
   });
+
+  // The whole /v1/exports/* surface (Tasks 5-7) shipped fully built and fully
+  // tested against `startServer` directly, and unreachable in production:
+  // nothing in index.ts ever passed any of these eight options, so an
+  // unconfigured-looking StartServerOptions object satisfied every route
+  // test while the entrypoint constructed something else entirely. One test
+  // per option, so a single dropped wire fails on its own line rather than
+  // hiding in a passing composite assertion.
+  const entrypoint = read("src/index.ts");
+  const callStart = entrypoint.indexOf("startServer({");
+  const callEnd = entrypoint.indexOf("});", callStart);
+  // Sliced to just the call site, not the whole file: without this, a test
+  // for (say) `sendEmail` would pass merely because that identifier appears
+  // *somewhere* in index.ts — as the variable's own declaration — even if it
+  // were never actually threaded into the options object below.
+  const startServerCall = entrypoint.slice(callStart, callEnd);
+
+  it.each([
+    ["destinations", "destinations,"],
+    ["oauthStates", "oauthStates,"],
+    ["notionOAuth", "notionOAuth: config.notionOAuth,"],
+    ["exchangeNotionCode", "exchangeNotionCode,"],
+    ["findNotionDatabase", "findNotionDatabase,"],
+    ["emailVerifications", "emailVerifications,"],
+    ["sendEmail", "sendEmail,"],
+    ["publicBaseUrl", "publicBaseUrl: config.publicBaseUrl,"],
+  ])("wires %s into the startServer call", (_name, needle) => {
+    expect(startServerCall).toContain(needle);
+  });
+
+  // RESEND_API_KEY is a bearer credential for the whole relay's mail sending
+  // — it belongs in `fly secrets`, never committed to fly.toml. EMAIL_FROM
+  // and PUBLIC_BASE_URL are not secrets (a From address and this deploy's own
+  // public origin), so they belong in `[env]` like TRUST_PROXY_HEADERS above.
+  it("adds the non-secret email/public-URL settings to the Fly config", () => {
+    const toml = read("fly.toml");
+    expect(toml).toMatch(/^\s*EMAIL_FROM\s*=/m);
+    expect(toml).toMatch(/^\s*PUBLIC_BASE_URL\s*=/m);
+  });
+
+  it("never commits the Resend API key to the Fly config", () => {
+    // Matches an actual assignment, not a comment mentioning the name (e.g.
+    // one pointing the reader at `fly secrets set` instead) — the point is
+    // that no value for it is ever written to this file, which is checked
+    // into git, not that the string never appears.
+    expect(read("fly.toml")).not.toMatch(/^\s*RESEND_API_KEY\s*=/m);
+  });
 });

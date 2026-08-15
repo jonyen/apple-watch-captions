@@ -21,9 +21,11 @@ import { backfillSummaries } from "./summaryBackfill";
 import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
 import { migrateFlatTranscripts } from "./tenantMigration";
-import { ExportDestinationStore } from "./exportDestinations";
+import { ExportDestinationStore, adoptLegacyNotion } from "./exportDestinations";
 import { keyFromEnv } from "./secretBox";
 import { createResendSender, createTranscriptEmailSender } from "./emailSender";
+import { OAuthStateStore, createCodeExchange, createDatabaseFinder } from "./notionOAuth";
+import { EmailVerificationStore } from "./emailVerification";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -92,6 +94,41 @@ const sendEmail =
     : undefined;
 if (!sendEmail) {
   console.log("Transcript email disabled: RESEND_API_KEY and EMAIL_FROM are not both set");
+}
+
+// Per-user Notion OAuth: lets each user connect their own workspace instead
+// of the whole relay sharing one legacy NOTION_TOKEN. `config.notionOAuth` is
+// already all-or-nothing (see `loadNotionOAuth`), so every piece here gates
+// on that one flag rather than each needing its own check.
+const oauthStates = config.notionOAuth ? new OAuthStateStore(db) : undefined;
+const exchangeNotionCode = config.notionOAuth ? createCodeExchange(config.notionOAuth) : undefined;
+const findNotionDatabase = config.notionOAuth ? createDatabaseFinder() : undefined;
+if (!config.notionOAuth) {
+  console.log(
+    "Per-user Notion export disabled: set NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, and PUBLIC_BASE_URL",
+  );
+}
+if (config.notion) {
+  // The old single-workspace NOTION_TOKEN/NOTION_DATABASE_ID path still
+  // works (resolveExporters below falls back to it via adoptLegacyNotion),
+  // but it is deprecated now that each user connects their own workspace —
+  // this is the operator-visible replacement for the "NOTION_TOKEN not set"
+  // line Task 4 removed, so upgrading with a global token still gets a
+  // signal instead of silence.
+  console.log(
+    "NOTION_TOKEN/NOTION_DATABASE_ID are deprecated: connect each user's own workspace via " +
+      "/app/exports, then unset these once everyone has.",
+  );
+}
+
+// Verified proof of control over an email address, ahead of ever mailing a
+// transcript to it. Gated on the same settings that make /v1/exports/email
+// useful at all: no sender configured, or no public URL for the confirmation
+// link to point back to, means nothing could complete the flow anyway.
+const emailVerifications =
+  sendEmail && config.publicBaseUrl ? new EmailVerificationStore(db) : undefined;
+if (sendEmail && !config.publicBaseUrl) {
+  console.log("Transcript email confirmation disabled: PUBLIC_BASE_URL is not set");
 }
 
 /**
@@ -179,6 +216,14 @@ if (migrated) {
     `Migrated ${migrated.moved} file(s) to user ${migrated.userId}. ` +
       `Adopt existing installs with this token (shown once): ${migrated.token}`,
   );
+  // The pre-multi-tenant install had exactly one implicit owner — whichever
+  // user this same migration just adopted the flat transcripts into — so
+  // that is the one destination row the legacy NOTION_TOKEN can sensibly
+  // carry onto. Never overwrites a connection made since through OAuth.
+  if (config.notion && destinations) {
+    adoptLegacyNotion(destinations, migrated.userId, config.notion);
+    console.log(`Adopted the legacy Notion connection onto user ${migrated.userId}.`);
+  }
 }
 
 const server = startServer({
@@ -191,12 +236,20 @@ const server = startServer({
   usage: createUsageService({ env: process.env }),
   callForwardTo: config.twilioForwardTo,
   trustProxyHeaders: config.trustProxyHeaders,
+  destinations,
+  oauthStates,
+  notionOAuth: config.notionOAuth,
+  exchangeNotionCode,
+  findNotionDatabase,
+  emailVerifications,
+  sendEmail,
+  publicBaseUrl: config.publicBaseUrl,
 });
 
 const addr = server.address();
 const port = typeof addr === "object" && addr ? addr.port : config.port;
 console.log(`Caption relay listening on ws://0.0.0.0:${port}/stream`);
-console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app`);
+console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app, export destinations at /app/exports`);
 
 /**
  * The per-user subdirectories under the transcripts root — each backfill

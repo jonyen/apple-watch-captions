@@ -42,11 +42,36 @@ fly volumes create transcripts --size 1
 #    Without it, transcripts are still saved; only summaries are skipped.
 fly secrets set ANTHROPIC_API_KEY="<your-anthropic-key>"
 
-# 6. (Optional) Export finished transcripts to a Notion database.
-#    Verify access first — a 404 here means the database isn't shared with
-#    the integration. See backend/README.md "Notion export" for setup.
+# 6. (Optional, deprecated) Export finished transcripts to one relay-wide
+#    Notion database. Verify access first — a 404 here means the database
+#    isn't shared with the integration. Prefer #7 below for a real
+#    deployment; see backend/README.md "Legacy single-workspace Notion
+#    export" for why this still exists and when it's read.
 node scripts/notion-check.mjs "<ntn_token>" "<database-id>"
 fly secrets set NOTION_TOKEN="<ntn_token>" NOTION_DATABASE_ID="<database-id>"
+
+# 7. (Optional) Let each user connect their own Notion workspace and/or
+#    email address from /app/exports, instead of #6's one shared workspace.
+#
+#    7a. The master key sealing stored Notion tokens at rest. Required for
+#        any of this — without it, /app/exports has nothing to connect.
+ENCRYPTION_KEY=$(openssl rand -base64 32)
+fly secrets set ENCRYPTION_KEY="$ENCRYPTION_KEY"
+
+#    7b. This deploy's own public origin — the OAuth redirect and the emailed
+#        confirmation link both point back at it. Not a secret; goes in
+#        fly.toml's [env], already set there to the app's default `fly.dev`
+#        hostname — edit it there if you're using a custom domain instead.
+#
+#    7c. A public Notion integration (Type: Public, not the Internal one used
+#        by #6) — see backend/README.md "Registering the Notion integration"
+#        for the redirect URI it needs and where to find these.
+fly secrets set NOTION_CLIENT_ID="<client-id>" NOTION_CLIENT_SECRET="<client-secret>"
+
+#    7d. Resend, for the email export destination — an API key (secret) and
+#        the From address (not a secret; also in fly.toml's [env], edit it
+#        there). See https://resend.com.
+fly secrets set RESEND_API_KEY="<resend-api-key>"
 ```
 
 ## Deploy
@@ -96,6 +121,12 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "<device-token>" sam
 
 - `auto_stop_machines = "off"` + `min_machines_running = 1` keep the relay always up so it
   can accept incoming connections. This is the ~$2–5/month fixed cost from the design spec.
+- `PUBLIC_BASE_URL` and `EMAIL_FROM` live in `fly.toml`'s `[env]` too, right
+  beside `TRUST_PROXY_HEADERS` — neither is a secret (a deploy's own public
+  address; a From address), unlike `NOTION_CLIENT_SECRET` and
+  `RESEND_API_KEY`, which are credentials and belong only in `fly secrets`.
+  Edit `PUBLIC_BASE_URL` in `fly.toml` if you're on a custom domain rather
+  than the default `fly.dev` hostname.
 - `TRUST_PROXY_HEADERS = "true"` in `fly.toml`'s `[env]` is what makes the
   registration rate limit work on Fly: `http_service` terminates the client's
   connection, so without it every caller shares one 10-per-hour bucket and any

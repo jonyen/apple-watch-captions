@@ -122,26 +122,81 @@ With neither key set, transcripts are still saved; only summaries are skipped.
 Transcripts that never got a summary are picked up by a sweep on the next boot,
 so fixing a key or switching providers backfills the gap without manual steps.
 
-## Notion export (optional)
+## Export destinations: Notion and email (per user)
 
-When `NOTION_TOKEN` and `NOTION_DATABASE_ID` are both set, each finished session
-becomes a page in that database, named `2026-07-10 18:05 — <what it was about>`
-(the summarizer writes the topic; sessions without a summary fall back to a plain
-dated name). The page holds two collapsed sections: a **Summary** toggle
-holding the Claude summary, and a **Full transcript** toggle holding every caption
-line. The Summary toggle is omitted when no summary was generated. Set neither and
-transcripts are still saved locally — only the export is skipped.
+Each user connects their own Notion workspace and/or email address from
+`/app/exports` (paste your device token there, same as `/app`) — finished
+sessions export to whatever they've connected, independent of every other
+user's account. This replaces the single relay-wide `NOTION_TOKEN` below.
 
-Setup:
+Enabling it needs three things, all optional and independently gated —
+without them, captioning still works and `/app/exports` just shows nothing
+connectable:
 
-1. Create an internal integration at
-   [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy its
-   token (`ntn_…`).
-2. Create the target database. The only required column is the title; add any of
-   `Started` (date), `Ended` (date), `Segments` (number), `Session` (rich text)
-   and the exporter fills them too. Columns it doesn't recognize are left alone.
-3. **Share the database with the integration** — open it, `⋯` → *Connections* →
-   add the integration. Skipping this is the usual cause of a `404` at export.
+| Feature | Env | Notes |
+|---------|-----|-------|
+| Storing destinations at all | `ENCRYPTION_KEY` | AES-256-GCM key sealing the Notion token in the database. Generate with `openssl rand -base64 32`. Present-but-malformed fails loudly at boot (never silently generates a throwaway key); absent just disables the feature. |
+| Notion OAuth (`/v1/exports/notion/*`) | `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, `PUBLIC_BASE_URL` | Register a **public** Notion integration (not the internal-integration token below) — see "Registering the Notion integration". |
+| Email export (`/v1/exports/email`) | `RESEND_API_KEY`, `EMAIL_FROM`, `PUBLIC_BASE_URL` | Sends the confirmation link and, later, transcripts via [Resend](https://resend.com). |
+
+`PUBLIC_BASE_URL` is this deploy's own public origin, e.g.
+`https://watch-captions-relay.fly.dev` — both the OAuth redirect and the
+emailed confirmation link point back at it, so it must match whatever the app
+is actually reachable at.
+
+**Email delivery sends the full transcript** of a finished session to the
+address a user names — including anything other people in the conversation
+said, not just that user's own side. `/app/exports` says this too; it isn't
+only a backend detail.
+
+### Registering the Notion integration
+
+1. Create a **public** integration at
+   [notion.so/my-integrations](https://www.notion.so/my-integrations) (Type:
+   Public, not Internal — internal integrations don't support OAuth).
+2. Set its redirect URI to `<PUBLIC_BASE_URL>/v1/exports/notion/callback`,
+   exactly — Notion rejects a code exchange whose `redirect_uri` doesn't match
+   what's registered.
+3. Copy its OAuth client id and secret:
+   ```bash
+   fly secrets set NOTION_CLIENT_ID="<client-id>" NOTION_CLIENT_SECRET="<client-secret>"
+   ```
+4. A user connects at `/app/exports` → *Connect Notion*, picks a workspace and
+   the pages/databases to share on Notion's consent screen. If no database was
+   shared, the relay searches for one via `/v1/search` after the grant and, if
+   it still finds none, reports back to `/app/exports?notion=nodatabase` — the
+   user should share a database with the integration and try again.
+
+Each finished session becomes a page in that user's connected database, named
+`2026-07-10 18:05 — <what it was about>` (the summarizer writes the topic;
+sessions without a summary fall back to a plain dated name). The page holds
+two collapsed sections: a **Summary** toggle holding the Claude summary, and a
+**Full transcript** toggle holding every caption line. The Summary toggle is
+omitted when no summary was generated.
+
+### Legacy single-workspace Notion export (deprecated)
+
+`NOTION_TOKEN`/`NOTION_DATABASE_ID` (an *internal* integration token, not the
+public one above) predate per-user connections and only exist now to migrate
+an existing single-user install: on the one boot that adopts pre-multi-tenant
+transcripts into a fresh user (see "Authentication" above), the relay also
+folds this legacy Notion config onto that same user's destination row, so
+their exports keep working across the upgrade — logged once, and never
+overwriting a connection the user has since made through `/app/exports`. Once
+every real user has connected their own workspace, unset both.
+
+Setup, if you still need it:
+
+1. Create an **internal** integration at
+   [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy
+   its token (`ntn_…`).
+2. Create the target database. The only required column is the title; add any
+   of `Started` (date), `Ended` (date), `Segments` (number), `Session` (rich
+   text) and the exporter fills them too. Columns it doesn't recognize are
+   left alone.
+3. **Share the database with the integration** — open it, `⋯` → *Connections*
+   → add the integration. Skipping this is the usual cause of a `404` at
+   export.
 4. Copy the database id from its URL: `notion.so/<workspace>/<database-id>?v=…`.
 5. Check it before deploying:
    ```bash

@@ -72,6 +72,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (!deepgramApiKey) throw new Error("DEEPGRAM_API_KEY is required");
   const port = env.PORT ? Number(env.PORT) : 8080;
   const transcriptsDir = env.TRANSCRIPTS_DIR || "./data/transcripts";
+  const publicBaseUrl = env.PUBLIC_BASE_URL || undefined;
+  warnIfPublicBaseUrlIsNotThisApp(env, publicBaseUrl);
 
   return {
     port,
@@ -93,11 +95,54 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
     twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
     trustProxyHeaders: loadTrustProxyHeaders(env),
-    notionOAuth: loadNotionOAuth(env, env.PUBLIC_BASE_URL || undefined),
-    publicBaseUrl: env.PUBLIC_BASE_URL || undefined,
+    notionOAuth: loadNotionOAuth(env, publicBaseUrl),
+    publicBaseUrl,
     resendApiKey: env.RESEND_API_KEY || undefined,
     emailFrom: env.EMAIL_FROM || undefined,
   };
+}
+
+/**
+ * Shout if `PUBLIC_BASE_URL` points somewhere other than this app.
+ *
+ * It is a shipped default in `fly.toml` (this project's own `fly.dev`
+ * hostname), and `fly.dev` names are globally unique — so an operator
+ * deploying from scratch *must* rename the app, and the default then names a
+ * host they do not control. Two live credentials are built from this value:
+ * the Notion OAuth `redirect_uri`, which is where Notion sends the user's
+ * browser carrying a real authorization code, and the emailed confirmation
+ * link, which carries a real verification token to the user's inbox
+ * alongside their address. Both would be delivered to the wrong host.
+ *
+ * A warning rather than a throw: on Fly a custom domain is a perfectly
+ * legitimate mismatch, and refusing to boot over it would take captioning
+ * down for an export setting. Off Fly (`FLY_APP_NAME` unset) there is nothing
+ * to compare against, so this says nothing at all.
+ */
+function warnIfPublicBaseUrlIsNotThisApp(
+  env: NodeJS.ProcessEnv,
+  publicBaseUrl: string | undefined,
+): void {
+  const app = env.FLY_APP_NAME;
+  if (!app || !publicBaseUrl) return;
+  let host: string;
+  try {
+    host = new URL(publicBaseUrl).host;
+  } catch {
+    console.warn(
+      `PUBLIC_BASE_URL="${publicBaseUrl}" is not a valid URL — the Notion redirect URI and the ` +
+        "emailed confirmation link are built from it and will be malformed.",
+    );
+    return;
+  }
+  const own = `${app}.fly.dev`;
+  if (host === own) return;
+  console.warn(
+    `PUBLIC_BASE_URL is "${publicBaseUrl}" but this app is "${app}", whose own hostname is ` +
+      `"${own}". Notion authorization codes and emailed verification tokens will be sent to ` +
+      `"${host}", not to this relay. Ignore this only if "${host}" is a custom domain routed ` +
+      `here; otherwise set PUBLIC_BASE_URL to "https://${own}" in fly.toml.`,
+  );
 }
 
 /**

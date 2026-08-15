@@ -89,6 +89,18 @@ describe("deployment wiring", () => {
     expect(read("fly.toml")).toMatch(/^\s*PUBLIC_BASE_URL\s*=/m);
   });
 
+  // Final review, Important 2: PUBLIC_BASE_URL's committed value names the
+  // upstream app, and `fly.dev` names are globally unique, so a from-scratch
+  // operator must rename the app — and, unless told here, only the app. The
+  // instruction has to sit where the rename is described; a mention further
+  // down (step 7b, the notes) is the arrangement that already failed.
+  it("tells the operator renaming the app to change PUBLIC_BASE_URL in the same step", () => {
+    const deploy = read("DEPLOY.md");
+    const renameStep = deploy.slice(deploy.indexOf("# 2. Create the app"), deploy.indexOf("# 3."));
+    expect(renameStep).not.toBe("");
+    expect(renameStep).toContain("PUBLIC_BASE_URL");
+  });
+
   // Fix round 1, Minor 1: EMAIL_FROM is not a secret either, but unlike
   // PUBLIC_BASE_URL it has no correct default — it must be an address on a
   // domain verified with Resend. Shipping any committed value here would let

@@ -21,8 +21,21 @@ cd backend
 # 1. Log in to Fly (opens a browser).
 fly auth login
 
-# 2. Create the app from the existing fly.toml. If the app name is taken,
-#    edit `app = "..."` in fly.toml to something unique, then re-run.
+# 2. Create the app from the existing fly.toml. `fly.dev` names are globally
+#    unique and this one is already taken by the upstream deploy, so expect
+#    to rename: edit `app = "..."` in fly.toml to something unique, then
+#    re-run.
+#
+#    RENAMING THE APP MEANS RENAMING PUBLIC_BASE_URL TOO. It ships in
+#    fly.toml's [env] as "https://watch-captions-relay.fly.dev"; set it to
+#    "https://<your-app-name>.fly.dev" in the same edit (or to your custom
+#    domain, if you have one). It is what the Notion OAuth redirect URI and
+#    the emailed confirmation link are built from, so leaving it pointed at
+#    someone else's host sends that host a live Notion authorization code and
+#    a live email verification token — along with the user's address. Neither
+#    works there, but both leave your relay. The relay warns at boot if this
+#    is not "<FLY_APP_NAME>.fly.dev" (`fly logs`); a custom domain warns too
+#    and is fine to ignore.
 fly apps create watch-captions-relay
 
 # 3. Set the Deepgram key. There is no relay-wide auth secret to generate —
@@ -62,9 +75,12 @@ ENCRYPTION_KEY=$(openssl rand -base64 32)
 fly secrets set ENCRYPTION_KEY="$ENCRYPTION_KEY"
 
 #    7b. This deploy's own public origin — the OAuth redirect and the emailed
-#        confirmation link both point back at it. Not a secret; goes in
-#        fly.toml's [env], already set there to the app's default `fly.dev`
-#        hostname — edit it there if you're using a custom domain instead.
+#        confirmation link both point back at it. Not a secret; it lives in
+#        fly.toml's [env], where it ships pointing at the UPSTREAM app's
+#        hostname. It is correct only if you kept `app = "watch-captions-relay"`
+#        in step 2, which you almost certainly could not. Confirm it reads
+#        "https://<your-app-name>.fly.dev" (or your custom domain) before
+#        deploying — see step 2 for what leaks if it doesn't.
 #
 #    7c. A public Notion integration (Type: Public, not the Internal one used
 #        by #6) — see backend/README.md "Registering the Notion integration"
@@ -131,8 +147,12 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "<device-token>" sam
 - `PUBLIC_BASE_URL` lives in `fly.toml`'s `[env]` too, right beside
   `TRUST_PROXY_HEADERS` — it isn't a secret (a deploy's own public address),
   unlike `NOTION_CLIENT_SECRET` and `RESEND_API_KEY`, which are credentials
-  and belong only in `fly secrets`. Edit it in `fly.toml` if you're on a
-  custom domain rather than the default `fly.dev` hostname. `EMAIL_FROM`
+  and belong only in `fly secrets`. Its committed value names the upstream
+  app, so edit it in `fly.toml` whenever your `app = "..."` differs — a
+  rename in step 2, or a custom domain. The relay compares it against
+  `FLY_APP_NAME` at boot and warns if they disagree, naming both, so a
+  mismatch shows up in `fly logs` rather than only in a leaked token.
+  `EMAIL_FROM`
   isn't a secret either, but ships **commented out** in `fly.toml` rather
   than with a default value: there's no correct default (it must be on a
   domain verified with Resend), and a placeholder would let setting only the

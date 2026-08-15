@@ -51,26 +51,3 @@ describe("parseSummary", () => {
     expect(SUMMARY_SYSTEM_PROMPT).toMatch(/Title:/);
   });
 });
-
-describe("SUMMARY_SYSTEM_PROMPT", () => {
-  it("keeps the Title contract parseSummary depends on", () => {
-    expect(SUMMARY_SYSTEM_PROMPT).toContain("Title:");
-  });
-
-  it("asks for topic sections that scale with the recording", () => {
-    expect(SUMMARY_SYSTEM_PROMPT).toContain("## ");
-    expect(SUMMARY_SYSTEM_PROMPT.toLowerCase()).toContain("one section per topic");
-  });
-
-  it("asks for the whole recording, not just the opening", () => {
-    expect(SUMMARY_SYSTEM_PROMPT.toLowerCase()).toContain("every part of the recording");
-  });
-
-  it("asks for specifics to be preserved rather than compressed away", () => {
-    expect(SUMMARY_SYSTEM_PROMPT.toLowerCase()).toContain("names, numbers, dates");
-  });
-
-  it("no longer asks for a concise summary", () => {
-    expect(SUMMARY_SYSTEM_PROMPT.toLowerCase()).not.toContain("concise");
-  });
-});

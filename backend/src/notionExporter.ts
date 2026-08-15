@@ -3,7 +3,9 @@ import { NotionBlock, batches, markdownToBlocks, paragraph, toggle } from "./not
 import { parseSummary } from "./summaryPrompt";
 
 const API = "https://api.notion.com/v1";
-const NOTION_VERSION = "2022-06-28";
+// Exported so other Notion callers (e.g. notionOAuth's post-grant database
+// search) send the same version rather than a copy that can drift from it.
+export const NOTION_VERSION = "2022-06-28";
 
 export interface ExportResult {
   pageId: string;
@@ -58,29 +60,8 @@ export function createRequest(opts: NotionExporterOptions): Request {
   };
 }
 
-export const SUMMARY_TOGGLE = "Summary";
-export const TRANSCRIPT_TOGGLE = "Full transcript";
-
-/**
- * Locate the page's Summary / Full transcript toggles by their titles, so a
- * page exported before these existed is handled without migration.
- */
-export async function findToggles(
-  request: Request,
-  pageId: string,
-): Promise<{ summary?: string; transcript?: string }> {
-  const page = await request(`/blocks/${pageId}/children?page_size=100`, "GET");
-  const found: { summary?: string; transcript?: string } = {};
-  for (const block of page?.results ?? []) {
-    if (block?.type !== "toggle") continue;
-    const text = (block.toggle?.rich_text ?? [])
-      .map((r: any) => r?.plain_text ?? r?.text?.content ?? "")
-      .join("");
-    if (text === SUMMARY_TOGGLE) found.summary ??= block.id;
-    if (text === TRANSCRIPT_TOGGLE) found.transcript ??= block.id;
-  }
-  return found;
-}
+/** Adds a Summary toggle to an already-exported page. */
+export type PatchSummary = (pageId: string, summary: string) => Promise<void>;
 
 /**
  * Adds a Summary toggle to a page that was exported before its summary
@@ -88,23 +69,14 @@ export async function findToggles(
  * instead of creating a duplicate.
  *
  * The toggle lands after the transcript on these pages, since Notion's append
- * API has no prepend. Freshly exported pages (see the exporter's normal
- * write path) still get Summary first; this patch path does not — including
- * on regeneration, where a page that already had its Summary toggle first
- * has that toggle deleted and re-appended, moving it below Full transcript.
+ * API has no prepend; freshly exported pages still get Summary first.
  */
-export function createNotionSummaryPatcher(
-  opts: NotionExporterOptions,
-): (pageId: string, summary: string) => Promise<void> {
+export function createNotionSummaryPatcher(opts: NotionExporterOptions): PatchSummary {
   const request = createRequest(opts);
   return async (pageId, summary) => {
     const blocks = markdownToBlocks(parseSummary(summary).body);
     if (blocks.length === 0) return;
-    // Replace rather than append: a regenerated summary must not leave the
-    // page carrying two "Summary" toggles.
-    const existing = await findToggles(request, pageId);
-    if (existing.summary) await request(`/blocks/${existing.summary}`, "DELETE");
-    await appendToggle(request, pageId, SUMMARY_TOGGLE, blocks);
+    await appendToggle(request, pageId, "Summary", blocks);
   };
 }
 

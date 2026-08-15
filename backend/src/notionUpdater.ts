@@ -4,16 +4,16 @@ import { batches, markdownToBlocks, paragraph } from "./notionBlocks";
 import {
   NotionExporterOptions,
   Request,
-  SUMMARY_TOGGLE,
-  TRANSCRIPT_TOGGLE,
   appendChildren,
   appendToggle,
   createRequest,
-  findToggles,
   label,
   pageTitle,
   readSchema,
 } from "./notionExporter";
+
+const SUMMARY_TOGGLE = "Summary";
+const TRANSCRIPT_TOGGLE = "Full transcript";
 
 export interface UpdateResult {
   pageId: string;
@@ -87,4 +87,22 @@ export function createNotionUpdater(opts: NotionExporterOptions): UpdateExport {
 
     return { pageId, url: marker.url, exportedSegments: transcript.segments.length };
   };
+}
+
+/** Locate the page's Summary and Full transcript toggles by their titles. */
+async function findToggles(
+  request: Request,
+  pageId: string,
+): Promise<{ summary?: string; transcript?: string }> {
+  const page = await request(`/blocks/${pageId}/children?page_size=100`, "GET");
+  const found: { summary?: string; transcript?: string } = {};
+  for (const block of page?.results ?? []) {
+    if (block?.type !== "toggle") continue;
+    const text = (block.toggle?.rich_text ?? [])
+      .map((r: any) => r?.plain_text ?? r?.text?.content ?? "")
+      .join("");
+    if (text === SUMMARY_TOGGLE) found.summary ??= block.id;
+    if (text === TRANSCRIPT_TOGGLE) found.transcript ??= block.id;
+  }
+  return found;
 }

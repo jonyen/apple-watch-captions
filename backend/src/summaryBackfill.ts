@@ -6,27 +6,33 @@ import {
   writeSummary,
 } from "./transcriptStore";
 import { Summarize } from "./summarizer";
-import { isSubstantial } from "./finalizer";
+import { ResolveExporters, UserExporters, isSubstantial } from "./finalizer";
 
 export interface SummaryBackfillOptions {
   dir: string;
+  /**
+   * Who owns `dir`. Required rather than defaulted: the sweep runs once per
+   * user directory and always knows the answer, and a rebuilt transcript with
+   * an empty `userId` is exactly what `finalizer.run` (and the per-user
+   * export work that will read it) cannot use.
+   */
+  userId: string;
   summarize: Summarize;
   /**
-   * Optional: add the freshly generated summary to a Notion page that was
-   * already exported without one. Skipped for transcripts never exported.
+   * Optional: this user's Notion connection, used to add the freshly
+   * generated summary to a page that was already exported without one. A
+   * user with no connection (`resolve` unset, or it returns `undefined` for
+   * them) still gets their summaries generated and written to disk — that is
+   * local work with nothing to do with Notion — the patch step is just
+   * skipped.
    */
-  patchPage?: (pageId: string, summary: string) => Promise<void>;
+  resolve?: ResolveExporters;
   /** Stop after this many summaries (each one is a paid model call). */
   limit?: number;
   /** Pause between transcripts, to stay clear of API rate limits. */
   delayMs?: number;
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
-  /**
-   * Re-summarize transcripts that already have a summary. Off by default: the
-   * summary file is the done-marker, and the boot-time sweep must stay cheap.
-   */
-  force?: boolean;
 }
 
 export interface SummaryBackfillResult {
@@ -40,11 +46,8 @@ export interface SummaryBackfillResult {
  * Generates summaries for stored transcripts that never got one — sessions
  * that ended while the Anthropic key was unset, out of credit, or erroring.
  *
- * The summary file is the marker: without `force`, a transcript with
- * `<name>.summary.md` is never summarized twice, so a plain re-run is safe.
- * Under `force: true` every stored transcript is a candidate again, so
- * re-running is no longer automatically safe — pair it with a `limit` to
- * bound the number of paid model calls.
+ * The summary file is the marker: a transcript with `<name>.summary.md` is
+ * never summarized twice, so this is safe to re-run.
  */
 export async function backfillSummaries(
   opts: SummaryBackfillOptions,
@@ -52,15 +55,22 @@ export async function backfillSummaries(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const delayMs = opts.delayMs ?? 1000;
   const result: SummaryBackfillResult = { summarized: 0, skipped: 0, failed: 0, patched: 0 };
-  // Counts model calls actually made (success or failure), not just
-  // successes — `limit` bounds paid calls, so a run of systematic failures
-  // (e.g. every transcript exceeding the token ceiling) must not keep
-  // walking the archive looking for `limit` successes that never come.
-  let attempts = 0;
 
-  for (const listed of listTranscripts(opts.dir)) {
-    if (opts.limit !== undefined && attempts >= opts.limit) break;
-    if (listed.hasSummary && !opts.force) {
+  // Guarded per user, same as `backfillNotion`: this sweep runs once per
+  // user directory in a loop over every user, and a sealed secret that fails
+  // to open for one of them must not abort summarizing for everyone after
+  // them in the loop — nor should it, on its own, stop *this* user's
+  // summaries from being generated (see `resolve` above).
+  let exporters: UserExporters | undefined;
+  try {
+    exporters = opts.resolve?.(opts.userId);
+  } catch (err) {
+    console.error(`could not resolve Notion connection for ${opts.userId}:`, err);
+  }
+
+  for (const listed of listTranscripts(opts.dir).reverse()) {
+    if (opts.limit !== undefined && result.summarized >= opts.limit) break;
+    if (listed.hasSummary) {
       result.skipped++;
       continue;
     }
@@ -69,7 +79,7 @@ export async function backfillSummaries(
       result.skipped++;
       continue;
     }
-    const transcript = rebuildFinalized(listed.name, detail.segments);
+    const transcript = rebuildFinalized(listed.name, detail.segments, opts.userId);
     if (!isSubstantial(transcript)) {
       result.skipped++;
       continue;
@@ -77,7 +87,6 @@ export async function backfillSummaries(
 
     if (delayMs > 0) await sleep(delayMs);
 
-    attempts++;
     let summary: string;
     try {
       summary = await opts.summarize(transcript);
@@ -99,9 +108,9 @@ export async function backfillSummaries(
     // The transcript may already be a Notion page created before the summary
     // existed. Update that page rather than exporting a duplicate.
     const marker = readExportMarker(opts.dir, listed.name);
-    if (opts.patchPage && marker) {
+    if (exporters?.patchSummary && marker) {
       try {
-        await opts.patchPage(marker.pageId, summary);
+        await exporters.patchSummary(marker.pageId, summary);
         result.patched++;
         console.log(`summary added to ${marker.url}`);
       } catch (err) {

@@ -11,12 +11,15 @@ enum CaptionIndicator {
     case call
     /// The call is over, or its captions are.
     case callEnded(CallEndReason)
+    /// Reading audio playing on the iPhone.
+    case phone
 
     var label: String {
         switch self {
         case .recording: return "Recording"
         case .liveOnly: return "Live only, not saved"
         case .call: return "Tuned in"
+        case .phone: return "Reading iPhone audio"
         case .callEnded(.ended): return "Audio ended"
         case .callEnded(.streamLost): return "Captions stopped"
         }
@@ -26,6 +29,9 @@ enum CaptionIndicator {
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
     let indicator: CaptionIndicator
+    /// Set from the phone. A default here so previews and any future caller
+    /// need not thread it through to say "the usual size".
+    var textSize: Double = 16
     /// Absent when there is nothing this screen can stop. A mic session and a
     /// call the watch holds both have one — for a held call, Stop closes the
     /// relay's stream, which is what ends the call. The relay's fallback does
@@ -41,11 +47,11 @@ struct CaptionView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(store.paragraphs.enumerated()), id: \.element.id) { index, paragraph in
                     text(for: paragraph, isLast: index == store.paragraphs.count - 1)
-                        .font(.system(size: 16))
+                        .font(.system(size: textSize))
                 }
                 // Nothing final yet: the partial is all there is to show.
                 if store.paragraphs.isEmpty, !store.partial.isEmpty {
-                    Text(store.partial).font(.system(size: 16)).foregroundStyle(.secondary)
+                    Text(store.partial).font(.system(size: textSize)).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,6 +101,10 @@ struct CaptionView: View {
                     Circle().strokeBorder(.green, lineWidth: 1.5)
                 case .call:
                     Circle().fill(.blue)
+                case .phone:
+                    // Blue like a call — audio arriving from elsewhere — but
+                    // hollow like live-only, since nothing is being saved.
+                    Circle().strokeBorder(.blue, lineWidth: 1.5)
                 case .callEnded:
                     Circle().fill(.secondary)
                 }

@@ -5,22 +5,64 @@ describe("loadConfig", () => {
   it("reads values from the environment", () => {
     const cfg = loadConfig({
       PORT: "8080",
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
     });
     expect(cfg).toEqual({
       port: 8080,
-      authToken: "secret",
       deepgramApiKey: "dg-key",
       transcriptsDir: "./data/transcripts",
+      adminToken: undefined,
+      dbPath: "data/transcripts/identity.db",
       anthropicApiKey: undefined,
       deepgramPhoneModel: "phonecall",
+      trustProxyHeaders: false,
     });
+  });
+
+  // Off by default because the relay may be exposed directly, where a
+  // forgeable `Fly-Client-IP` would let any caller evade the registration
+  // rate limit entirely.
+  it("leaves proxy headers untrusted unless asked", () => {
+    expect(loadConfig({ DEEPGRAM_API_KEY: "dg-key" }).trustProxyHeaders).toBe(false);
+  });
+
+  it("trusts proxy headers when TRUST_PROXY_HEADERS is set", () => {
+    const base = { DEEPGRAM_API_KEY: "dg-key" };
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "true" }).trustProxyHeaders).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "1" }).trustProxyHeaders).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "false" }).trustProxyHeaders).toBe(false);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "0" }).trustProxyHeaders).toBe(false);
+  });
+
+  // A typo here would silently either open the limiter to forged headers or
+  // collapse every caller into one bucket, depending on which way it fell.
+  // Fail closed and say so.
+  it("warns and stays off for a TRUST_PROXY_HEADERS value it does not recognize", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRUST_PROXY_HEADERS: "yes please" });
+    expect(cfg.trustProxyHeaders).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("defaults dbPath beside the transcripts dir and leaves adminToken unset", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRANSCRIPTS_DIR: "/data/transcripts" });
+    expect(cfg.dbPath).toBe("/data/transcripts/identity.db");
+    expect(cfg.adminToken).toBeUndefined();
+  });
+
+  it("reads DB_PATH and ADMIN_TOKEN when set", () => {
+    const cfg = loadConfig({
+      DEEPGRAM_API_KEY: "dg-key",
+      DB_PATH: "/data/identity.db",
+      ADMIN_TOKEN: "admin-secret",
+    });
+    expect(cfg.dbPath).toBe("/data/identity.db");
+    expect(cfg.adminToken).toBe("admin-secret");
   });
 
   it("reads transcript dir and anthropic key when set", () => {
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       TRANSCRIPTS_DIR: "/data/transcripts",
       ANTHROPIC_API_KEY: "sk-ant-xxx",
@@ -31,7 +73,6 @@ describe("loadConfig", () => {
 
   it("reads the Gemini key and summary provider", () => {
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       GEMINI_API_KEY: "gk-xxx",
       SUMMARY_PROVIDER: "gemini",
@@ -41,7 +82,7 @@ describe("loadConfig", () => {
   });
 
   it("leaves the summary provider unset when not configured", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.summaryProvider).toBeUndefined();
     expect(cfg.geminiApiKey).toBeUndefined();
   });
@@ -49,7 +90,6 @@ describe("loadConfig", () => {
   it("ignores an unrecognized summary provider rather than failing to boot", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       SUMMARY_PROVIDER: "llama",
     });
@@ -60,7 +100,6 @@ describe("loadConfig", () => {
 
   it("reads the Notion integration when both token and database are set", () => {
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       NOTION_TOKEN: "ntn_xxx",
       NOTION_DATABASE_ID: "db-123",
@@ -69,14 +108,13 @@ describe("loadConfig", () => {
   });
 
   it("leaves Notion off when it is not configured", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.notion).toBeUndefined();
   });
 
   it("ignores a half-configured Notion integration rather than failing to boot", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       NOTION_TOKEN: "ntn_xxx",
     });
@@ -85,22 +123,91 @@ describe("loadConfig", () => {
     warn.mockRestore();
   });
 
+  it("leaves the encryption key unset when ENCRYPTION_KEY is not configured", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    expect(cfg.encryptionKey).toBeUndefined();
+  });
+
+  it("reads ENCRYPTION_KEY when set", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", ENCRYPTION_KEY: "base64-key-value" });
+    expect(cfg.encryptionKey).toBe("base64-key-value");
+  });
+
   it("defaults the port to 8080 when unset", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.port).toBe(8080);
   });
 
-  it("throws when AUTH_TOKEN is missing", () => {
-    expect(() => loadConfig({ DEEPGRAM_API_KEY: "dg-key" })).toThrow(/AUTH_TOKEN/);
+  it("throws when DEEPGRAM_API_KEY is missing", () => {
+    expect(() => loadConfig({})).toThrow(/DEEPGRAM_API_KEY/);
+  });
+});
+
+// Final review, Important 2: `fly.toml` ships PUBLIC_BASE_URL pointing at
+// this project's own fly.dev hostname, and `fly.dev` names are globally
+// unique — so an operator deploying from scratch renames the app and, unless
+// they also change this, builds a Notion redirect URI and an emailed
+// confirmation link that point at a host they do not control. Notion then
+// sends a live authorization code there, and the relay mails a live
+// verification token (with the user's address) pointing at the same place.
+// Neither is usable there; both leak.
+describe("PUBLIC_BASE_URL sanity check", () => {
+  const base = { DEEPGRAM_API_KEY: "k" };
+  const messages = (warn: ReturnType<typeof vi.spyOn>) =>
+    warn.mock.calls.map((call) => call.join(" ")).join("\n");
+
+  it("warns, naming both values, when the host is not this Fly app's own hostname", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfig({
+      ...base,
+      FLY_APP_NAME: "their-relay",
+      PUBLIC_BASE_URL: "https://watch-captions-relay.fly.dev",
+    });
+    const text = messages(warn);
+    warn.mockRestore();
+    expect(text).toContain("PUBLIC_BASE_URL");
+    expect(text).toContain("https://watch-captions-relay.fly.dev");
+    expect(text).toContain("their-relay");
   });
 
-  it("throws when DEEPGRAM_API_KEY is missing", () => {
-    expect(() => loadConfig({ AUTH_TOKEN: "secret" })).toThrow(/DEEPGRAM_API_KEY/);
+  it("says nothing when PUBLIC_BASE_URL already matches the app", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfig({
+      ...base,
+      FLY_APP_NAME: "their-relay",
+      PUBLIC_BASE_URL: "https://their-relay.fly.dev",
+    });
+    const text = messages(warn);
+    warn.mockRestore();
+    expect(text).toBe("");
+  });
+
+  // Off Fly there is nothing to compare against, and a local run on
+  // http://localhost:8080 is not a misconfiguration.
+  it("says nothing when FLY_APP_NAME is unset", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfig({ ...base, PUBLIC_BASE_URL: "http://localhost:8080" });
+    const text = messages(warn);
+    warn.mockRestore();
+    expect(text).toBe("");
+  });
+
+  // A custom domain is a legitimate mismatch, so this must never be fatal —
+  // captioning does not depend on any of it.
+  it("still boots on a mismatch rather than throwing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({
+      ...base,
+      FLY_APP_NAME: "their-relay",
+      PUBLIC_BASE_URL: "https://captions.example.com",
+    });
+    warn.mockRestore();
+    expect(cfg.publicBaseUrl).toBe("https://captions.example.com");
   });
 });
 
 describe("call captioning config", () => {
-  const base = { AUTH_TOKEN: "t", DEEPGRAM_API_KEY: "k" };
+  const base = { DEEPGRAM_API_KEY: "k" };
 
   it("defaults the phone model to the safe telephony baseline", () => {
     expect(loadConfig(base).deepgramPhoneModel).toBe("phonecall");
@@ -116,38 +223,4 @@ describe("call captioning config", () => {
     expect(loadConfig({ ...base, TWILIO_FORWARD_TO: "+15551234567" }).twilioForwardTo)
       .toBe("+15551234567");
   });
-
-  // Declared on the server for the whole of this branch and passed by
-  // nothing: the ring budget was unconfigurable in practice.
-  it("reads the ring budget", () => {
-    const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
-      DEEPGRAM_API_KEY: "dg-key",
-      CALL_WAIT_ATTEMPTS: "3",
-    });
-    expect(cfg.callWaitAttempts).toBe(3);
-  });
-
-  it("leaves the ring budget unset when not configured", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
-    expect(cfg.callWaitAttempts).toBeUndefined();
-  });
-
-  // A budget below one would send every call straight to the fallback, and a
-  // typo would send it to NaN. Neither is worth booting with — fall back to
-  // the server's own default and say so.
-  it.each(["0", "-2", "2.5", "many"])(
-    "ignores an unusable ring budget of %s rather than failing to boot",
-    (value) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const cfg = loadConfig({
-        AUTH_TOKEN: "secret",
-        DEEPGRAM_API_KEY: "dg-key",
-        CALL_WAIT_ATTEMPTS: value,
-      });
-      expect(cfg.callWaitAttempts).toBeUndefined();
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
-    },
-  );
 });

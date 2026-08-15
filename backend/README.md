@@ -3,9 +3,82 @@
 WebSocket service that relays a live PCM audio stream to Deepgram and streams
 caption text back to the client.
 
+## Authentication
+
+There is no shared secret and no sign-in. Each app instance registers itself
+on first launch:
+
+```
+POST /v1/devices   {"kind":"watch"|"phone"|"mac"}
+→ {"deviceId":"...","userId":"...","token":"..."}
+```
+
+The response's `token` is a bearer credential for that one device — keep it
+(the client apps persist it locally) and send it on every subsequent request,
+either as `Authorization: Bearer <token>` or `?token=<token>` (the query form
+exists for the handful of clients, like Twilio's media-stream, that cannot
+send a header). Registering multiple devices creates independent accounts;
+**pairing** (`POST /v1/pair/code` on one device, `POST /v1/pair/claim` on the
+other) merges a second device — and its transcripts — onto the first
+device's account, which is how the watch and phone end up sharing one
+account.
+
+`ADMIN_TOKEN`, set as a relay-wide secret (not per device), separately gates
+the operator-only `GET /v1/usage` endpoint — see
+[MONITORING.md](./MONITORING.md).
+
+Users, devices, and pairing codes live in a small SQLite database at
+`DB_PATH` (defaults to `identity.db` beside the transcripts, so both survive
+a redeploy on the same volume). On an install that predates multi-tenancy,
+the relay adopts any transcripts left at the flat transcripts root into a
+new user the first time it boots on this code, and logs that user's token
+once — save it, since it is the only way to reach those pre-existing
+transcripts afterward. This is a no-op on every later boot.
+
+### Rate limiting and `TRUST_PROXY_HEADERS`
+
+`POST /v1/devices` takes no credential — there is none to present yet — so a
+sliding-window rate limit (10 registrations per address per hour) is the only
+backstop. Which address that is depends on `TRUST_PROXY_HEADERS`:
+
+| `TRUST_PROXY_HEADERS` | Address used | Use when |
+|-----------------------|--------------|----------|
+| unset / `false` (default) | `req.socket.remoteAddress` | The relay is exposed directly. |
+| `true` | The `Fly-Client-IP` header, falling back to the socket address | The relay sits behind a proxy that **overwrites** that header — Fly's `http_service` does, and `fly.toml` sets this. |
+
+Getting this wrong breaks in one of two ways, neither of them noisy:
+
+- **On, without such a proxy in front:** the header is caller-supplied, so an
+  attacker picks a fresh value per request and the limit stops applying at all.
+  Only enable it when something upstream is guaranteed to overwrite the header.
+- **Off, behind one:** every request arrives from the proxy's address, so all
+  registrations share a single bucket — any ten of them close registration for
+  *everyone* for an hour, and registration is the only way to get a credential.
+
+`X-Forwarded-For` is never consulted either way: Fly's edge appends to it
+rather than replacing it, so a client-chosen entry survives to this process.
+
+**Known gap:** if a pairing merges two accounts while a session is still
+mid-conversation, captions appended to that session *after* the merge keep
+landing in the old (pre-pairing) account's directory — the in-flight session
+holds the principal it started with, and nothing sweeps that directory once
+the merge has moved on. The transcript up to the moment of pairing moves
+correctly; only captions appended afterward are affected, and they are not
+automatically recovered. Not fixed by this relay today.
+
+**Known gap:** a pairing commits in the database — including deleting the
+emptied-out user row — *before* the transcripts move on disk. If a move fails
+(or the process dies in between), the old user's directory is left holding
+files that belong to a user id no device resolves to anymore: intact, but
+unreachable through every API, and nothing sweeps or re-adopts them. The relay
+logs one line beginning `PAIRING LEFT TRANSCRIPTS STRANDED` naming the
+directory and both user ids when this happens (`fly logs`), because moving
+those files by hand into the surviving user's directory is currently the only
+recovery. Boot-time re-adoption of such a directory is not built.
+
 ## Protocol
 
-- Connect: `ws://<host>:<port>/stream?token=<AUTH_TOKEN>`
+- Connect: `ws://<host>:<port>/stream?token=<device-token>`
 - Send: binary frames of raw PCM — 16-bit signed little-endian, 16 kHz, mono.
 - Receive (JSON text):
   - `{"type":"ready"}`
@@ -19,7 +92,13 @@ caption text back to the client.
 ```bash
 cd backend
 npm install
-AUTH_TOKEN=dev-secret DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
+DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
+```
+
+Register a device to get a token for manual testing:
+
+```bash
+curl -X POST http://localhost:8080/v1/devices -d '{"kind":"mac"}'
 ```
 
 ## Test
@@ -43,48 +122,96 @@ With neither key set, transcripts are still saved; only summaries are skipped.
 Transcripts that never got a summary are picked up by a sweep on the next boot,
 so fixing a key or switching providers backfills the gap without manual steps.
 
-### Regenerating summaries
+## Export destinations: Notion and email (per user)
 
-Stored summaries are written once and never revisited — the `<name>.summary.md`
-file is the done-marker for the boot-time backfill. To re-summarize existing
-transcripts under a newer prompt:
+Each user connects their own Notion workspace and/or email address from
+`/app/exports` (paste your device token there, same as `/app`) — finished
+sessions export to whatever they've connected, independent of every other
+user's account. This replaces the single relay-wide `NOTION_TOKEN` below.
 
-```sh
-npm run resummarize -- --last 20     # the 20 most recent transcripts
-npm run resummarize -- --last 9999   # the whole archive
-```
+Enabling it needs three things, all optional and independently gated —
+without them, captioning still works and `/app/exports` just shows nothing
+connectable:
 
-`--last` is required; without it the script exits non-zero rather than
-regenerating everything by accident. Each transcript is a paid model call, and
-the script prints how many it will do before starting. Notion pages that were
-already exported have their Summary toggle replaced, not duplicated — but
-because Notion's API can only append, the replaced toggle lands after Full
-transcript, so regenerating a page that already had Summary first silently
-moves it below the transcript.
+| Feature | Env | Notes |
+|---------|-----|-------|
+| Storing destinations at all | `ENCRYPTION_KEY` | AES-256-GCM key sealing the Notion token in the database. Generate with `openssl rand -base64 32`. Present-but-malformed fails loudly at boot (never silently generates a throwaway key); absent just disables the feature. |
+| Notion OAuth (`/v1/exports/notion/*`) | `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, `PUBLIC_BASE_URL`, **and `ENCRYPTION_KEY`** | Register a **public** Notion integration (not the internal-integration token below) — see "Registering the Notion integration". `ENCRYPTION_KEY` is required here too, not just for storage: without it there is nowhere to put a granted token, so *Connect* stays a 503 rather than sending a user to Notion's real consent screen only to fail after they've already granted access. |
+| Email export (`/v1/exports/email`) | `RESEND_API_KEY`, `EMAIL_FROM`, `PUBLIC_BASE_URL` | Sends the confirmation link and, later, transcripts via [Resend](https://resend.com). |
 
-This is deliberately **not** part of the boot-time sweep in `index.ts` — that
-runs on every restart.
+`PUBLIC_BASE_URL` is this deploy's own public origin, e.g.
+`https://watch-captions-relay.fly.dev` — both the OAuth redirect and the
+emailed confirmation link point back at it, so it must match whatever the app
+is actually reachable at. It ships in `fly.toml` naming the upstream app, and
+`fly.dev` names are globally unique, so **rename it whenever you rename
+`app`** (see [DEPLOY.md](./DEPLOY.md) step 2): left stale, it hands another
+host a live Notion authorization code and a live email verification token
+along with the user's address. The relay compares it against `FLY_APP_NAME`
+at boot and warns, naming both, when they disagree — a custom domain warns
+too and is fine to ignore.
 
-## Notion export (optional)
+**Email delivery sends the full transcript** of a finished session to the
+address a user names — including anything other people in the conversation
+said, not just that user's own side. `/app/exports` says this too; it isn't
+only a backend detail.
 
-When `NOTION_TOKEN` and `NOTION_DATABASE_ID` are both set, each finished session
-becomes a page in that database, named `2026-07-10 18:05 — <what it was about>`
-(the summarizer writes the topic; sessions without a summary fall back to a plain
-dated name). The page holds two collapsed sections: a **Summary** toggle
-holding the Claude summary, and a **Full transcript** toggle holding every caption
-line. The Summary toggle is omitted when no summary was generated. Set neither and
-transcripts are still saved locally — only the export is skipped.
+### Registering the Notion integration
 
-Setup:
+1. Create a **public** integration at
+   [notion.so/my-integrations](https://www.notion.so/my-integrations) (Type:
+   Public, not Internal — internal integrations don't support OAuth).
+2. Set its redirect URI to `<PUBLIC_BASE_URL>/v1/exports/notion/callback`,
+   exactly — Notion rejects a code exchange whose `redirect_uri` doesn't match
+   what's registered.
+3. Copy its OAuth client id and secret:
+   ```bash
+   fly secrets set NOTION_CLIENT_ID="<client-id>" NOTION_CLIENT_SECRET="<client-secret>"
+   ```
+4. A user connects at `/app/exports` → *Connect Notion*, picks a workspace and
+   the pages/databases to share on Notion's consent screen. If no database was
+   shared, the relay searches for one via `/v1/search` after the grant and, if
+   it still finds none, reports back to `/app/exports?notion=nodatabase` — the
+   user should share a database with the integration and try again.
 
-1. Create an internal integration at
-   [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy its
-   token (`ntn_…`).
-2. Create the target database. The only required column is the title; add any of
-   `Started` (date), `Ended` (date), `Segments` (number), `Session` (rich text)
-   and the exporter fills them too. Columns it doesn't recognize are left alone.
-3. **Share the database with the integration** — open it, `⋯` → *Connections* →
-   add the integration. Skipping this is the usual cause of a `404` at export.
+Each finished session becomes a page in that user's connected database, named
+`2026-07-10 18:05 — <what it was about>` (the summarizer writes the topic;
+sessions without a summary fall back to a plain dated name). The page holds
+two collapsed sections: a **Summary** toggle holding the Claude summary, and a
+**Full transcript** toggle holding every caption line. The Summary toggle is
+omitted when no summary was generated.
+
+### Legacy single-workspace Notion export (deprecated)
+
+`NOTION_TOKEN`/`NOTION_DATABASE_ID` (an *internal* integration token, not the
+public one above) predate per-user connections and export nothing on their
+own anymore — every export now reads a user's own stored connection, and
+there is no fallback to this relay-wide setting. The only thing it still
+does is get folded onto a user's destination row automatically, on boot, so
+that user's exports don't just stop working the moment this version deploys.
+That only happens when the relay has **exactly one** registered user — the
+only case where "whoever this legacy config belongs to" is unambiguous. With
+zero or more than one user, the relay logs that it couldn't attribute the
+legacy config automatically and leaves it to `/app/exports` instead; this is
+independent of, and does not require, the separate one-time migration that
+adopts pre-multi-tenant transcript files into a fresh user (see
+"Authentication" above) — that migration may already be long done, or may
+never run at all on an install that started multi-tenant. The adoption never
+overwrites a connection the user has since made through `/app/exports`, and
+is safe to leave running on every boot. Once every real user has connected
+their own workspace, unset both env vars.
+
+Setup, if you still need it:
+
+1. Create an **internal** integration at
+   [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy
+   its token (`ntn_…`).
+2. Create the target database. The only required column is the title; add any
+   of `Started` (date), `Ended` (date), `Segments` (number), `Session` (rich
+   text) and the exporter fills them too. Columns it doesn't recognize are
+   left alone.
+3. **Share the database with the integration** — open it, `⋯` → *Connections*
+   → add the integration. Skipping this is the usual cause of a `404` at
+   export.
 4. Copy the database id from its URL: `notion.so/<workspace>/<database-id>?v=…`.
 5. Check it before deploying:
    ```bash
@@ -165,14 +292,16 @@ design and its reasoning.
 |-----|----------|-------|
 | `TWILIO_FORWARD_TO` | Yes, to enable `/twilio/voice` | The number `<Dial>` rings — your real phone, in `+1…` form. Without it, `/twilio/voice` answers `503` rather than TwiML that dials nowhere. |
 | `DEEPGRAM_PHONE_MODEL` | No | Overrides the Deepgram model used for call audio. Defaults to `phonecall`, the safe telephony baseline — see the spec's "Model candidates" for why `flux-general-en` is not currently reachable through this relay's SDK version. |
-| `CALL_WAIT_ATTEMPTS` | No | How many ringback rounds the caller hears before the call falls back to `TWILIO_FORWARD_TO`. Roughly four seconds each, so the default `5` is about twenty seconds of ringing. Must be a whole number, 1 or more; anything else is ignored with a warning rather than booting on a budget that would skip the ring entirely. |
 
 Setup (Twilio console; nothing else in this repo needs to change):
 
 1. Create a Twilio account and get off the trial — trial accounts restrict
    outbound calls to verified numbers and play a notice on every call.
 2. Buy a phone number.
-3. Set its **Voice webhook** to `POST https://<your-relay-host>/twilio/voice?token=<AUTH_TOKEN>`.
+3. Set its **Voice webhook** to `POST https://<your-relay-host>/twilio/voice?token=<device-token>`,
+   using the token for whichever account should receive the call's captions
+   (register one with `POST /v1/devices` if you don't already have one — see
+   "Authentication" above).
 4. Set its **fallback URL** to a static TwiML bin that only `<Dial>`s your real
    phone. This is the entire mitigation for the relay being down when a call
    arrives: with no fallback, Twilio gets no TwiML and the caller hears a
@@ -194,8 +323,8 @@ Streams a 16 kHz mono PCM file to the running server and prints captions.
    ```bash
    ffmpeg -i sample.mp3 -ac 1 -ar 16000 -f s16le sample.pcm
    ```
-3. Run the smoke test:
+3. Run the smoke test with a registered device's token (see "Authentication" above):
    ```bash
-   node scripts/smoke-test.mjs ws://127.0.0.1:8080/stream dev-secret sample.pcm
+   node scripts/smoke-test.mjs ws://127.0.0.1:8080/stream <device-token> sample.pcm
    ```
    Expected: a stream of `caption` lines ending with finalized text matching the audio.

@@ -4,12 +4,18 @@ import {
   readTranscript,
   rebuildFinalized,
 } from "./transcriptStore";
-import { ExportTranscript } from "./notionExporter";
-import { exportOnce, isSubstantial } from "./finalizer";
+import { ResolveExporters, UserExporters, exportOnce, isSubstantial } from "./finalizer";
 
 export interface BackfillOptions {
   dir: string;
-  export: ExportTranscript;
+  /**
+   * Who owns `dir`. Required rather than defaulted: the sweep runs once per
+   * user directory and always knows the answer, and a rebuilt transcript with
+   * an empty `userId` is exactly what `finalizer.run` (and the per-user
+   * export work that will read it) cannot use.
+   */
+  userId: string;
+  resolve: ResolveExporters;
   /** Stop after this many exports (a boot sweep shouldn't run forever). */
   limit?: number;
   /** Pause between transcripts; Notion allows roughly 3 requests/second. */
@@ -35,6 +41,19 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
   const delayMs = opts.delayMs ?? 400;
   const result: BackfillResult = { exported: 0, skipped: 0, failed: 0 };
 
+  // Guarded per user: a sweep runs once per user directory in a loop over
+  // every user (see `runBackfills` in `index.ts`), and a sealed secret that
+  // fails to open for one of them (rotated key, restored database) must not
+  // abort export catch-up for everyone after them in the loop.
+  let exporters: UserExporters | undefined;
+  try {
+    exporters = opts.resolve(opts.userId);
+  } catch (err) {
+    console.error(`could not resolve Notion connection for ${opts.userId}:`, err);
+    return result;
+  }
+  if (!exporters) return result;
+
   const pending = listTranscripts(opts.dir).reverse();
   for (const listed of pending) {
     if (opts.limit !== undefined && result.exported >= opts.limit) break;
@@ -47,14 +66,19 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
       result.skipped++;
       continue;
     }
-    const transcript = rebuildFinalized(listed.name, detail.segments);
+    const transcript = rebuildFinalized(listed.name, detail.segments, opts.userId);
     if (!isSubstantial(transcript)) {
       result.skipped++;
       continue;
     }
     if (delayMs > 0) await sleep(delayMs);
-    const done = await exportOnce(opts.export, opts.dir, transcript, detail.summary);
-    done ? result.exported++ : result.failed++;
+    // Three-way, not a boolean: the loop's own marker check above and
+    // `exportOnce`'s re-read are two separate reads, and a live finalize can
+    // land the marker in between (this sweep runs at boot, while sessions are
+    // finishing). That is ordinary, and counting it as `failed` put "Notion
+    // backfill: 0 exported, 1 failed" in the boot log for a case where
+    // nothing failed.
+    result[await exportOnce(exporters.export, opts.dir, transcript, detail.summary)]++;
   }
   return result;
 }

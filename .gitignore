@@ -13,4 +13,8 @@ watch/CaptionCore/.swiftpm/
 
 # macOS app
 mac/*.xcodeproj
+
+# iOS app
+ios/*.xcodeproj
+ios/Shared/Secrets.swift
 *.profraw

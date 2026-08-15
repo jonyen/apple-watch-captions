@@ -9,6 +9,33 @@ primary_region = "sjc"  # pick a region near you: fly platform regions
   PORT = "8080"
   TRANSCRIPTS_DIR = "/data/transcripts"
   TZ = "America/Los_Angeles"  # local timestamps in transcript filenames/logs
+  # `http_service` below terminates the client's connection, so the socket
+  # address this process sees is Fly's proxy for every caller. Without this,
+  # the registration rate limiter keys every registration in the world into
+  # one bucket. Correct ONLY behind a proxy that overwrites Fly-Client-IP
+  # (Fly's edge does); leave it off anywhere the relay is exposed directly,
+  # where the header would be forgeable. See backend/README.md.
+  TRUST_PROXY_HEADERS = "true"
+  # This deploy's own public origin — not a secret, just this app's address —
+  # needed for the Notion OAuth redirect and the emailed transcript
+  # confirmation link, both of which point the browser/inbox back at this
+  # relay. MUST be edited together with `app` above: `fly.dev` names are
+  # globally unique, so a deploy of your own has a different name, and a
+  # stale value here sends Notion authorization codes and emailed
+  # verification tokens to somebody else's host. The relay warns at boot when
+  # this host is neither `<FLY_APP_NAME>.fly.dev` nor deliberately a custom
+  # domain. See backend/DEPLOY.md step 2.
+  PUBLIC_BASE_URL = "https://watch-captions-relay.fly.dev"
+  # The From address transcript and verification emails are sent from. Not a
+  # secret; the API key that actually authenticates sending (RESEND_API_KEY)
+  # is set with `fly secrets set` instead — see backend/DEPLOY.md. Left
+  # unset here on purpose, unlike PUBLIC_BASE_URL above: there is no correct
+  # default (it must be an address on a domain verified with Resend), and
+  # shipping a placeholder value would let setting RESEND_API_KEY alone look
+  # like a complete, working configuration when it isn't — every send would
+  # fail at Resend instead of the feature just staying off. Uncomment and set
+  # it to enable email export, alongside the secret:
+  # EMAIL_FROM = "transcripts@yourdomain.com"
 
 # Persistent volume for session transcripts + summaries.
 # Create once with: fly volumes create transcripts --size 1

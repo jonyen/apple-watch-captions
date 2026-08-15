@@ -16,6 +16,11 @@ final class HTTPRelayClient: Relay {
     private let token: String
     private let session: URLSession
     private let queue = DispatchQueue(label: "relay.http")
+    /// A session id shared with another device, rather than one this client
+    /// invents. Set when reading audio the phone is posting: both sides have to
+    /// name the same session, so this client must not mint a fresh id per
+    /// connect the way a mic session does.
+    private let fixedSessionID: String?
 
     private var sessionID = UUID().uuidString
     private var resumeName: String?
@@ -34,9 +39,11 @@ final class HTTPRelayClient: Relay {
     private let flushInterval = 1.0
 
     /// `base` is the relay origin (e.g. https://host); `token` authorizes requests.
-    init(base: URL, token: String) {
+    /// `fixedSessionID` joins an existing session instead of starting a new one.
+    init(base: URL, token: String, fixedSessionID: String? = nil) {
         self.base = base
         self.token = token
+        self.fixedSessionID = fixedSessionID
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15   // surface "Connection lost" rather than hang
         session = URLSession(configuration: config)
@@ -49,7 +56,7 @@ final class HTTPRelayClient: Relay {
             // to the foreground, a network change) don't reuse stale state. When
             // resuming, the relay binds that new session to an existing transcript.
             self.timer?.cancel()
-            self.sessionID = UUID().uuidString
+            self.sessionID = self.fixedSessionID ?? UUID().uuidString
             switch mode {
             case .saved(let name):
                 self.resumeName = name
@@ -79,6 +86,11 @@ final class HTTPRelayClient: Relay {
             self.stopped = true
             self.timer?.cancel()
             self.timer = nil
+            // A shared session belongs to whoever is feeding it. Backing out of
+            // reading the phone's audio must leave that session running, the
+            // same way leaving call captions does not hang up the call — so
+            // this client stops polling and tells the relay nothing.
+            guard self.fixedSessionID == nil else { return }
             var req = URLRequest(url: self.url(path: "v1/stop"))
             req.httpMethod = "POST"
             self.session.dataTask(with: req).resume()   // best-effort release
@@ -130,6 +142,10 @@ final class HTTPRelayClient: Relay {
             URLQueryItem(name: "session", value: sessionID),
             URLQueryItem(name: "token", value: token),
         ]
+        // Joining someone else's session means reading it, never producing it.
+        // The relay uses this to tell an audience apart from a source, so the
+        // phone can stay silent until something is actually watching.
+        if fixedSessionID != nil { items.append(URLQueryItem(name: "role", value: "reader")) }
         if let since { items.append(URLQueryItem(name: "since", value: String(since))) }
         if let resumeName { items.append(URLQueryItem(name: "resume", value: resumeName)) }
         if ephemeral { items.append(URLQueryItem(name: "ephemeral", value: "1")) }

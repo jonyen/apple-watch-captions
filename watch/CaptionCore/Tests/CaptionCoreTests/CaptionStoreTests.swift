@@ -203,4 +203,26 @@ final class CaptionStoreTests: XCTestCase {
 
         XCTAssertEqual(s.paragraphs.map(\.text), ["one two"])
     }
+
+    // MARK: - hasCaptions
+
+    func testHasCaptionsIsFalseBeforeAnythingArrives() {
+        XCTAssertFalse(CaptionStore().hasCaptions)
+    }
+
+    func testHasCaptionsIsTrueWhileOnlyAPartialExists() {
+        let store = CaptionStore()
+
+        store.apply(.caption(text: "hello", isFinal: false, channel: nil))
+
+        XCTAssertTrue(store.hasCaptions)
+    }
+
+    func testHasCaptionsIsTrueOnceSomethingIsFinal() {
+        let store = CaptionStore()
+
+        store.apply(.caption(text: "hello", isFinal: true, channel: nil))
+
+        XCTAssertTrue(store.hasCaptions)
+    }
 }

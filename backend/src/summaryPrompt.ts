@@ -5,22 +5,13 @@ export const SUMMARY_SYSTEM_PROMPT =
   "You summarize transcripts captured by a live-captioning watch app. " +
   "Begin your reply with a single line of the form 'Title: <short title>' — " +
   "at most 10 words naming what the recording is about, with no trailing " +
-  "punctuation. Then a blank line, then the summary itself.\n\n" +
-  "Write the summary in markdown, in this shape:\n" +
-  "1. An opening paragraph giving an overview of the whole recording.\n" +
-  "2. Then one section per topic discussed, each introduced by a '## ' heading " +
-  "naming that topic, followed by prose covering what was said about it.\n" +
-  "3. If action items or decisions are mentioned, a final '## Action items' " +
-  "section listing them as bullets.\n\n" +
-  "Let the number of sections follow the recording: a short exchange may need " +
-  "one, a long meeting may need many. Cover every part of the recording, " +
-  "including the middle and end — do not let coverage thin out after the " +
-  "opening. Preserve specifics rather than compressing them away: names, " +
-  "numbers, dates, decisions, and commitments should survive into the summary. " +
-  "Do not invent details that are not in the transcript.\n\n" +
+  "punctuation. Then a blank line, then the summary itself. " +
   "The transcript is one side or a mix of a real-world conversation and may " +
-  "contain transcription errors. Lines prefixed 'Me:' were spoken by the user; " +
-  "lines prefixed 'Them:' are the other party or audio playing on their device.";
+  "contain transcription errors. Write a concise markdown summary: 1-2 " +
+  "sentence overview, then key points as bullets. If action items or " +
+  "decisions are mentioned, list them under an 'Action items' heading. " +
+  "Do not invent details that are not in the transcript. " +
+  "Lines prefixed 'Me:' were spoken by the user; lines prefixed 'Them:' are the other party or audio playing on their device.";
 
 /** Transcript lines, with Me/Them prefixes for dual-channel sessions. */
 export function formatTranscript(t: FinalizedTranscript): string {

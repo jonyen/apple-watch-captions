@@ -1,23 +1,47 @@
+import { mkdirSync } from "fs";
 import {
   FinalizedTranscript,
   MIN_TRANSCRIPT_CHARS,
   readExportMarker,
   writeExportMarker,
   writeSummary,
+  userDir,
 } from "./transcriptStore";
 import { Summarize } from "./summarizer";
-import { ExportTranscript } from "./notionExporter";
+import { ExportTranscript, PatchSummary } from "./notionExporter";
 import { UpdateExport } from "./notionUpdater";
 
+export interface UserExporters {
+  export: ExportTranscript;
+  update: UpdateExport;
+  patchSummary: PatchSummary;
+}
+
+/** That user's Notion connection, or undefined if they have not connected one. */
+export type ResolveExporters = (userId: string) => UserExporters | undefined;
+
 export interface FinalizerOptions {
-  /** Transcript directory the summary file is written to. */
-  dir: string;
+  /** Root transcript directory; the per-user summary directory is derived from `t.userId`. */
+  root: string;
   /** Optional Claude summarizer. */
   summarize?: Summarize;
-  /** Optional external export (Notion). */
-  export?: ExportTranscript;
-  /** Optional in-place update, used when a resumed session ends. */
-  update?: UpdateExport;
+  /**
+   * Resolved per transcript rather than captured once, because each user
+   * exports to their own workspace with their own credentials.
+   */
+  resolve?: ResolveExporters;
+  /**
+   * Optional; mails the finished transcript to the user's own verified email
+   * destination. Whether it actually sends anything (e.g. gating on a
+   * verified address) is entirely the callback's decision — this function
+   * only guarantees the call is best-effort, same as the Notion export
+   * above.
+   */
+  sendTranscriptEmail?: (
+    userId: string,
+    t: FinalizedTranscript,
+    summary: string | null,
+  ) => Promise<void>;
 }
 
 /**
@@ -39,24 +63,92 @@ export function isSubstantial(t: FinalizedTranscript): boolean {
 async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void> {
   if (!isSubstantial(t)) return;
 
+  // Resolved up front (rather than at the export step below) so the
+  // "nothing to do" check just below is honest: `opts.resolve` being set
+  // does not mean *this* user has a connection, and `resolveExporters` in
+  // `index.ts` is always set even when export destinations are disabled
+  // entirely. Wrapped in `try` for the same reason the block below is: a
+  // sealed secret that fails to open (rotated key, restored database) must
+  // not become an unhandled promise rejection — `createFinalizer` invokes
+  // `run` fire-and-forget as `void run(opts, t)`, and by default an
+  // unhandled rejection kills the whole process, for every user, on every
+  // finalize.
+  let exporters: UserExporters | undefined;
+  try {
+    exporters = opts.resolve?.(t.userId);
+  } catch (err) {
+    console.error(`could not resolve export destination for ${t.name}:`, err);
+  }
+
+  // The summary and Notion export both live under the per-user transcript
+  // directory; email does not touch the filesystem at all. So the directory
+  // is resolved only when one of the two disk-based features is actually
+  // configured, and a failure to resolve or create it must only cost those
+  // two — it must not also take email down with it, which is exactly the
+  // bug fixed below by keeping the email send outside this block entirely.
   let summary: string | null = null;
-  if (opts.summarize) {
+  if (opts.summarize || exporters) {
+    let dir: string | undefined;
     try {
-      const generated = await opts.summarize(t);
-      if (generated.length > 0) {
-        summary = generated;
-        writeSummary(opts.dir, t.name, generated);
-        console.log(`summary written for ${t.name}`);
-      }
+      dir = userDir(opts.root, t.userId);
+      // In the live flow this directory already exists — `TranscriptStore.append`
+      // created it before the session could ever reach `finalize` — but nothing
+      // else guarantees that (a directly-constructed `FinalizedTranscript`, or a
+      // future backfill re-running this path), and `writeSummary`/
+      // `writeExportMarker` do not create directories themselves.
+      mkdirSync(dir, { recursive: true });
     } catch (err) {
-      console.error(`summary failed for ${t.name}:`, err);
+      // Best-effort, like the rest of this function: the transcript is
+      // already safely on disk. This must not become an unhandled promise
+      // rejection — `createFinalizer` invokes `run` fire-and-forget as
+      // `void run(opts, t)`, and by default an unhandled rejection kills the
+      // whole process. Reachable on an unsafe/empty `userId` (`userDir`
+      // throws), `EACCES`, `ENOSPC`, or `root` having been replaced by a
+      // plain file.
+      console.error(`could not resolve transcript directory for ${t.name}:`, err);
+      dir = undefined;
+    }
+
+    if (dir) {
+      if (opts.summarize) {
+        try {
+          const generated = await opts.summarize(t);
+          if (generated.length > 0) {
+            summary = generated;
+            writeSummary(dir, t.name, generated);
+            console.log(`summary written for ${t.name}`);
+          }
+        } catch (err) {
+          console.error(`summary failed for ${t.name}:`, err);
+        }
+      }
+
+      // Export independently of the summary: a transcript is still worth
+      // having in Notion when Claude is unconfigured or the summary call
+      // failed.
+      if (exporters) {
+        await exportOnce(exporters.export, dir, t, summary, exporters.update);
+      }
     }
   }
 
-  // Export independently of the summary: a transcript is still worth having in
-  // Notion when Claude is unconfigured or the summary call failed.
-  if (opts.export) await exportOnce(opts.export, opts.dir, t, summary, opts.update);
+  if (opts.sendTranscriptEmail) {
+    try {
+      await opts.sendTranscriptEmail(t.userId, t, summary);
+    } catch (err) {
+      console.error(`transcript email failed for ${t.name}:`, err);
+    }
+  }
 }
+
+/**
+ * What one `exportOnce` call did. Three outcomes rather than a boolean,
+ * because "nothing to do" and "tried and failed" are different things to a
+ * caller that counts them: the boot sweep reports its totals to the operator,
+ * and calling an already-exported transcript a failure sends them looking for
+ * a Notion problem that does not exist.
+ */
+export type ExportOutcome = "exported" | "skipped" | "failed";
 
 /**
  * Send this transcript to Notion. A transcript with no marker is created; one
@@ -72,19 +164,23 @@ export async function exportOnce(
   t: FinalizedTranscript,
   summary: string | null,
   update?: UpdateExport,
-): Promise<boolean> {
+): Promise<ExportOutcome> {
   const marker = readExportMarker(dir, t.name);
 
   if (marker) {
-    if (!update) return false;
+    // Already exported and no updater configured: there is nothing this call
+    // can usefully do, and nothing went wrong. In the backfill this is the
+    // boot sweep racing a live finalize that landed the marker in between —
+    // routine, so it stays quiet and counts as skipped, not failed.
+    if (!update) return "skipped";
     try {
       const result = await update(t, summary, marker);
       writeExportMarker(dir, t.name, result);
       console.log(`updated ${t.name} at ${result.url}`);
-      return true;
+      return "exported";
     } catch (err) {
       console.error(`page update failed for ${t.name}:`, err);
-      return false;
+      return "failed";
     }
   }
 
@@ -95,9 +191,9 @@ export async function exportOnce(
       exportedSegments: t.segments.length,
     });
     console.log(`exported ${t.name} to ${result.url}`);
-    return true;
+    return "exported";
   } catch (err) {
     console.error(`export failed for ${t.name}:`, err);
-    return false;
+    return "failed";
   }
 }

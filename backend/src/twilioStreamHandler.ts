@@ -21,6 +21,7 @@ export function handleTwilioStream(
   ws: TwilioSocketLike,
   store: SessionStore,
   calls: CurrentCall,
+  userId: string,
 ): void {
   let sessionId: string | null = null;
 
@@ -33,26 +34,35 @@ export function handleTwilioStream(
     // `store.stop` must run unconditionally: this handler's session may have
     // been recreated (e.g. by a stray `media` frame after replacement) and
     // still needs closing even though CurrentCall has moved on.
-    calls.end(ending, reason);
-    store.stop(ending);
+    calls.end(ending, userId, reason);
+    store.stop(userId, ending);
   };
 
   ws.on("message", (data: Buffer) => {
     const frame = parseTwilioFrame(data.toString("utf8"));
     switch (frame.type) {
       case "start": {
-        // Newest call wins. Close the old one first so CurrentCall never holds
-        // a session SessionStore has already dropped.
-        const previous = calls.current();
+        // Newest call wins — for this user. Close their old one first so
+        // CurrentCall never holds a session SessionStore has already dropped.
+        // `current` is asked for *this socket's* user, so a call belonging to
+        // anyone else is not visible here and cannot be evicted: the token on
+        // this socket authorises starting a call, never ending a stranger's.
+        const previous = calls.current(userId);
         if (previous) {
-          calls.end(previous.sessionId, "ended");
-          store.stop(previous.sessionId);
+          calls.end(previous.sessionId, previous.userId, "ended");
+          store.stop(previous.userId, previous.sessionId);
         }
         sessionId = frame.callSid;
-        calls.begin(sessionId, frame.callSid);
+        calls.begin(sessionId, frame.callSid, userId);
         // Empty feed creates the session and opens the upstream connection, so
         // transcription is warming up before the first audio arrives.
-        store.feed(sessionId, Buffer.alloc(0), CALL_SESSION.ephemeral, CALL_SESSION.provider);
+        store.feed(
+          userId,
+          sessionId,
+          Buffer.alloc(0),
+          CALL_SESSION.ephemeral,
+          CALL_SESSION.provider,
+        );
         break;
       }
       case "media":
@@ -62,8 +72,8 @@ export function handleTwilioStream(
         // session id `store.stop` already removed, recreating it — and
         // opening a fresh, unreachable Deepgram connection — under a session
         // id nobody polls anymore.
-        if (sessionId && calls.current()?.sessionId === sessionId) {
-          store.feed(sessionId, frame.audio, CALL_SESSION.ephemeral, CALL_SESSION.provider);
+        if (sessionId && calls.current(userId)?.sessionId === sessionId) {
+          store.feed(userId, sessionId, frame.audio, CALL_SESSION.ephemeral, CALL_SESSION.provider);
         }
         break;
       case "stop":

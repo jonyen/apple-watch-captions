@@ -18,6 +18,11 @@ public final class CaptionStore: ObservableObject {
     /// Mono convenience: the in-progress line for the (only) channel.
     public var partial: String { partials[0] ?? "" }
 
+    /// Whether anything has been said yet, finalized or in progress. Lets a
+    /// screen tell "waiting for audio" apart from "audio is arriving" without
+    /// reaching into two collections to ask.
+    public var hasCaptions: Bool { !paragraphs.isEmpty || !partial.isEmpty }
+
     private let now: () -> Date
     private let pauseThreshold: TimeInterval
     /// Arrival time of the most recent caption of any kind.

@@ -6,7 +6,9 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { startServer, CaptionServer, ProviderOptions } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
-import { TranscriptStore, listTranscripts } from "./transcriptStore";
+import { TranscriptStore, listTranscripts, userDir } from "./transcriptStore";
+import { IdentityStore } from "./identityStore";
+import { openDb } from "./db";
 
 let running: CaptionServer | null = null;
 
@@ -15,12 +17,14 @@ afterEach(async () => {
   running = null;
 });
 
-/** Start a server whose providers are fakes the test can capture. */
-function startWithFakes(authToken: string) {
+/** Start a server whose providers are fakes the test can capture, with one registered device. */
+function startWithFakes() {
+  const identity = new IdentityStore(openDb(":memory:"));
+  const device = identity.registerDevice("watch");
   const providers: FakeTranscriptionProvider[] = [];
   const server = startServer({
     port: 0,
-    authToken,
+    identity,
     createProvider: () => {
       const p = new FakeTranscriptionProvider();
       providers.push(p);
@@ -29,7 +33,7 @@ function startWithFakes(authToken: string) {
   });
   running = server;
   const port = (server.address() as AddressInfo).port;
-  return { server, providers, port };
+  return { server, providers, port, token: device.token };
 }
 
 function waitForMessage(ws: WebSocket): Promise<any> {
@@ -41,7 +45,7 @@ function waitForMessage(ws: WebSocket): Promise<any> {
 
 describe("caption server", () => {
   it("rejects a connection with a bad token", async () => {
-    const { port } = startWithFakes("good");
+    const { port } = startWithFakes();
     const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=bad`);
     const code = await new Promise<number>((resolve) => {
       ws.on("close", (c) => resolve(c));
@@ -50,7 +54,7 @@ describe("caption server", () => {
   });
 
   it("rejects a connection with no token param", async () => {
-    const { port } = startWithFakes("good");
+    const { port } = startWithFakes();
     const ws = new WebSocket(`ws://127.0.0.1:${port}/stream`);
     const code = await new Promise<number>((resolve) => {
       ws.on("close", (c) => resolve(c));
@@ -59,15 +63,15 @@ describe("caption server", () => {
   });
 
   it("answers GET /healthz with 200 ok", async () => {
-    const { port } = startWithFakes("good");
+    const { port } = startWithFakes();
     const res = await fetch(`http://127.0.0.1:${port}/healthz`);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
   });
 
   it("relays transcripts from provider to client as caption messages", async () => {
-    const { providers, port } = startWithFakes("good");
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good`);
+    const { providers, port, token } = startWithFakes();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${token}`);
     await new Promise((r) => ws.on("open", r));
 
     // Provider was created on connection; drive it.
@@ -89,8 +93,8 @@ describe("caption server", () => {
   });
 
   it("closes the provider when the client disconnects", async () => {
-    const { providers, port } = startWithFakes("good");
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good`);
+    const { providers, port, token } = startWithFakes();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${token}`);
     await new Promise((r) => ws.on("open", r));
     const provider = providers[0];
     ws.close();
@@ -99,10 +103,12 @@ describe("caption server", () => {
   });
 
   it("passes channels=2 through to the provider factory", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
     const seen: (ProviderOptions | undefined)[] = [];
     const server = startServer({
       port: 0,
-      authToken: "good",
+      identity,
       createProvider: (o) => {
         seen.push(o);
         return new FakeTranscriptionProvider();
@@ -111,7 +117,7 @@ describe("caption server", () => {
     running = server;
     const port = (server.address() as AddressInfo).port;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good&channels=2`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${device.token}&channels=2`);
     await new Promise((r) => ws.on("open", r));
 
     expect(seen[0]).toEqual({ channels: 2 });
@@ -120,10 +126,12 @@ describe("caption server", () => {
   });
 
   it("passes a known provider param through to the provider factory", async () => {
+    const identity = new IdentityStore(openDb(":memory:"));
+    const device = identity.registerDevice("watch");
     const seen: (ProviderOptions | undefined)[] = [];
     const server = startServer({
       port: 0,
-      authToken: "good",
+      identity,
       createProvider: (o) => {
         seen.push(o);
         return new FakeTranscriptionProvider();
@@ -133,7 +141,7 @@ describe("caption server", () => {
     const port = (server.address() as AddressInfo).port;
 
     const ws = new WebSocket(
-      `ws://127.0.0.1:${port}/stream?token=good&channels=2&provider=openai`,
+      `ws://127.0.0.1:${port}/stream?token=${device.token}&channels=2&provider=openai`,
     );
     await new Promise((r) => ws.on("open", r));
     expect(seen[0]).toEqual({ channels: 2, provider: "openai" });
@@ -141,8 +149,8 @@ describe("caption server", () => {
   });
 
   it("rejects an unknown provider param", async () => {
-    const { port, providers } = startWithFakes("good");
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good&provider=nope`);
+    const { port, providers, token } = startWithFakes();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${token}&provider=nope`);
     const code = await new Promise<number>((resolve) => {
       ws.on("close", (c) => resolve(c));
     });
@@ -153,22 +161,24 @@ describe("caption server", () => {
   it("persists and finalizes transcripts for WS sessions", async () => {
     const dir = mkdtempSync(join(tmpdir(), "transcripts-ws-"));
     try {
+      const identity = new IdentityStore(openDb(":memory:"));
+      const device = identity.registerDevice("watch");
       const providers: FakeTranscriptionProvider[] = [];
       const server = startServer({
         port: 0,
-        authToken: "good",
+        identity,
         createProvider: () => {
           const p = new FakeTranscriptionProvider();
           providers.push(p);
           return p;
         },
-        transcripts: new TranscriptStore({ dir }),
-        transcriptsDir: dir,
+        transcripts: new TranscriptStore({ root: dir }),
+        transcriptsRoot: dir,
       });
       running = server;
       const port = (server.address() as AddressInfo).port;
 
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=good`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${device.token}`);
       await new Promise((r) => ws.on("open", r));
 
       providers[0].emitTranscript({ text: "ws line", isFinal: true, channel: 0 });
@@ -176,7 +186,7 @@ describe("caption server", () => {
       ws.close();
       await new Promise((r) => setTimeout(r, 20));
 
-      const transcripts = listTranscripts(dir);
+      const transcripts = listTranscripts(userDir(dir, device.userId));
       expect(transcripts).toHaveLength(1);
       expect(transcripts[0].segmentCount).toBe(1);
     } finally {

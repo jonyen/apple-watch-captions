@@ -20,6 +20,8 @@ export interface TranscriptSegment {
 export interface FinalizedTranscript {
   /** Base filename (without extension) identifying this transcript. */
   name: string;
+  /** Who this transcript belongs to. */
+  userId: string;
   sessionId: string;
   startedAt: string;
   endedAt: string;
@@ -29,7 +31,8 @@ export interface FinalizedTranscript {
 }
 
 export interface TranscriptStoreOptions {
-  dir: string;
+  /** Directory transcripts are written under, one subdirectory per user. */
+  root: string;
   /** Injectable clock (tests). Defaults to Date.now. */
   now?: () => number;
   /** Called when a session with at least one segment ends (summary hook). */
@@ -37,6 +40,8 @@ export interface TranscriptStoreOptions {
 }
 
 interface ActiveTranscript {
+  userId: string;
+  sessionId: string;
   name: string;
   startedAt: string;
   segments: TranscriptSegment[];
@@ -45,35 +50,68 @@ interface ActiveTranscript {
 }
 
 /**
- * Persists final captions as one JSONL file per session under `dir`,
- * appending line-by-line so a crash loses at most the in-flight caption.
- * Sessions with no final captions produce no file.
+ * Where one user's transcripts live.
+ *
+ * `userId` reaches the filesystem as a path segment, so it is validated the
+ * same way `isSafeName` guards transcript names one level down: an
+ * allowlist, not a denylist of specific bad substrings. A denylist of `..`,
+ * path separators, and null bytes still lets a bare `.` through — which
+ * resolves to `root` itself and maps every such user onto the shared
+ * legacy directory rather than merely failing to escape it — plus Unicode
+ * separator look-alikes and percent-encoded forms. User ids are
+ * server-generated UUIDs today — this rejection path is not reachable in
+ * practice — but the check must not depend on that remaining true.
+ */
+export function userDir(root: string, userId: string): string {
+  if (!isSafeName(userId)) {
+    throw new Error(`unsafe userId for transcript directory: ${JSON.stringify(userId)}`);
+  }
+  return join(root, userId);
+}
+
+/**
+ * Persists final captions as one JSONL file per session under
+ * `userDir(root, userId)`, appending line-by-line so a crash loses at most
+ * the in-flight caption. Sessions with no final captions produce no file.
  */
 export class TranscriptStore {
-  private readonly dir: string;
+  private readonly root: string;
   private readonly now: () => number;
   private readonly onFinalize?: (t: FinalizedTranscript) => void;
   private active = new Map<string, ActiveTranscript>();
 
   constructor(opts: TranscriptStoreOptions) {
-    this.dir = opts.dir;
+    this.root = opts.root;
     this.now = opts.now ?? (() => Date.now());
     this.onFinalize = opts.onFinalize;
   }
 
+  /**
+   * Sessions are keyed by user as well as id — the same length-prefixed
+   * construction `sessionStore.ts` uses for the same reason: `userId` is
+   * server-generated today, but `id` is client-chosen, and a plain
+   * `${userId}:${id}` join would let `("alice", "x:evil")` collide with
+   * `("alice:x", "evil")`.
+   */
+  private key(userId: string, sessionId: string): string {
+    return `${userId.length}:${userId}:${sessionId}`;
+  }
+
   /** Record a final caption for a session, creating its file on first use. */
-  append(sessionId: string, text: string, channel?: number): void {
+  append(userId: string, sessionId: string, text: string, channel?: number): void {
     try {
+      const dir = userDir(this.root, userId);
       const at = new Date(this.now()).toISOString();
-      let entry = this.active.get(sessionId);
+      const key = this.key(userId, sessionId);
+      let entry = this.active.get(key);
       if (!entry) {
-        mkdirSync(this.dir, { recursive: true });
-        entry = { name: transcriptName(at, sessionId), startedAt: at, segments: [] };
-        this.active.set(sessionId, entry);
+        mkdirSync(dir, { recursive: true });
+        entry = { userId, sessionId, name: transcriptName(at, sessionId), startedAt: at, segments: [] };
+        this.active.set(key, entry);
       }
       const segment = { at, text, ...(channel !== undefined ? { channel } : {}) };
       entry.segments.push(segment);
-      appendFileSync(join(this.dir, `${entry.name}.jsonl`), JSON.stringify(segment) + "\n");
+      appendFileSync(join(dir, `${entry.name}.jsonl`), JSON.stringify(segment) + "\n");
     } catch (err) {
       console.error("transcript append failed:", err);
     }
@@ -83,21 +121,31 @@ export class TranscriptStore {
    * The transcript a live session is writing to, or undefined before its first
    * caption. The watch stores this so it can resume the session later.
    */
-  activeName(sessionId: string): string | undefined {
-    return this.active.get(sessionId)?.name;
+  activeName(userId: string, sessionId: string): string | undefined {
+    return this.active.get(this.key(userId, sessionId))?.name;
   }
 
   /**
    * Bind a session to an existing transcript so its captions append there
    * instead of starting a new one. Unknown or unsafe names are ignored, and
-   * the session falls back to a normal new transcript.
+   * the session falls back to a normal new transcript. Only ever looks inside
+   * the calling user's own directory, so a resume can never bind to (or
+   * disclose the existence of) another user's transcript.
    */
-  reopen(sessionId: string, name: string): void {
+  reopen(userId: string, sessionId: string, name: string): void {
     if (!isSafeName(name)) return;
-    const file = join(this.dir, `${name}.jsonl`);
+    let dir: string;
+    try {
+      dir = userDir(this.root, userId);
+    } catch {
+      return;
+    }
+    const file = join(dir, `${name}.jsonl`);
     if (!existsSync(file)) return;
     const segments = readSegments(file);
-    this.active.set(sessionId, {
+    this.active.set(this.key(userId, sessionId), {
+      userId,
+      sessionId,
       name,
       startedAt: segments[0]?.at ?? new Date(this.now()).toISOString(),
       segments,
@@ -106,12 +154,14 @@ export class TranscriptStore {
   }
 
   /** Session ended: hand the collected transcript to the finalize hook. */
-  finalize(sessionId: string): void {
-    const entry = this.active.get(sessionId);
+  finalize(userId: string, sessionId: string): void {
+    const key = this.key(userId, sessionId);
+    const entry = this.active.get(key);
     if (!entry) return;
-    this.active.delete(sessionId);
+    this.active.delete(key);
     this.onFinalize?.({
       name: entry.name,
+      userId,
       sessionId,
       startedAt: entry.startedAt,
       endedAt: new Date(this.now()).toISOString(),
@@ -122,7 +172,7 @@ export class TranscriptStore {
 
   /** Finalize every active session (server shutdown). */
   finalizeAll(): void {
-    for (const id of [...this.active.keys()]) this.finalize(id);
+    for (const entry of [...this.active.values()]) this.finalize(entry.userId, entry.sessionId);
   }
 }
 
@@ -193,6 +243,20 @@ export function readTranscript(dir: string, name: string): TranscriptDetail | nu
 }
 
 /**
+ * Every suffix a stored transcript is made of — its captions, its summary,
+ * and its Notion export marker.
+ *
+ * Exported because three places need to agree on what a transcript file
+ * looks like: deleting one (below), adopting pre-tenancy files
+ * (`tenantMigration.ts`), and carrying a merged-away user's files to their
+ * new owner (`moveTranscripts` in `server.ts`). The latter two use it as an
+ * allowlist rather than skipping a denylist of known non-transcripts —
+ * `identity.db` and its sidecars can sit in the same tree, and an allowlist
+ * cannot be outgrown by whatever file SQLite invents next.
+ */
+export const TRANSCRIPT_SUFFIXES = [".jsonl", ".summary.md", ".notion.json"];
+
+/**
  * Forget a stored transcript: its captions, its summary, and its export
  * marker. False when the name is unsafe or no transcript is there. The Notion
  * page, if one was exported, is left alone — it is the archive, and the only
@@ -204,7 +268,7 @@ export function deleteTranscript(dir: string, name: string): boolean {
   if (!existsSync(file)) return false;
   // Dropping the marker with the captions keeps the export backfill sweep from
   // seeing a half-deleted transcript.
-  for (const suffix of [".jsonl", ".summary.md", ".notion.json"]) {
+  for (const suffix of TRANSCRIPT_SUFFIXES) {
     rmSync(join(dir, `${name}${suffix}`), { force: true });
   }
   return true;
@@ -314,13 +378,26 @@ export function readExportMarker(dir: string, name: string): ExportMarker | null
 /**
  * Rebuild the finalized shape from what's on disk, for the backfill sweeps that
  * work from stored transcripts rather than a live session.
+ *
+ * `userId` defaults to `""`: the backfill sweeps still walk a single flat
+ * directory handed to them by their caller (Task 12 moves them onto
+ * per-user directories) and have no user to attribute a rebuilt transcript
+ * to. Callers that do know the owner should pass it.
+ *
+ * That default is a stopgap, not a value meant to travel further: `""` is
+ * exactly what `userDir` rejects, so a `FinalizedTranscript` built this way
+ * must not be handed to `finalizer.ts`'s `run()` (which resolves a directory
+ * from `t.userId`) until Task 12 gives the backfill sweeps real per-user
+ * transcripts to rebuild from.
  */
 export function rebuildFinalized(
   name: string,
   segments: TranscriptSegment[],
+  userId = "",
 ): FinalizedTranscript {
   return {
     name,
+    userId,
     sessionId: name.slice(name.indexOf("_") + 1),
     startedAt: segments[0]?.at ?? "",
     endedAt: segments.at(-1)?.at ?? segments[0]?.at ?? "",

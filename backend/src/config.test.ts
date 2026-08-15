@@ -5,22 +5,64 @@ describe("loadConfig", () => {
   it("reads values from the environment", () => {
     const cfg = loadConfig({
       PORT: "8080",
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
     });
     expect(cfg).toEqual({
       port: 8080,
-      authToken: "secret",
       deepgramApiKey: "dg-key",
       transcriptsDir: "./data/transcripts",
+      adminToken: undefined,
+      dbPath: "data/transcripts/identity.db",
       anthropicApiKey: undefined,
       deepgramPhoneModel: "phonecall",
+      trustProxyHeaders: false,
     });
+  });
+
+  // Off by default because the relay may be exposed directly, where a
+  // forgeable `Fly-Client-IP` would let any caller evade the registration
+  // rate limit entirely.
+  it("leaves proxy headers untrusted unless asked", () => {
+    expect(loadConfig({ DEEPGRAM_API_KEY: "dg-key" }).trustProxyHeaders).toBe(false);
+  });
+
+  it("trusts proxy headers when TRUST_PROXY_HEADERS is set", () => {
+    const base = { DEEPGRAM_API_KEY: "dg-key" };
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "true" }).trustProxyHeaders).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "1" }).trustProxyHeaders).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "false" }).trustProxyHeaders).toBe(false);
+    expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "0" }).trustProxyHeaders).toBe(false);
+  });
+
+  // A typo here would silently either open the limiter to forged headers or
+  // collapse every caller into one bucket, depending on which way it fell.
+  // Fail closed and say so.
+  it("warns and stays off for a TRUST_PROXY_HEADERS value it does not recognize", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRUST_PROXY_HEADERS: "yes please" });
+    expect(cfg.trustProxyHeaders).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("defaults dbPath beside the transcripts dir and leaves adminToken unset", () => {
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRANSCRIPTS_DIR: "/data/transcripts" });
+    expect(cfg.dbPath).toBe("/data/transcripts/identity.db");
+    expect(cfg.adminToken).toBeUndefined();
+  });
+
+  it("reads DB_PATH and ADMIN_TOKEN when set", () => {
+    const cfg = loadConfig({
+      DEEPGRAM_API_KEY: "dg-key",
+      DB_PATH: "/data/identity.db",
+      ADMIN_TOKEN: "admin-secret",
+    });
+    expect(cfg.dbPath).toBe("/data/identity.db");
+    expect(cfg.adminToken).toBe("admin-secret");
   });
 
   it("reads transcript dir and anthropic key when set", () => {
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       TRANSCRIPTS_DIR: "/data/transcripts",
       ANTHROPIC_API_KEY: "sk-ant-xxx",
@@ -31,7 +73,6 @@ describe("loadConfig", () => {
 
   it("reads the Gemini key and summary provider", () => {
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       GEMINI_API_KEY: "gk-xxx",
       SUMMARY_PROVIDER: "gemini",
@@ -41,7 +82,7 @@ describe("loadConfig", () => {
   });
 
   it("leaves the summary provider unset when not configured", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.summaryProvider).toBeUndefined();
     expect(cfg.geminiApiKey).toBeUndefined();
   });
@@ -49,7 +90,6 @@ describe("loadConfig", () => {
   it("ignores an unrecognized summary provider rather than failing to boot", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       SUMMARY_PROVIDER: "llama",
     });
@@ -60,7 +100,6 @@ describe("loadConfig", () => {
 
   it("reads the Notion integration when both token and database are set", () => {
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       NOTION_TOKEN: "ntn_xxx",
       NOTION_DATABASE_ID: "db-123",
@@ -69,14 +108,13 @@ describe("loadConfig", () => {
   });
 
   it("leaves Notion off when it is not configured", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.notion).toBeUndefined();
   });
 
   it("ignores a half-configured Notion integration rather than failing to boot", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({
-      AUTH_TOKEN: "secret",
       DEEPGRAM_API_KEY: "dg-key",
       NOTION_TOKEN: "ntn_xxx",
     });
@@ -86,21 +124,17 @@ describe("loadConfig", () => {
   });
 
   it("defaults the port to 8080 when unset", () => {
-    const cfg = loadConfig({ AUTH_TOKEN: "secret", DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
     expect(cfg.port).toBe(8080);
   });
 
-  it("throws when AUTH_TOKEN is missing", () => {
-    expect(() => loadConfig({ DEEPGRAM_API_KEY: "dg-key" })).toThrow(/AUTH_TOKEN/);
-  });
-
   it("throws when DEEPGRAM_API_KEY is missing", () => {
-    expect(() => loadConfig({ AUTH_TOKEN: "secret" })).toThrow(/DEEPGRAM_API_KEY/);
+    expect(() => loadConfig({})).toThrow(/DEEPGRAM_API_KEY/);
   });
 });
 
 describe("call captioning config", () => {
-  const base = { AUTH_TOKEN: "t", DEEPGRAM_API_KEY: "k" };
+  const base = { DEEPGRAM_API_KEY: "k" };
 
   it("defaults the phone model to the safe telephony baseline", () => {
     expect(loadConfig(base).deepgramPhoneModel).toBe("phonecall");

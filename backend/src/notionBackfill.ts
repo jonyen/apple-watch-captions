@@ -9,6 +9,13 @@ import { exportOnce, isSubstantial } from "./finalizer";
 
 export interface BackfillOptions {
   dir: string;
+  /**
+   * Who owns `dir`. Required rather than defaulted: the sweep runs once per
+   * user directory and always knows the answer, and a rebuilt transcript with
+   * an empty `userId` is exactly what `finalizer.run` (and the per-user
+   * export work that will read it) cannot use.
+   */
+  userId: string;
   export: ExportTranscript;
   /** Stop after this many exports (a boot sweep shouldn't run forever). */
   limit?: number;
@@ -47,7 +54,7 @@ export async function backfillNotion(opts: BackfillOptions): Promise<BackfillRes
       result.skipped++;
       continue;
     }
-    const transcript = rebuildFinalized(listed.name, detail.segments);
+    const transcript = rebuildFinalized(listed.name, detail.segments, opts.userId);
     if (!isSubstantial(transcript)) {
       result.skipped++;
       continue;

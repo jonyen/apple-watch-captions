@@ -9,6 +9,13 @@ primary_region = "sjc"  # pick a region near you: fly platform regions
   PORT = "8080"
   TRANSCRIPTS_DIR = "/data/transcripts"
   TZ = "America/Los_Angeles"  # local timestamps in transcript filenames/logs
+  # `http_service` below terminates the client's connection, so the socket
+  # address this process sees is Fly's proxy for every caller. Without this,
+  # the registration rate limiter keys every registration in the world into
+  # one bucket. Correct ONLY behind a proxy that overwrites Fly-Client-IP
+  # (Fly's edge does); leave it off anywhere the relay is exposed directly,
+  # where the header would be forgeable. See backend/README.md.
+  TRUST_PROXY_HEADERS = "true"
 
 # Persistent volume for session transcripts + summaries.
 # Create once with: fly volumes create transcripts --size 1

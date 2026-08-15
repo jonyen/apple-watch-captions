@@ -1,10 +1,14 @@
+import { join } from "path";
 
 export interface Config {
   port: number;
-  authToken: string;
   deepgramApiKey: string;
   /** Where session transcripts are persisted (a Fly volume in prod). */
   transcriptsDir: string;
+  /** Operator-only token for /v1/usage. */
+  adminToken?: string;
+  /** Where the identity database lives (beside the transcripts, on the volume). */
+  dbPath: string;
   /** Optional; when set, transcripts are summarized with Claude on session end. */
   anthropicApiKey?: string;
   /** Optional; the free-tier alternative to Claude for summaries. */
@@ -21,6 +25,13 @@ export interface Config {
   deepgramPhoneModel: string;
   /** Optional; the number Twilio bridges an inbound captioned call to. */
   twilioForwardTo?: string;
+  /**
+   * Trust `Fly-Client-IP` as the caller's address when rate-limiting
+   * registrations, instead of the raw socket address. Must only be on when
+   * the relay genuinely sits behind a proxy that overwrites that header —
+   * see `clientAddress` in `server.ts`.
+   */
+  trustProxyHeaders: boolean;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -33,8 +44,6 @@ export interface NotionConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  const authToken = env.AUTH_TOKEN;
-  if (!authToken) throw new Error("AUTH_TOKEN is required");
   const deepgramApiKey = env.DEEPGRAM_API_KEY;
   if (!deepgramApiKey) throw new Error("DEEPGRAM_API_KEY is required");
   const port = env.PORT ? Number(env.PORT) : 8080;
@@ -42,9 +51,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
   return {
     port,
-    authToken,
     deepgramApiKey,
     transcriptsDir,
+    adminToken: env.ADMIN_TOKEN || undefined,
+    dbPath: env.DB_PATH || join(transcriptsDir, "identity.db"),
     anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
     geminiApiKey: env.GEMINI_API_KEY || undefined,
     summaryProvider: loadSummaryProvider(env),
@@ -57,7 +67,32 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     // use. Defaulting to a Flux model would fail the first real call.
     deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
     twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
+    trustProxyHeaders: loadTrustProxyHeaders(env),
   };
+}
+
+/**
+ * Whether to believe `Fly-Client-IP`.
+ *
+ * Defaults to **off**, which is the safe answer when the relay is exposed
+ * directly: a forgeable address header would let one caller pick a fresh key
+ * per request and evade the registration limiter entirely. Behind Fly's
+ * `http_service` it must be on instead — there, every request arrives from
+ * the proxy's address, so leaving it off collapses every caller in the world
+ * into a single 10-per-hour bucket and ten requests from anyone would refuse
+ * registration (the only way to get a credential) to everyone.
+ *
+ * An unrecognized value falls back to off and warns rather than being coerced
+ * silently: this is the kind of flag whose typo is only ever discovered in
+ * production, in one of the two failure modes above.
+ */
+function loadTrustProxyHeaders(env: NodeJS.ProcessEnv): boolean {
+  const value = env.TRUST_PROXY_HEADERS;
+  if (!value) return false;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  console.warn(`Ignoring TRUST_PROXY_HEADERS="${value}" — expected "true" or "false"`);
+  return false;
 }
 
 /** Only the backends we actually implement; anything else is a typo. */

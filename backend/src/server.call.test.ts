@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { AddressInfo } from "net";
+import { createHash } from "crypto";
 import WebSocket from "ws";
 import { startServer, CaptionServer } from "./server";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { IdentityStore } from "./identityStore";
+import { openDb, Db } from "./db";
 
 let running: CaptionServer | null = null;
 
@@ -11,11 +14,13 @@ afterEach(async () => {
   running = null;
 });
 
-function start(callForwardTo?: string, authToken = "good") {
+function start(callForwardTo?: string) {
+  const identity = new IdentityStore(openDb(":memory:"));
+  const device = identity.registerDevice("watch");
   const providers: FakeTranscriptionProvider[] = [];
   const server = startServer({
     port: 0,
-    authToken,
+    identity,
     createProvider: () => {
       const p = new FakeTranscriptionProvider();
       providers.push(p);
@@ -24,22 +29,34 @@ function start(callForwardTo?: string, authToken = "good") {
     callForwardTo,
   });
   running = server;
-  return { providers, port: (server.address() as AddressInfo).port };
+  return { providers, port: (server.address() as AddressInfo).port, token: device.token };
+}
+
+/**
+ * Twilio's own client does not honor `IdentityStore`'s random-token
+ * generation — this test needs one specific string as a device's token, so
+ * it plants it directly, hashed the same way `IdentityStore` hashes every
+ * token it stores.
+ */
+function withToken(db: Db, identity: IdentityStore, token: string): void {
+  const device = identity.registerDevice("watch");
+  db.prepare("UPDATE devices SET token_hash = ? WHERE id = ?")
+    .run(createHash("sha256").update(token).digest("hex"), device.deviceId);
 }
 
 const base = (port: number) => `http://127.0.0.1:${port}`;
 
 describe("POST /twilio/voice", () => {
   it("returns TwiML pointing the stream at this relay", async () => {
-    const { port } = start("+15551234567");
+    const { port, token } = start("+15551234567");
 
-    const res = await fetch(`${base(port)}/twilio/voice?token=good`, { method: "POST" });
+    const res = await fetch(`${base(port)}/twilio/voice?token=${token}`, { method: "POST" });
 
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/xml");
     const xml = await res.text();
     // Token in the path: Twilio's stream client discards the query string.
-    expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream/good`);
+    expect(xml).toContain(`wss://127.0.0.1:${port}/twilio/stream/${token}`);
     expect(xml).toContain('track="inbound_track"');
     expect(xml).toContain("<Dial>+15551234567</Dial>");
   });
@@ -53,17 +70,17 @@ describe("POST /twilio/voice", () => {
 
   // Better to refuse than to answer with TwiML that dials nowhere.
   it("503s when no forwarding number is configured", async () => {
-    const { port } = start(undefined);
-    const res = await fetch(`${base(port)}/twilio/voice?token=good`, { method: "POST" });
+    const { port, token } = start(undefined);
+    const res = await fetch(`${base(port)}/twilio/voice?token=${token}`, { method: "POST" });
     expect(res.status).toBe(503);
   });
 });
 
 describe("GET /v1/call", () => {
   it("reports no call when none is live", async () => {
-    const { port } = start("+15551234567");
+    const { port, token } = start("+15551234567");
 
-    const res = await fetch(`${base(port)}/v1/call?token=good`);
+    const res = await fetch(`${base(port)}/v1/call?token=${token}`);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ active: false, events: [], seq: 0 });
@@ -80,8 +97,8 @@ describe("GET /v1/call", () => {
   // rejected it and Twilio reported "server closed the connection". The token
   // travels in the path because that is what actually survives.
   it("accepts a stream whose token is in the path, as Twilio sends it", async () => {
-    const { providers, port } = start("+15551234567");
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/good`);
+    const { providers, port, token } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/${token}`);
     await new Promise((resolve) => ws.on("open", resolve));
 
     ws.send(JSON.stringify({
@@ -92,7 +109,7 @@ describe("GET /v1/call", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     providers[0].emitReady();
 
-    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+    const body = await (await fetch(`${base(port)}/v1/call?token=${token}`)).json();
 
     expect(body.active).toBe(true);
     ws.close();
@@ -107,8 +124,8 @@ describe("GET /v1/call", () => {
   });
 
   it("serves captions from the live call", async () => {
-    const { providers, port } = start("+15551234567");
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=good`);
+    const { providers, port, token } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=${token}`);
     await new Promise((resolve) => ws.on("open", resolve));
 
     ws.send(JSON.stringify({
@@ -121,7 +138,7 @@ describe("GET /v1/call", () => {
     providers[0].emitReady();
     providers[0].emitTranscript({ text: "hello there", isFinal: true });
 
-    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+    const body = await (await fetch(`${base(port)}/v1/call?token=${token}`)).json();
 
     expect(body.active).toBe(true);
     expect(body.events.some((e: any) => e.type === "caption" && e.text === "hello there"))
@@ -135,8 +152,8 @@ describe("GET /v1/call", () => {
   // simulate it here by stopping the session out from under CurrentCall and
   // confirming the endpoint notices instead of hanging.
   it("reports no call when its session has been reaped out from under CurrentCall", async () => {
-    const { port } = start("+15551234567");
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=good`);
+    const { port, token } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream?token=${token}`);
     await new Promise((resolve) => ws.on("open", resolve));
 
     ws.send(JSON.stringify({
@@ -148,9 +165,9 @@ describe("GET /v1/call", () => {
 
     // Drop the session directly, bypassing the normal end-of-call path so
     // CurrentCall still believes CA1 is live.
-    await fetch(`${base(port)}/v1/stop?token=good&session=CA1`, { method: "POST" });
+    await fetch(`${base(port)}/v1/stop?token=${token}&session=CA1`, { method: "POST" });
 
-    const body = await (await fetch(`${base(port)}/v1/call?token=good`)).json();
+    const body = await (await fetch(`${base(port)}/v1/call?token=${token}`)).json();
     // The call itself may still be live — only its captions died — so this
     // is stream_lost, not ended. Reporting "ended" would tell the watch the
     // call is over while the user may still be talking.
@@ -167,7 +184,22 @@ describe("POST /twilio/voice with a token containing XML metacharacters", () => 
   // isolation (that's twiml.test.ts).
   it("keeps the emitted TwiML well-formed", async () => {
     const token = 'a&b<c>d"e';
-    const { port } = start("+15551234567", token);
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    withToken(db, identity, token);
+    const providers: FakeTranscriptionProvider[] = [];
+    const server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => {
+        const p = new FakeTranscriptionProvider();
+        providers.push(p);
+        return p;
+      },
+      callForwardTo: "+15551234567",
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
 
     const res = await fetch(
       `${base(port)}/twilio/voice?token=${encodeURIComponent(token)}`,

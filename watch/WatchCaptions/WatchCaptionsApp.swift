@@ -50,7 +50,9 @@ private struct RootView: View {
                     onNew: { Task { await model.startNew() } },
                     onLive: { Task { await model.startLive() } },
                     onContinue: { Task { await model.continueLast() } },
-                    onBrowse: { Task { await model.showHistory() } })
+                    onBrowse: { Task { await model.showHistory() } },
+                    onPhone: { Task { await model.startPhoneAudio() } },
+                    phoneBroadcasting: model.phoneBroadcasting)
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -69,6 +71,10 @@ private struct RootView: View {
                         call
                             // Leaving stops reading the call. It does not hang up.
                             .onDisappear { model.leaveCall() }
+                    case .phone:
+                        phone
+                            // Leaving stops reading. The phone keeps broadcasting.
+                            .onDisappear { model.leavePhoneAudio() }
                     }
                 }
         }
@@ -83,9 +89,32 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: model.live ? .liveOnly : .recording,
+                textSize: model.settings.captionTextSize,
                 onStop: { model.stop() })
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })
+        }
+    }
+
+    /// Reading the phone's audio. Shaped like `call` rather than like
+    /// `captions`: there is no Stop, because the phone owns the broadcast, and
+    /// a retry only re-joins the session rather than restarting capture.
+    @ViewBuilder
+    private var phone: some View {
+        switch store.state {
+        case .error(let message):
+            ErrorView(message: message,
+                      onRetry: { Task { await model.startPhoneAudio() } })
+        case .connecting, .listening:
+            // Captions win the moment any arrive, even if the presence poll has
+            // not caught up — what is on screen is better evidence than what
+            // the relay said three seconds ago.
+            if model.phoneBroadcasting || store.hasCaptions {
+                CaptionView(store: store, indicator: .phone,
+                            textSize: model.settings.captionTextSize, onStop: nil)
+            } else {
+                PhoneWaitingView()
+            }
         }
     }
 
@@ -103,6 +132,7 @@ private struct RootView: View {
             CaptionView(
                 store: store,
                 indicator: callCaptions.ended.map(CaptionIndicator.callEnded) ?? .call,
+                textSize: model.settings.captionTextSize,
                 onStop: nil)
         }
     }

@@ -12,6 +12,8 @@ final class AppModel: ObservableObject {
         case detail(name: String)
         /// Reading a phone call the relay is captioning.
         case call
+        /// Reading audio playing on the iPhone.
+        case phone
     }
 
     /// Navigation stack above the menu.
@@ -49,6 +51,29 @@ final class AppModel: ObservableObject {
     /// never live at once.
     let callCaptions: CallCaptions
     private let callClient: RelayCallClient
+    /// Reads audio playing on the iPhone. Its own controller and transport,
+    /// because it joins a session the phone owns rather than starting one — but
+    /// it shares `store`, since only one thing is ever on screen.
+    private let phoneController: SessionController
+    private let settingsClient: RelaySettingsClient
+    /// What the phone last said. Defaults until the relay answers, so the app
+    /// works unchanged when it cannot be reached.
+    @Published private(set) var settings: Settings = .defaults
+    /// True while the phone-audio screen is reading. Kept apart from
+    /// `capturing`, which means a mic session and drives Stop, resume and the
+    /// "Continue last" bookkeeping — none of which apply to reading a session
+    /// this Watch does not own.
+    @Published private(set) var readingPhone = false
+    /// Whether the phone has fed the shared session recently.
+    ///
+    /// Drives two things: whether the menu offers iPhone audio at all, and
+    /// whether that screen shows captions or the instructions for starting a
+    /// broadcast. A row that is only useful while the phone is broadcasting has
+    /// no business sitting on the menu the rest of the time — and with
+    /// auto-open on, it is rarely seen at all.
+    @Published private(set) var phoneBroadcasting = false
+    /// Watches for the broadcast starting while the screen is open.
+    private var phonePresencePoll: Task<Void, Never>?
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
@@ -71,6 +96,14 @@ final class AppModel: ObservableObject {
             // off HistoryStore, whose `detail` belongs to the history screen.
             history: historyClient
         )
+        phoneController = SessionController(
+            store: store,
+            relay: HTTPRelayClient(
+                base: base, token: Secrets.authToken,
+                fixedSessionID: PhoneAudio.sessionID),
+            audio: SilentCapture(),
+            permission: NoMicNeeded())
+        settingsClient = RelaySettingsClient(base: base, token: Secrets.authToken)
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
@@ -105,9 +138,24 @@ final class AppModel: ObservableObject {
         // the menu is eligible to auto-resume.
         guard !capturing, path.isEmpty else { return }
 
+        // Settings first: they decide what the rest of this launch does.
+        settings = await settingsClient.settings()
+
         // A call in progress is the most likely reason the app is being opened
         // at all, so it wins over the menu and over resuming a past session.
         if await enterCallIfLive() { return }
+
+        // Then the phone: if it is broadcasting, reading it is almost certainly
+        // why the app is being opened. Same shape as the call check, and off by
+        // default is a setting rather than an argument.
+        phoneBroadcasting = await phoneIsBroadcasting()
+        if settings.autoOpenPhoneAudio, phoneBroadcasting {
+            await startPhoneAudio()
+            return
+        }
+        // Keep asking while the app is on screen, so starting the broadcast on
+        // the phone makes the menu row appear without a trip out and back.
+        watchForBroadcast()
 
         switch launchAction(last: lastSession, now: Date(),
                             stoppedExplicitly: stoppedExplicitly) {
@@ -138,9 +186,58 @@ final class AppModel: ObservableObject {
         path = []
     }
 
+    /// Read whatever is playing on the iPhone. The phone's broadcast extension
+    /// posts the audio; this only reads the captions back, so there is nothing
+    /// here to start, stop or save on the relay.
+    func startPhoneAudio() async {
+        currentTranscript = nil
+        readingPhone = true
+        path = [.phone]
+        watchForBroadcast()
+        // `.live` on both sides: the phone marks the session ephemeral, so the
+        // relay writes no transcript, runs no summary and exports nothing. A
+        // podcast does not belong in the transcript list.
+        await phoneController.start(mode: .live)
+    }
+
+    /// Stop reading the phone's audio. The phone keeps broadcasting — this is
+    /// the same distinction as leaving call captions without hanging up.
+    func leavePhoneAudio() {
+        guard readingPhone else { return }
+        readingPhone = false
+        // The poll keeps running: back on the menu, the same answer decides
+        // whether the row is there.
+        phoneController.stop()
+        path = []
+    }
+
+    /// Poll while the phone screen is open, so starting the broadcast on the
+    /// phone replaces the instructions here without anything to tap. Three
+    /// seconds is well inside the relay's ten-second presence window, and one
+    /// small request costs far less than the captions it is waiting for.
+    private func watchForBroadcast() {
+        phonePresencePoll?.cancel()
+        phonePresencePoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let producing = await self.phoneIsBroadcasting()
+                if self.phoneBroadcasting != producing { self.phoneBroadcasting = producing }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    /// True when the phone has fed the shared session recently.
+    private func phoneIsBroadcasting() async -> Bool {
+        await settingsClient.presence(session: PhoneAudio.sessionID).producer
+    }
+
+    /// Start a mic session in whichever mode the settings ask for. With
+    /// transcripts off, "New session" keeps nothing — the same promise the
+    /// Live button makes, applied to the default.
     func startNew() async {
         currentTranscript = nil
-        await startCaptions(mode: .saved(resuming: nil))
+        await startCaptions(mode: settings.saveTranscripts ? .saved(resuming: nil) : .live)
     }
 
     /// Caption without keeping anything: the relay writes no transcript, so

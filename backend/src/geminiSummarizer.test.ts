@@ -5,6 +5,7 @@ import { FinalizedTranscript } from "./transcriptStore";
 function transcript(segments?: FinalizedTranscript["segments"]): FinalizedTranscript {
   return {
     name: "2026-07-06T01-02-03Z_abc",
+    userId: "user-1",
     sessionId: "abc",
     startedAt: "2026-07-06T01:02:03Z",
     endedAt: "2026-07-06T01:05:03Z",

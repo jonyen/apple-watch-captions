@@ -1,6 +1,10 @@
+import { join, dirname } from "path";
+import { mkdirSync, readdirSync, statSync, existsSync } from "fs";
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
 import { startServer, ProviderOptions } from "./server";
+import { openDb } from "./db";
+import { IdentityStore } from "./identityStore";
 import { DeepgramProvider, DeepgramLike, telephonyOptions } from "./deepgramProvider";
 import { OpenAIProvider } from "./openaiProvider";
 import { AssemblyAIProvider } from "./assemblyaiProvider";
@@ -16,6 +20,7 @@ import { backfillNotion } from "./notionBackfill";
 import { backfillSummaries } from "./summaryBackfill";
 import { createNotionUpdater } from "./notionUpdater";
 import { createUsageService } from "./usageService";
+import { migrateFlatTranscripts } from "./tenantMigration";
 
 const config = loadConfig(process.env);
 const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
@@ -52,9 +57,9 @@ if (!exportTranscript) {
 }
 
 const transcripts = new TranscriptStore({
-  dir: config.transcriptsDir,
+  root: config.transcriptsDir,
   onFinalize: createFinalizer({
-    dir: config.transcriptsDir,
+    root: config.transcriptsDir,
     summarize,
     export: exportTranscript,
     update: config.notion ? createNotionUpdater(config.notion) : undefined,
@@ -97,14 +102,47 @@ function createProvider(opts?: ProviderOptions): TranscriptionProvider {
   }
 }
 
+// The directory has to exist before `openDb` runs: nothing else creates it
+// this early (TranscriptStore only creates it lazily, on the first write),
+// so on a fresh volume `openDb` would otherwise throw SQLITE_CANTOPEN at
+// import time and boot-loop the process. `dbPath` defaults beside the
+// transcripts on the same persistent volume, so identities survive a
+// redeploy; an in-memory store here would force every device to re-register.
+mkdirSync(config.transcriptsDir, { recursive: true });
+// And the database's own directory, which is only the same one by default: a
+// DB_PATH pointed anywhere else (a sibling directory on the volume, say) that
+// does not exist yet fails with SQLITE_CANTOPEN at import time, which on Fly
+// is a boot loop rather than an error anyone reads.
+mkdirSync(dirname(config.dbPath), { recursive: true });
+const identity = new IdentityStore(openDb(config.dbPath));
+
+// One-time (per install) adoption of transcripts written before the relay was
+// multi-tenant. No-ops on every boot after the first, once the flat root
+// holds only per-user directories.
+const migrated = migrateFlatTranscripts(config.transcriptsDir, identity);
+if (migrated) {
+  // This is a live bearer token, printed exactly once because there is no
+  // other way to hand the operator a credential for a user the relay just
+  // minted on their behalf. Whatever aggregates these logs (`fly logs`, a
+  // log drain, etc.) now holds it too — treat that output with the same
+  // care as any other secret. There is no revoke/rotate for it beyond
+  // pairing a new device onto this user and no longer using the old one.
+  console.log(
+    `Migrated ${migrated.moved} file(s) to user ${migrated.userId}. ` +
+      `Adopt existing installs with this token (shown once): ${migrated.token}`,
+  );
+}
+
 const server = startServer({
   port: config.port,
-  authToken: config.authToken,
+  identity,
+  adminToken: config.adminToken,
   createProvider,
   transcripts,
-  transcriptsDir: config.transcriptsDir,
+  transcriptsRoot: config.transcriptsDir,
   usage: createUsageService({ env: process.env }),
   callForwardTo: config.twilioForwardTo,
+  trustProxyHeaders: config.trustProxyHeaders,
 });
 
 const addr = server.address();
@@ -113,28 +151,63 @@ console.log(`Caption relay listening on ws://0.0.0.0:${port}/stream`);
 console.log(`Transcripts in ${config.transcriptsDir}; viewer at /app`);
 
 /**
+ * The per-user subdirectories under the transcripts root — each backfill
+ * sweep runs once per user rather than once over the (now-empty, once
+ * migration has run) flat root, since transcripts live under
+ * `userDir(root, userId)` rather than directly in `root`.
+ */
+function userDirs(root: string): { dir: string; userId: string }[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root)
+    .filter((entry) => statSync(join(root, entry)).isDirectory())
+    // The directory name *is* the user id — `userDir` joins it verbatim — so
+    // the sweeps below can attribute what they rebuild instead of handing
+    // downstream an ownerless transcript.
+    .map((entry) => ({ dir: join(root, entry), userId: entry }));
+}
+
+/**
  * Catch up on stored transcripts: summarize any that never got one (the key
  * was unset, out of credit, or erroring at the time), then export anything
  * that never reached Notion. Summaries run first so a transcript exported in
  * the same sweep carries its summary.
+ *
+ * Runs once per user directory and sums the results, rather than once over
+ * the flat root: transcripts live under `userDir(root, userId)` now, so a
+ * single sweep of the root itself would see no `.jsonl` files and do
+ * nothing.
  */
 async function runBackfills(): Promise<void> {
+  const dirs = userDirs(config.transcriptsDir);
+
   if (summarize) {
-    const r = await backfillSummaries({
-      dir: config.transcriptsDir,
-      summarize,
-      patchPage: config.notion ? createNotionSummaryPatcher(config.notion) : undefined,
-    });
-    if (r.summarized || r.failed) {
+    const totals = { summarized: 0, patched: 0, failed: 0 };
+    for (const { dir, userId } of dirs) {
+      const r = await backfillSummaries({
+        dir,
+        userId,
+        summarize,
+        patchPage: config.notion ? createNotionSummaryPatcher(config.notion) : undefined,
+      });
+      totals.summarized += r.summarized;
+      totals.patched += r.patched;
+      totals.failed += r.failed;
+    }
+    if (totals.summarized || totals.failed) {
       console.log(
-        `Summary backfill: ${r.summarized} written, ${r.patched} added to Notion, ${r.failed} failed`,
+        `Summary backfill: ${totals.summarized} written, ${totals.patched} added to Notion, ${totals.failed} failed`,
       );
     }
   }
   if (exportTranscript) {
-    const r = await backfillNotion({ dir: config.transcriptsDir, export: exportTranscript });
-    if (r.exported || r.failed) {
-      console.log(`Notion backfill: ${r.exported} exported, ${r.failed} failed`);
+    const totals = { exported: 0, failed: 0 };
+    for (const { dir, userId } of dirs) {
+      const r = await backfillNotion({ dir, userId, export: exportTranscript });
+      totals.exported += r.exported;
+      totals.failed += r.failed;
+    }
+    if (totals.exported || totals.failed) {
+      console.log(`Notion backfill: ${totals.exported} exported, ${totals.failed} failed`);
     }
   }
 }

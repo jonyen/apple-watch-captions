@@ -1,17 +1,19 @@
+import { mkdirSync } from "fs";
 import {
   FinalizedTranscript,
   MIN_TRANSCRIPT_CHARS,
   readExportMarker,
   writeExportMarker,
   writeSummary,
+  userDir,
 } from "./transcriptStore";
 import { Summarize } from "./summarizer";
 import { ExportTranscript } from "./notionExporter";
 import { UpdateExport } from "./notionUpdater";
 
 export interface FinalizerOptions {
-  /** Transcript directory the summary file is written to. */
-  dir: string;
+  /** Root transcript directory; the per-user summary directory is derived from `t.userId`. */
+  root: string;
   /** Optional Claude summarizer. */
   summarize?: Summarize;
   /** Optional external export (Notion). */
@@ -38,6 +40,30 @@ export function isSubstantial(t: FinalizedTranscript): boolean {
 
 async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void> {
   if (!isSubstantial(t)) return;
+  // Nothing below here writes anything, so there is nothing worth resolving
+  // or creating a directory for.
+  if (!opts.summarize && !opts.export) return;
+
+  let dir: string;
+  try {
+    dir = userDir(opts.root, t.userId);
+    // In the live flow this directory already exists — `TranscriptStore.append`
+    // created it before the session could ever reach `finalize` — but nothing
+    // else guarantees that (a directly-constructed `FinalizedTranscript`, or a
+    // future backfill re-running this path), and `writeSummary`/
+    // `writeExportMarker` do not create directories themselves.
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    // Best-effort, like the rest of this function: the transcript is
+    // already safely on disk. This must not become an unhandled promise
+    // rejection — `createFinalizer` invokes `run` fire-and-forget as
+    // `void run(opts, t)`, and by default an unhandled rejection kills the
+    // whole process. Reachable on an unsafe/empty `userId` (`userDir`
+    // throws), `EACCES`, `ENOSPC`, or `root` having been replaced by a
+    // plain file.
+    console.error(`could not resolve transcript directory for ${t.name}:`, err);
+    return;
+  }
 
   let summary: string | null = null;
   if (opts.summarize) {
@@ -45,7 +71,7 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
       const generated = await opts.summarize(t);
       if (generated.length > 0) {
         summary = generated;
-        writeSummary(opts.dir, t.name, generated);
+        writeSummary(dir, t.name, generated);
         console.log(`summary written for ${t.name}`);
       }
     } catch (err) {
@@ -55,7 +81,7 @@ async function run(opts: FinalizerOptions, t: FinalizedTranscript): Promise<void
 
   // Export independently of the summary: a transcript is still worth having in
   // Notion when Claude is unconfigured or the summary call failed.
-  if (opts.export) await exportOnce(opts.export, opts.dir, t, summary, opts.update);
+  if (opts.export) await exportOnce(opts.export, dir, t, summary, opts.update);
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
  * Single-file transcript viewer served at /app. Talks to /v1/transcripts with
- * the relay auth token, which the user pastes once (kept in localStorage).
+ * a device bearer token, which the user pastes once (kept in localStorage).
  */
 export const VIEWER_HTML = `<!doctype html>
 <html lang="en">
@@ -46,8 +46,8 @@ export const VIEWER_HTML = `<!doctype html>
 <body>
 <h1>Watch Captions — Transcripts</h1>
 <div id="auth" style="display:none">
-  <p>Enter the relay auth token to view transcripts.</p>
-  <input id="token" type="password" placeholder="auth token" autocomplete="off">
+  <p>Enter your device token to view transcripts.</p>
+  <input id="token" type="password" placeholder="device token" autocomplete="off">
   <button id="save">Save</button>
 </div>
 <button id="back">&larr; All transcripts</button>
@@ -66,8 +66,7 @@ document.getElementById('save').onclick = () => {
 backBtn.onclick = showList;
 
 async function api(path) {
-  const sep = path.includes('?') ? '&' : '?';
-  const res = await fetch(path + sep + 'token=' + encodeURIComponent(token));
+  const res = await fetch(path, { headers: { authorization: 'Bearer ' + token } });
   if (res.status === 401) { authBox.style.display = 'block'; throw new Error('unauthorized'); }
   if (!res.ok) throw new Error('request failed: ' + res.status);
   authBox.style.display = 'none';

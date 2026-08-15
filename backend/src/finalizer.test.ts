@@ -9,11 +9,15 @@ import {
   TranscriptStore,
   listTranscripts,
   readExportMarker,
+  userDir,
 } from "./transcriptStore";
+
+const U = "user-1";
 
 function transcript(texts: string[]): FinalizedTranscript {
   return {
     name: "2026-07-06T01-02-03Z_abc",
+    userId: U,
     sessionId: "abc",
     startedAt: "2026-07-06T01:02:03Z",
     endedAt: "2026-07-06T01:05:03Z",
@@ -25,23 +29,25 @@ const LONG = ["this is a reasonably long caption about something", "and another 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
 describe("createFinalizer", () => {
+  let root: string;
   let dir: string;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "finalizer-"));
+    root = mkdtempSync(join(tmpdir(), "finalizer-"));
+    dir = userDir(root, U);
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 
   it("stores the summary next to the transcript", async () => {
-    const store = new TranscriptStore({ dir, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
-    store.append("abc", LONG[0]);
+    const store = new TranscriptStore({ root, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    store.append(U, "abc", LONG[0]);
     const name = listTranscripts(dir)[0].name;
 
-    const finalize = createFinalizer({ dir, summarize: async () => "A chat happened." });
+    const finalize = createFinalizer({ root, summarize: async () => "A chat happened." });
     finalize({ ...transcript(LONG), name });
     await settle();
 
@@ -50,7 +56,7 @@ describe("createFinalizer", () => {
 
   it("skips near-empty transcripts", async () => {
     const summarize = vi.fn(async () => "s");
-    createFinalizer({ dir, summarize })(transcript(["hi"]));
+    createFinalizer({ root, summarize })(transcript(["hi"]));
     await settle();
     expect(summarize).not.toHaveBeenCalled();
   });
@@ -60,7 +66,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
 
-    createFinalizer({ dir, export: exportTranscript })(transcript(LONG));
+    createFinalizer({ root, export: exportTranscript })(transcript(LONG));
     await settle();
 
     expect(exportTranscript).toHaveBeenCalledOnce();
@@ -73,7 +79,7 @@ describe("createFinalizer", () => {
     );
 
     createFinalizer({
-      dir,
+      root,
       summarize: async () => "A chat happened.",
       export: exportTranscript,
     })(transcript(LONG));
@@ -86,7 +92,7 @@ describe("createFinalizer", () => {
     const exportTranscript = vi.fn(
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
-    const finalize = createFinalizer({ dir, export: exportTranscript });
+    const finalize = createFinalizer({ root, export: exportTranscript });
 
     finalize(transcript(LONG));
     await settle();
@@ -102,7 +108,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
 
-    createFinalizer({ dir, export: exportTranscript })(transcript(LONG));
+    createFinalizer({ root, export: exportTranscript })(transcript(LONG));
     await settle();
 
     expect(readExportMarker(dir, transcript(LONG).name)).toMatchObject({
@@ -116,7 +122,7 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
     const update = vi.fn(async () => ({ pageId: "p1", url: "u1", exportedSegments: 5 }));
-    const finalize = createFinalizer({ dir, export: exportTranscript, update });
+    const finalize = createFinalizer({ root, export: exportTranscript, update });
 
     finalize(transcript(LONG));
     await settle();
@@ -132,7 +138,7 @@ describe("createFinalizer", () => {
     const exportTranscript = vi.fn(
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
-    const finalize = createFinalizer({ dir, export: exportTranscript });
+    const finalize = createFinalizer({ root, export: exportTranscript });
 
     finalize(transcript(LONG));
     await settle();
@@ -149,7 +155,7 @@ describe("createFinalizer", () => {
     const update = vi.fn(async () => {
       throw new Error("notion down");
     });
-    const finalize = createFinalizer({ dir, export: exportTranscript, update });
+    const finalize = createFinalizer({ root, export: exportTranscript, update });
 
     finalize(transcript(LONG));
     await settle();
@@ -163,7 +169,7 @@ describe("createFinalizer", () => {
     const exportTranscript = vi.fn(async () => {
       throw new Error("notion down");
     });
-    const finalize = createFinalizer({ dir, export: exportTranscript });
+    const finalize = createFinalizer({ root, export: exportTranscript });
 
     expect(() => finalize(transcript(LONG))).not.toThrow();
     await settle();
@@ -176,19 +182,19 @@ describe("createFinalizer", () => {
       async (_t: FinalizedTranscript, _summary: string | null) => ({ pageId: "p1", url: "u1" }),
     );
 
-    createFinalizer({ dir, export: exportTranscript })(transcript(["hi"]));
+    createFinalizer({ root, export: exportTranscript })(transcript(["hi"]));
     await settle();
 
     expect(exportTranscript).not.toHaveBeenCalled();
   });
 
   it("still stores the summary when the export fails", async () => {
-    const store = new TranscriptStore({ dir, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
-    store.append("abc", LONG[0]);
+    const store = new TranscriptStore({ root, now: () => Date.UTC(2026, 6, 6, 1, 2, 3) });
+    store.append(U, "abc", LONG[0]);
     const name = listTranscripts(dir)[0].name;
 
     createFinalizer({
-      dir,
+      root,
       summarize: async () => "A chat happened.",
       export: async () => {
         throw new Error("notion down");
@@ -201,12 +207,35 @@ describe("createFinalizer", () => {
 
   it("survives a failing summarizer", async () => {
     const finalize = createFinalizer({
-      dir,
+      root,
       summarize: async () => {
         throw new Error("api down");
       },
     });
     expect(() => finalize(transcript(LONG))).not.toThrow();
     await settle();
+  });
+
+  // `createFinalizer` invokes `run` fire-and-forget (`void run(opts, t)`), so
+  // a throw inside it becomes an unhandled promise rejection — which by
+  // default kills the whole process — rather than a caught error. A
+  // transcript with an unresolvable `userId` (here: the "" that
+  // `rebuildFinalized` defaults to) is exactly what would trigger that, since
+  // `userDir` throws for it.
+  it("does not produce an unhandled rejection when the directory cannot be resolved", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (err: unknown) => rejections.push(err);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const finalize = createFinalizer({
+        root,
+        export: async () => ({ pageId: "p1", url: "u1" }),
+      });
+      expect(() => finalize({ ...transcript(LONG), userId: "" })).not.toThrow();
+      await settle();
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+    expect(rejections).toEqual([]);
   });
 });

@@ -11,6 +11,7 @@ const DB_ID = "db-123";
 function transcript(overrides: Partial<FinalizedTranscript> = {}): FinalizedTranscript {
   return {
     name: "2026-07-06T01-02-03Z_abc",
+    userId: "user-1",
     sessionId: "abc",
     startedAt: "2026-07-06T01:02:03Z",
     endedAt: "2026-07-06T01:05:03Z",

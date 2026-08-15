@@ -3,9 +3,7 @@ import { chooseSummarizer } from "./chooseSummarizer";
 import { userDirs } from "./userDirs";
 import { backfillSummaries } from "./summaryBackfill";
 import { openDb } from "./db";
-import { ExportDestinationStore } from "./exportDestinations";
-import { keyFromEnv } from "./secretBox";
-import { buildResolveExporters } from "./serverOptions";
+import { buildDestinations, buildResolveExporters } from "./serverOptions";
 
 const USAGE = "usage: npm run resummarize -- --last <N>   (use --last 9999 for the whole archive)";
 
@@ -45,9 +43,7 @@ async function main(): Promise<void> {
   // reaches the Notion page it belongs to — silently, since the parameter is
   // optional. Built the same way `buildServerOptions` does.
   const db = openDb(config.dbPath);
-  const destinations = config.encryptionKey
-    ? new ExportDestinationStore(db, keyFromEnv(config.encryptionKey))
-    : undefined;
+  const destinations = buildDestinations(config, db);
   const resolve = buildResolveExporters(destinations);
 
   const totals = { summarized: 0, patched: 0, failed: 0, skipped: 0 };

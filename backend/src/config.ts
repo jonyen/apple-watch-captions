@@ -42,9 +42,11 @@ export interface Config {
   /** Optional; the number Twilio bridges an inbound captioned call to. */
   twilioForwardTo?: string;
   /**
-   * How many ringback rounds the caller hears before the call falls back to
-   * the second line. Roughly four seconds each, so the default 5 is about
-   * twenty seconds of ringing. The right number is a matter of taste, which
+   * The ringback loop stops once `attempt` reaches this budget, not after it
+   * — so a budget of N gives N - 1 ringback rounds before the call falls
+   * back to the second line, and a budget of 1 rings the caller zero times.
+   * Roughly four seconds each, so the default of 5 is four rounds, about
+   * sixteen seconds of ringing. The right number is a matter of taste, which
    * is exactly why it is configurable rather than baked in.
    */
   callWaitAttempts?: number;

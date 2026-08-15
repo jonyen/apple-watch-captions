@@ -32,6 +32,20 @@ export interface ServerDeps {
 }
 
 /**
+ * Gate the per-user export destination store on `config.encryptionKey`, the
+ * only thing that makes it safe to open: without a key there is nothing to
+ * seal secrets with, so destinations stay disabled rather than stored in the
+ * clear. Shared by `buildServerOptions` and the `resummarize` CLI so the
+ * gating and key derivation can't drift between the live relay and the
+ * one-off script.
+ */
+export function buildDestinations(config: Config, db: Db): ExportDestinationStore | undefined {
+  return config.encryptionKey
+    ? new ExportDestinationStore(db, keyFromEnv(config.encryptionKey))
+    : undefined;
+}
+
+/**
  * Build that user's Notion clients from their stored credentials. Constructed
  * per call rather than cached: a user can disconnect or reconnect at any
  * time, and a cached client would keep exporting to a workspace they
@@ -125,9 +139,7 @@ export function buildResolveExporters(
  * already fails closed at 503 before any user action.
  */
 export function buildServerOptions(config: Config, deps: ServerDeps): StartServerOptions {
-  const destinations = config.encryptionKey
-    ? new ExportDestinationStore(deps.db, keyFromEnv(config.encryptionKey))
-    : undefined;
+  const destinations = buildDestinations(config, deps.db);
 
   const sendEmail =
     config.resendApiKey && config.emailFrom

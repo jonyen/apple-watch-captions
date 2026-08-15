@@ -245,6 +245,30 @@ describe("call audio", () => {
     expect(onWire).toEqual(pcm16kToMuLaw8k(pcm));
     ws.close();
   });
+
+  // An empty POST is "nothing to send this tick," not an error — but it must
+  // not turn into an empty media frame poked at Twilio's socket.
+  it("treats an empty-body POST as a no-op success, not an empty frame to Twilio", async () => {
+    const { port, token } = start("+15551234567");
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/twilio/stream/${token}`);
+    const frames: any[] = [];
+    ws.on("message", (data: Buffer) => frames.push(JSON.parse(data.toString())));
+    await new Promise((resolve) => ws.on("open", resolve));
+    ws.send(JSON.stringify({
+      event: "start", streamSid: "MZe", start: { callSid: "CAe", streamSid: "MZe" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`${base(port)}/v1/call/audio?token=${token}`, {
+      method: "POST",
+    });
+
+    expect(res.status).toBe(204);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(frames.find((f) => f.event === "media")).toBeUndefined();
+    ws.close();
+  });
 });
 
 describe("POST /v1/call/end", () => {

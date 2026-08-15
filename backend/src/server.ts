@@ -729,7 +729,10 @@ async function handleRequest(
       sendJSON(res, 413, { error: "body too large" });
       return;
     }
-    if (!uplink.write(principal.userId, pcm16kToMuLaw8k(body))) {
+    // An empty body is "nothing to send this tick," not an error — skip the
+    // write entirely rather than let it reach Twilio as a live
+    // `{event:"media", payload:""}` frame on the wire.
+    if (body.length > 0 && !uplink.write(principal.userId, pcm16kToMuLaw8k(body))) {
       sendJSON(res, 409, { error: "no call is live" });
       return;
     }

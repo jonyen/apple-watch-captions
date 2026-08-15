@@ -434,8 +434,10 @@ describe("cross-tenant isolation for two-way call audio", () => {
   });
 
   // Attack 2: the downlink. With one shared buffer, Mallory's poll would be
-  // handed Alice's caller's voice — and, because drain prunes as it serves,
-  // would steal it out from under Alice's watch at the same time.
+  // handed Alice's caller's voice. Draining her own (empty) buffer must not
+  // read Alice's bytes, and — since `drain` only filters by cursor and never
+  // removes entries — Alice's watch must still be able to read them
+  // afterward, unconsumed by Mallory's poll.
   it("does not let one user drain another user's caller audio", async () => {
     const { alice, mallory, port } = startTwoUsers();
     const ws = await liveCall(port, alice.token, "CA-alice");

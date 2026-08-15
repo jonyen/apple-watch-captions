@@ -88,5 +88,13 @@ function migrate(db: Db): void {
       expires_at  TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS oauth_states_expires ON oauth_states(expires_at);
+
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      token       TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      address     TEXT NOT NULL,
+      expires_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS email_verifications_expires ON email_verifications(expires_at);
   `);
 }

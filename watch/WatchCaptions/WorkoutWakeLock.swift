@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import CaptionCore
+import os
 
 /// Keeps the watch display lit by running a workout session for the length of a
 /// captioning session.
@@ -15,8 +16,9 @@ import CaptionCore
 /// which is exactly what happens today, and an alert over live captions would be
 /// worse than the dimming it complained about.
 /// Main-actor isolated to match `SessionController`, which is the only caller.
-/// That keeps `session` and `startTask` on one actor, so the unstructured Task
-/// below — which inherits the main actor — needs no hopping to touch them.
+/// That keeps `session` and `startTask` on one actor, so the unstructured
+/// Tasks below — which inherit the main actor — need no hopping to touch
+/// them.
 ///
 /// Does not itself inherit from `NSObject`. `HKWorkoutSessionDelegate` is an
 /// Objective-C protocol and requires an `NSObject`-based conformer, but
@@ -42,12 +44,19 @@ final class WorkoutWakeLock: DisplayWakeLocking {
     /// the re-entrancy guard) and by `release()`, mirroring
     /// `SessionController.generation`.
     private var generation = 0
+    /// Whether an orphaned-session recovery has already been kicked off.
+    /// Recovery only matters once per launch — a session can only be
+    /// orphaned by a kill or crash that happened before this instance
+    /// existed, not by anything that can happen again while it's alive.
+    private var hasAttemptedOrphanRecovery = false
+    private let logger = Logger(subsystem: "com.jonyen.watchcaptions.watchkitapp", category: "wakelock")
 
     func acquire() {
         guard HKHealthStore.isHealthDataAvailable() else {
-            print("[wakelock] health data unavailable; screen will dim")
+            logger.error("[wakelock] health data unavailable; screen will dim")
             return
         }
+        recoverOrphanedSessionIfNeeded()
         guard session == nil, startTask == nil else { return }
         generation += 1
         let generation = self.generation
@@ -56,7 +65,7 @@ final class WorkoutWakeLock: DisplayWakeLocking {
             do {
                 try await self.store.requestAuthorization(toShare: [HKObjectType.workoutType()], read: [])
             } catch {
-                print("[wakelock] authorization failed: \(error); screen will dim")
+                self.logger.error("[wakelock] authorization failed: \(error); screen will dim")
                 if self.generation == generation { self.startTask = nil }
                 return
             }
@@ -67,6 +76,39 @@ final class WorkoutWakeLock: DisplayWakeLocking {
             guard self.generation == generation else { return }
             self.startTask = nil
             self.beginSession()
+        }
+    }
+
+    /// Recovers a workout session left running by a killed or crashed prior
+    /// process and ends it, so it stops blocking every future
+    /// `HKWorkoutSession` construction (only one may be active at a time) and
+    /// stops costing battery and showing an active-workout indicator the user
+    /// never asked for.
+    ///
+    /// Fires once, fire-and-forget: it races the authorization/session-start
+    /// work above rather than gating it, so a recovery in flight never delays
+    /// the screen staying lit. If it loses that race, this particular
+    /// `acquire()` fails the same silent way any other `HKWorkoutSession`
+    /// construction failure does, but the orphan is gone by the time the next
+    /// `acquire()` tries.
+    ///
+    /// The recovered session is never adopted as `self.session` — it belongs
+    /// to a prior instance's lifecycle, not this one's, and adopting it would
+    /// add a state machine this design doesn't need. It is only ever ended.
+    /// Because it never touches `session`, `startTask`, or `generation`, this
+    /// task needs no generation guard of its own: there is nothing here for a
+    /// later `release()` or `acquire()` to race against.
+    private func recoverOrphanedSessionIfNeeded() {
+        guard !hasAttemptedOrphanRecovery else { return }
+        hasAttemptedOrphanRecovery = true
+        Task { [store, logger] in
+            do {
+                if let orphan = try await store.recoverActiveWorkoutSession() {
+                    orphan.end()
+                }
+            } catch {
+                logger.error("[wakelock] orphaned session recovery failed: \(error); screen will dim")
+            }
         }
     }
 
@@ -88,7 +130,7 @@ final class WorkoutWakeLock: DisplayWakeLocking {
             session.startActivity(with: Date())
             self.session = session
         } catch {
-            print("[wakelock] workout session failed to start: \(error); screen will dim")
+            logger.error("[wakelock] workout session failed to start: \(error); screen will dim")
         }
     }
 }
@@ -100,13 +142,15 @@ final class WorkoutWakeLock: DisplayWakeLocking {
 /// requires `NSObject`, and `NSObject` carries an Objective-C `release`
 /// selector that collides with `DisplayWakeLocking.release()` on the same type.
 private final class WorkoutSessionDelegate: NSObject, HKWorkoutSessionDelegate {
-    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession,
-                                    didChangeTo toState: HKWorkoutSessionState,
-                                    from fromState: HKWorkoutSessionState,
-                                    date: Date) {}
+    private let logger = Logger(subsystem: "com.jonyen.watchcaptions.watchkitapp", category: "wakelock")
 
-    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession,
-                                    didFailWithError error: Error) {
-        print("[wakelock] workout session failed: \(error); screen will dim")
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                        didChangeTo toState: HKWorkoutSessionState,
+                        from fromState: HKWorkoutSessionState,
+                        date: Date) {}
+
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                        didFailWithError error: Error) {
+        logger.error("[wakelock] workout session failed: \(error); screen will dim")
     }
 }

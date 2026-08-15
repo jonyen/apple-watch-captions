@@ -59,7 +59,7 @@ Pure logic, fully unit-tested, no HealthKit. This task is complete and reviewabl
   - `SessionController.init(store:relay:audio:permission:history:wakeLock:)` where `wakeLock: DisplayWakeLocking? = nil`
   - `SessionController.start(mode:keepAwake:) async` where `keepAwake: Bool = false`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add the fake to `SessionControllerTests`, next to `FakeAudio`:
 
@@ -127,13 +127,13 @@ Add the five tests at the end of the class:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd watch/CaptionCore && swift test --filter SessionControllerTests`
 
 Expected: FAIL to compile — `DisplayWakeLocking` does not exist, `SessionController.init` has no `wakeLock:` parameter, and `start` has no `keepAwake:` parameter. A compile failure is the correct RED here; the type does not exist yet.
 
-- [ ] **Step 3: Add the protocol**
+- [x] **Step 3: Add the protocol**
 
 Append to `Protocols.swift`:
 
@@ -156,7 +156,7 @@ public protocol DisplayWakeLocking: AnyObject {
 }
 ```
 
-- [ ] **Step 4: Hold and release the lock in SessionController**
+- [x] **Step 4: Hold and release the lock in SessionController**
 
 In `SessionController`, add the stored property after `private let history: HistoryClient?`:
 
@@ -205,13 +205,13 @@ In `handleClose()`, after `audio.stop()`:
         wakeLock?.release()
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd watch/CaptionCore && swift test`
 
 Expected: PASS — the five new tests plus every pre-existing test, unchanged.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add watch/CaptionCore/Sources/CaptionCore/Protocols.swift \
@@ -234,7 +234,7 @@ The one file that imports HealthKit, plus the project configuration it needs. De
 - Consumes: `DisplayWakeLocking` from Task 1.
 - Produces: `final class WorkoutWakeLock: DisplayWakeLocking`, constructed with `WorkoutWakeLock()`.
 
-- [ ] **Step 1: Add the capability to project.yml**
+- [x] **Step 1: Add the capability to project.yml**
 
 In the `info.properties` block, extend the existing background modes and add the usage description:
 
@@ -256,7 +256,7 @@ Add an entitlements block to the `WatchCaptions` target, as a sibling of `info:`
         com.apple.developer.healthkit: true
 ```
 
-- [ ] **Step 2: Write the implementation**
+- [x] **Step 2: Write the implementation**
 
 Create `watch/WatchCaptions/WorkoutWakeLock.swift`:
 
@@ -349,7 +349,7 @@ extension WorkoutWakeLock: HKWorkoutSessionDelegate {
 }
 ```
 
-- [ ] **Step 3: Regenerate the project and build**
+- [x] **Step 3: Regenerate the project and build**
 
 Run:
 
@@ -363,13 +363,13 @@ Expected: BUILD SUCCEEDED. If signing fails on the HealthKit entitlement, open t
 
 If HealthKit later refuses to authorize at runtime complaining about a missing `NSHealthShareUsageDescription`, add that key too — do not widen the requested scope to match it. The app reads nothing and must keep reading nothing.
 
-- [ ] **Step 4: Verify CaptionCore stayed platform-free**
+- [x] **Step 4: Verify CaptionCore stayed platform-free**
 
 Run: `cd watch && grep -rn "HealthKit" CaptionCore/Sources/`
 
 Expected: no output. HealthKit must appear only in the watch target.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add watch/WatchCaptions/WorkoutWakeLock.swift watch/project.yml \
@@ -392,7 +392,7 @@ Connects the two halves: a remembered preference, passed into the session that a
 - Consumes: `SessionController.start(mode:keepAwake:)` and the `wakeLock:` init parameter from Task 1; `WorkoutWakeLock()` from Task 2.
 - Produces: `AppModel.keepScreenOn: Bool` (published, persisted); `HomeView(lastSession:onNew:onLive:onContinue:onBrowse:onTakeCall:keepScreenOn:onKeepScreenOnChange:)`.
 
-- [ ] **Step 1: Add the remembered preference to AppModel**
+- [x] **Step 1: Add the remembered preference to AppModel**
 
 Add the published property beside `stoppedExplicitly`, mirroring its `didSet` persistence:
 
@@ -429,7 +429,7 @@ Pass the flag through in `startCaptions(mode:)`, replacing `await controller.sta
         await controller.start(mode: mode, keepAwake: keepScreenOn)
 ```
 
-- [ ] **Step 2: Add the toggle row to HomeView**
+- [x] **Step 2: Add the toggle row to HomeView**
 
 Add the two properties after `onTakeCall`:
 
@@ -447,7 +447,7 @@ Add the row directly below the "Continue last" block and above "Take call", so t
             }
 ```
 
-- [ ] **Step 3: Pass it in from WatchCaptionsApp**
+- [x] **Step 3: Pass it in from WatchCaptionsApp**
 
 Extend the `HomeView(...)` call:
 
@@ -457,7 +457,7 @@ Extend the `HomeView(...)` call:
                     onKeepScreenOnChange: { model.keepScreenOn = $0 })
 ```
 
-- [ ] **Step 4: Build and run in the simulator**
+- [x] **Step 4: Build and run in the simulator**
 
 Run:
 
@@ -471,13 +471,13 @@ Expected: BUILD SUCCEEDED. Launch it and confirm the toggle appears on the home 
 
 If that simulator name does not exist, list the available ones with `xcrun simctl list devicetypes | grep Watch` and substitute.
 
-- [ ] **Step 5: Run the full CaptionCore suite**
+- [x] **Step 5: Run the full CaptionCore suite**
 
 Run: `cd watch/CaptionCore && swift test`
 
 Expected: PASS, everything, unchanged from Task 1.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add watch/WatchCaptions/AppModel.swift watch/WatchCaptions/Views/HomeView.swift \

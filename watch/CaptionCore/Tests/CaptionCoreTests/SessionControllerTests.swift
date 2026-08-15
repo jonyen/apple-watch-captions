@@ -434,4 +434,36 @@ final class SessionControllerTests: XCTestCase {
         await c.start(keepAwake: true)
         XCTAssertEqual(lock.acquireCount, 0)
     }
+
+    /// Mirrors `testASupersededStartDoesNotConnect`, one step further: a
+    /// `start` whose permission check is still in flight when a stop + second
+    /// start supersede it must not acquire the wake lock either. Without the
+    /// post-await generation re-check, both the stale and current starts
+    /// would call `acquire()` once their permission checks are released
+    /// together, since both ask for `keepAwake: true` — so a passing
+    /// `acquireCount == 1` here is only possible if the guard actually kept
+    /// the superseded start from acquiring.
+    func testASupersededStartDoesNotAcquireTheWakeLock() async {
+        let permission = GatedPermission()
+        let relay = FakeRelay()
+        let lock = FakeWakeLock()
+        let controller = SessionController(store: CaptionStore(), relay: relay, audio: FakeAudio(),
+                                            permission: permission, wakeLock: lock)
+
+        let staleStart = Task { await controller.start(mode: .saved(resuming: "stale"), keepAwake: true) }
+        await permission.waitForArrival(1)
+
+        controller.stop()
+        let currentStart = Task { await controller.start(mode: .saved(resuming: "current"), keepAwake: true) }
+        await permission.waitForArrival(2)
+
+        // Release both permission checks together; order between them no
+        // longer matters because the guard, not sequencing, must keep the
+        // stale one from acquiring.
+        await permission.releaseAll()
+        await staleStart.value
+        await currentStart.value
+
+        XCTAssertEqual(lock.acquireCount, 1)
+    }
 }

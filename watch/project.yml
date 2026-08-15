@@ -35,8 +35,9 @@ targets:
         # screen turns off, so a conversation is not cut in half by a glance away.
         UIBackgroundModes:
           - audio
-          # Keeps the display lit while captioning, via a workout session that
-          # is never saved. See docs/superpowers/specs/2026-08-15-workout-wake-lock-design.md
+        # Keeps the display lit while captioning, via a workout session that
+        # is never saved. See docs/superpowers/specs/2026-08-15-workout-wake-lock-design.md
+        WKBackgroundModes:
           - workout-processing
         NSHealthUpdateUsageDescription: "A workout session keeps the screen awake while captioning. No workout is ever saved."
     entitlements:

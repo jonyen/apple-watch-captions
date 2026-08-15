@@ -34,6 +34,20 @@ public protocol MicPermissionProviding {
 /// between the permission gate and `connect` — so the implementation owns that
 /// Task. Nothing is reported back because failure is silent by design: a lock
 /// that cannot be taken lets the screen dim, and captioning continues.
+///
+/// Invariants an implementation must satisfy: `release()` may be called with
+/// no prior `acquire()` — `SessionController.stop()` calls it unconditionally
+/// on every session end, whether or not a lock was ever taken — and
+/// `acquire()` may be called more than once in a row without an intervening
+/// `release()`. Both must be safe no-ops (or idempotent) rather than errors.
+///
+/// A conforming type must not itself inherit from `NSObject`. Some
+/// implementations need an Objective-C delegate conformance underneath them
+/// (`HKWorkoutSessionDelegate`, for one), which requires an `NSObject`-based
+/// conformer — but `NSObject` carries the legacy Objective-C `release`
+/// selector, which collides with `release()` above and makes the type
+/// ambiguous to the compiler. Put that delegate conformance on a separate
+/// object instead, as `WorkoutWakeLock` does with `WorkoutSessionDelegate`.
 @MainActor
 public protocol DisplayWakeLocking: AnyObject {
     func acquire()

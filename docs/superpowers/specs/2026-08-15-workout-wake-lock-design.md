@@ -30,6 +30,21 @@ This design addresses dimming only. **It does not stop the watch locking when
 taken off the wrist** — there is no API behind that, only Settings → Passcode →
 Wrist Detection. Half of the original ask stays a device setting.
 
+### The toggle does not cover call captioning
+
+"Keep screen on" only applies to microphone captioning sessions. The wake lock
+is acquired and released inside `SessionController`, and call captioning
+(`AppModel.takeCall()` and `callCaptions`) does not go through
+`SessionController` — it is a separate path with its own lifecycle. Turning
+the toggle on and then tapping "Take call" leaves the screen dimming exactly
+as it did before this feature existed.
+
+Hoisting wake-lock ownership up to `AppModel` so it covers both paths is a
+restructure this design never scoped, and it is not being made here. The home
+screen makes this easy to miss: "Take call" sits in the row directly below
+"Keep screen on," which invites reading the toggle as covering everything
+below it rather than only the mic session it actually guards.
+
 ## Design
 
 ### A workout session with no builder

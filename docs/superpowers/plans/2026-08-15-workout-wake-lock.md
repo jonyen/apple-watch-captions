@@ -55,7 +55,7 @@ Pure logic, fully unit-tested, no HealthKit. This task is complete and reviewabl
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
 - Produces:
-  - `public protocol DisplayWakeLocking: AnyObject { func acquire(); func release() }`
+  - `@MainActor public protocol DisplayWakeLocking: AnyObject { func acquire(); func release() }`
   - `SessionController.init(store:relay:audio:permission:history:wakeLock:)` where `wakeLock: DisplayWakeLocking? = nil`
   - `SessionController.start(mode:keepAwake:) async` where `keepAwake: Bool = false`
 
@@ -140,11 +140,16 @@ Append to `Protocols.swift`:
 ```swift
 /// Holds the watch display awake for the length of a session.
 ///
+/// Main-actor isolated because both callers — `SessionController` and
+/// `AppModel` — already are, and a `@MainActor` implementation cannot satisfy
+/// a nonisolated synchronous requirement.
+///
 /// `acquire()` is synchronous by design. The only implementation needs async
 /// authorization work, but the controller must not gain a suspension point
 /// between the permission gate and `connect` — so the implementation owns that
 /// Task. Nothing is reported back because failure is silent by design: a lock
 /// that cannot be taken lets the screen dim, and captioning continues.
+@MainActor
 public protocol DisplayWakeLocking: AnyObject {
     func acquire()
     func release()

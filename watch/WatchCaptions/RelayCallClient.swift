@@ -1,5 +1,6 @@
 import Foundation
 import CaptionCore
+import CaptionRelay
 
 /// Reads the relay's current call over plain HTTP, the only networking
 /// watchOS allows here (TN3135). Decoding lives in CaptionCore, where it is

@@ -1,5 +1,5 @@
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 /// The one line at the bottom of the home screen naming which build is installed.
 final class BuildInfoTests: XCTestCase {

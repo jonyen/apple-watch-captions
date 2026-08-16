@@ -38,7 +38,7 @@ public final class CaptionStore: ObservableObject {
     }
 
     /// Fold a relay message into the transcript/state.
-    public func apply(_ message: ServerMessage) {
+    public func apply(_ message: CaptionEvent) {
         switch message {
         case .ready:
             state = .listening

@@ -1,3 +1,4 @@
+import CaptionCore
 import Foundation
 
 /// Why the call being captioned stopped.
@@ -14,7 +15,7 @@ public enum CallEndReason: String, Equatable, Sendable {
 public struct CallUpdate: Equatable, Sendable {
     public let active: Bool
     public let reason: CallEndReason?
-    public let events: [ServerMessage]
+    public let events: [CaptionEvent]
     public let seq: Int
     /// True when the watch holds this call: it can hear the caller, speak
     /// back, and hang up. False on the relay's fallback shape, where the
@@ -23,7 +24,7 @@ public struct CallUpdate: Equatable, Sendable {
     /// already having, two seconds late.
     public let twoWay: Bool
 
-    public init(active: Bool, reason: CallEndReason?, events: [ServerMessage], seq: Int,
+    public init(active: Bool, reason: CallEndReason?, events: [CaptionEvent], seq: Int,
                 twoWay: Bool = false) {
         self.active = active
         self.reason = reason
@@ -61,7 +62,7 @@ public func decodeCallUpdate(_ json: [String: Any]) -> CallUpdate {
         twoWay: json["twoWay"] as? Bool ?? false)
 }
 
-private func decodeCallEvent(_ event: [String: Any]) -> ServerMessage? {
+private func decodeCallEvent(_ event: [String: Any]) -> CaptionEvent? {
     switch event["type"] as? String {
     case "ready":
         return .ready

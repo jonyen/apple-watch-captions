@@ -68,7 +68,7 @@ func append(_ text: String, channel: Int?, startingParagraph: Bool,
 
 /// Parse an ISO 8601 timestamp with or without fractional seconds. The relay
 /// writes both shapes.
-func parseISODate(_ iso: String) -> Date? {
+public func parseISODate(_ iso: String) -> Date? {
     let parser = ISO8601DateFormatter()
     parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     if let date = parser.date(from: iso) { return date }

@@ -1,5 +1,6 @@
 import SwiftUI
 import CaptionCore
+import CaptionRelay
 
 /// One stored transcript: its summary first, then the captions themselves,
 /// with an option to pick the conversation back up.

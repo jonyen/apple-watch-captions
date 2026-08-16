@@ -1,5 +1,6 @@
 import SwiftUI
 import CaptionCore
+import CaptionRelay
 
 /// What the dot in the corner is saying.
 enum CaptionIndicator {

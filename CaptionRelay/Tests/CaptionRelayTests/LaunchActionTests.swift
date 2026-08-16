@@ -1,5 +1,5 @@
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 /// The rule that decides what opening the app does. Glancing away mid-conversation
 /// should resume silently; a genuinely new sitting should land on the menu.

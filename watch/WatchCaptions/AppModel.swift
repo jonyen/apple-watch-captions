@@ -1,6 +1,7 @@
 import Foundation
 import WatchKit
 import CaptionCore
+import CaptionRelay
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -86,6 +87,10 @@ final class AppModel: ObservableObject {
     /// because it joins a session the phone owns rather than starting one — but
     /// it shares `store`, since only one thing is ever on screen.
     private let phoneController: SessionController
+    /// Restores a resumed session's scrollback behind `controller`. Kept off
+    /// `SessionController` itself so a fetch that outlives its session has
+    /// somewhere to be guarded without the controller knowing history exists.
+    private let prefiller: TranscriptPrefiller
     private let settingsClient: RelaySettingsClient
     /// What the phone last said. Defaults until the relay answers, so the app
     /// works unchanged when it cannot be reached.
@@ -133,16 +138,18 @@ final class AppModel: ObservableObject {
             store: store,
             relay: relay,
             audio: AudioCapture(),
-            permission: micPermission,
-            // Resuming a session restores its transcript; this reads it. Kept
-            // off HistoryStore, whose `detail` belongs to the history screen.
-            history: historyClient
+            permission: micPermission
         )
+        // Resuming a session restores its transcript; this reads it. Kept off
+        // HistoryStore, whose `detail` belongs to the history screen.
+        prefiller = TranscriptPrefiller(history: historyClient)
+        let phoneRelay = HTTPRelayClient(
+            base: base, token: Secrets.authToken,
+            fixedSessionID: PhoneAudio.sessionID)
+        phoneRelay.mode = .live
         phoneController = SessionController(
             store: store,
-            relay: HTTPRelayClient(
-                base: base, token: Secrets.authToken,
-                fixedSessionID: PhoneAudio.sessionID),
+            relay: phoneRelay,
             audio: SilentCapture(),
             permission: NoMicNeeded())
         settingsClient = RelaySettingsClient(base: base, token: Secrets.authToken)
@@ -402,7 +409,7 @@ final class AppModel: ObservableObject {
         // `.live` on both sides: the phone marks the session ephemeral, so the
         // relay writes no transcript, runs no summary and exports nothing. A
         // podcast does not belong in the transcript list.
-        await phoneController.start(mode: .live)
+        await phoneController.start()
     }
 
     /// Stop reading the phone's audio. The phone keeps broadcasting — this is
@@ -482,7 +489,16 @@ final class AppModel: ObservableObject {
         }
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
-        await controller.start(mode: mode)
+        relay.mode = mode
+        // Gated on whether THIS call connected, not `controller.isRunning`:
+        // a call superseded while suspended on the permission check can
+        // resume after a later start already connected a different session,
+        // and `isRunning` alone can't tell the two apart — it would restore
+        // this call's `name` into that other session's transcript.
+        let started = await controller.start()
+        if started, case .saved(let name?) = mode {
+            prefiller.restore(name: name, into: store, for: controller)
+        }
     }
 
     /// End the session and remember it, so reopening can offer to continue.
@@ -503,6 +519,7 @@ final class AppModel: ObservableObject {
 
     private func endCapture() {
         controller.stop()
+        prefiller.cancel()
         rememberCurrentSession()
         capturing = false
         live = false
@@ -516,6 +533,7 @@ final class AppModel: ObservableObject {
     func pause() {
         guard capturing else { return }
         controller.stop()
+        prefiller.cancel()
         rememberCurrentSession()
     }
 

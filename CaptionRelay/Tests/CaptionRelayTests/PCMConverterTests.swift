@@ -1,6 +1,6 @@
 import AVFoundation
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 final class PCMConverterTests: XCTestCase {
     /// A buffer of audible tone in `sampleRate`/`channels`, `seconds` long.

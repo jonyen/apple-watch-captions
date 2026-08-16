@@ -11,6 +11,10 @@ watch/WatchCaptions/Secrets.swift
 watch/CaptionCore/.build/
 watch/CaptionCore/.swiftpm/
 
+# CaptionRelay package
+CaptionRelay/.build/
+CaptionRelay/.swiftpm/
+
 # macOS app
 mac/*.xcodeproj
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import CaptionCore
+import CaptionRelay
 
 /// Past transcripts, newest first. The topic reads first; the date only
 /// disambiguates, so it sits underneath in smaller type.

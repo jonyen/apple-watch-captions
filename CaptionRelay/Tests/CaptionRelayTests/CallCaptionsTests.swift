@@ -1,5 +1,6 @@
+import CaptionCore
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 final class CallUpdateDecodingTests: XCTestCase {
     func testDecodesALiveCallWithCaptions() {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import CaptionCore
+@testable import CaptionRelay
 
 final class SummaryMarkdownTests: XCTestCase {
     func testStripsBulletSyntaxFromRenderedText() {

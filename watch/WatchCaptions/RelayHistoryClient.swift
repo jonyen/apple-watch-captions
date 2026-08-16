@@ -1,5 +1,6 @@
 import Foundation
 import CaptionCore
+import CaptionRelay
 
 /// Reads and removes stored transcripts through the relay's `/v1/transcripts`
 /// endpoints. Plain `URLSession` requests, the only networking watchOS allows

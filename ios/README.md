@@ -81,7 +81,7 @@ things:
 - **No entitlements.** App Groups, push, and the rest are paid-membership
   capabilities, and free provisioning refuses a build that requests one. That is
   why the phone and the Watch agree on a fixed session id
-  (`PhoneAudio.sessionID`, in CaptionCore) rather than negotiating one.
+  (`PhoneAudio.sessionID`, in CaptionRelay) rather than negotiating one.
 - **Seven days.** The build stops launching after a week; rebuild and reinstall.
   An always-on utility that expires weekly is the strongest argument for paying
   the $99.

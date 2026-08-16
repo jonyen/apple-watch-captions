@@ -1,5 +1,4 @@
 import Foundation
-import CaptionCore
 import CaptionRelay
 
 /// Which build is installed, read from the bundle. `GitCommit` is written into

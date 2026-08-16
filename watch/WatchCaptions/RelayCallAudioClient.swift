@@ -1,5 +1,4 @@
 import Foundation
-import CaptionCore
 import CaptionRelay
 
 /// The relay's call-audio endpoints. Binary bodies rather than base64 in JSON:

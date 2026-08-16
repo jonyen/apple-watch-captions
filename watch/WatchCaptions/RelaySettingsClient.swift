@@ -1,5 +1,4 @@
 import Foundation
-import CaptionCore
 import CaptionRelay
 
 /// Reads settings and session presence from the relay over plain HTTP, the only

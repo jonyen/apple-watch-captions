@@ -8,10 +8,11 @@ let package = Package(
         .library(name: "CaptionRelay", targets: ["CaptionRelay"]),
     ],
     dependencies: [
-        .package(path: "../watch/CaptionCore"),
+        .package(url: "https://github.com/jonyen/caption-core", from: "0.1.0"),
     ],
     targets: [
-        .target(name: "CaptionRelay", dependencies: ["CaptionCore"]),
+        .target(name: "CaptionRelay",
+                dependencies: [.product(name: "CaptionCore", package: "caption-core")]),
         .testTarget(name: "CaptionRelayTests", dependencies: ["CaptionRelay"]),
     ]
 )

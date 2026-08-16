@@ -20,11 +20,11 @@ jobs:
       - run: npm run build
       - run: npm test
 
-  caption-core:
+  caption-relay:
     runs-on: macos-latest
     defaults:
       run:
-        working-directory: watch/CaptionCore
+        working-directory: CaptionRelay
     steps:
       - uses: actions/checkout@v7
       - run: swift test

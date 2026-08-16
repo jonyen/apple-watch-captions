@@ -5,7 +5,8 @@ options:
     watchOS: "10.0"
 packages:
   CaptionCore:
-    path: CaptionCore
+    url: https://github.com/jonyen/caption-core
+    from: 0.1.0
   CaptionRelay:
     path: ../CaptionRelay
 targets:

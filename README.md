@@ -57,11 +57,16 @@ for the full design.
 
 | Path | What |
 |------|------|
-| [`watch/`](watch/README.md) | The watchOS app (SwiftUI) + `CaptionCore` Swift package (pure logic, unit-tested). Built with XcodeGen. |
-| [`mac/`](mac/README.md) | The macOS menu-bar app (SwiftUI) for live captions on desktop. Shares `CaptionCore` with the watch app; listens to mic and system audio. |
+| [`watch/`](watch/README.md) | The watchOS app (SwiftUI), depending on the `CaptionCore` Swift package (pure logic, unit-tested) from [`jonyen/caption-core`](https://github.com/jonyen/caption-core). Built with XcodeGen. |
 | [`ios/`](ios/README.md) | The iPhone app (SwiftUI) and its ReplayKit broadcast extension: captions whatever the phone plays, read on the Watch. Also where the Watch app's settings are edited. |
+| [`CaptionRelay/`](CaptionRelay) | Swift package with the relay-specific transport code shared between the watch and iOS apps. |
 | [`backend/`](backend/README.md) | The STT relay (Node/TypeScript), deployed on Fly.io. |
 | [`docs/`](docs/) | Design specs. |
+
+## Related repos
+
+- [`jonyen/caption-core`](https://github.com/jonyen/caption-core) — the shared caption engine core (`CaptionEngine`, `CaptionEvent`, `CaptionStore`, `SessionController`), extracted so both this repo and the Mac app can depend on it.
+- [`jonyen/mac-live-captions`](https://github.com/jonyen/mac-live-captions) — the macOS menu-bar overlay app for live captions on desktop, hotkey-summoned and fully on-device.
 
 ## Transcripts and cross-device sync
 

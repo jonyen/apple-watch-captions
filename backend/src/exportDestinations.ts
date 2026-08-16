@@ -8,6 +8,14 @@ export interface NotionConfigRow {
   databaseId: string;
   /** Shown in `/app` so a user can tell which workspace they connected. */
   workspaceName?: string;
+  /**
+   * Set when Notion answered 401 — the user revoked the integration, or the
+   * workspace was deleted. The sealed token is kept rather than cleared so
+   * `/app` can still name the workspace that needs reconnecting; `getNotion`
+   * stops handing it out, which is what stops every later export retrying a
+   * credential that will never work again.
+   */
+  revokedAt?: string;
 }
 
 export interface EmailConfigRow {
@@ -50,10 +58,51 @@ export class ExportDestinationStore {
   getNotion(userId: string): { token: string; config: NotionConfigRow } | null {
     const row = this.row(userId, "notion");
     if (!row?.secret) return null;
-    return {
-      token: open(row.secret, this.key),
-      config: JSON.parse(row.config) as NotionConfigRow,
-    };
+    const config = JSON.parse(row.config) as NotionConfigRow;
+    // A revoked connection is not a usable one. Withholding it here is what
+    // makes "stop until reconnected" fall out for free — the finalizer and
+    // both backfills already skip a user this returns null for.
+    if (config.revokedAt) return null;
+    return { token: open(row.secret, this.key), config };
+  }
+
+  /**
+   * Whether a notion row exists at all, regardless of whether it is usable.
+   *
+   * Distinct from `getNotion`, which withholds a revoked connection. Callers
+   * asking "has this user already got one" — rather than "can I export with
+   * it" — must use this, or they will treat a revoked connection as an empty
+   * slot and overwrite it.
+   */
+  hasNotion(userId: string): boolean {
+    return this.row(userId, "notion") !== null;
+  }
+
+  /**
+   * Record that Notion rejected this user's token, so `/app` can ask them to
+   * reconnect. Idempotent, and a no-op for a user with no connection.
+   *
+   * `failedToken` scopes the revocation to the credential that actually
+   * failed. An export can be in flight for a long time — a boot backfill
+   * sweep runs for minutes — and the badge tells the user to reconnect
+   * meanwhile. Without this check, the doomed request's late 401 would revoke
+   * the fresh connection they just made, and the page would immediately tell
+   * them to reconnect again.
+   *
+   * `putNotion` replaces the whole config blob, so reconnecting clears the
+   * flag without any explicit unset — the same replace-not-merge property
+   * that stops a re-submitted email address inheriting a prior confirmation.
+   */
+  markNotionRevoked(userId: string, failedToken?: string): void {
+    const row = this.row(userId, "notion");
+    if (!row?.secret) return;
+    if (failedToken !== undefined && open(row.secret, this.key) !== failedToken) return;
+    const config = JSON.parse(row.config) as NotionConfigRow;
+    if (config.revokedAt) return;
+    config.revokedAt = new Date(this.now()).toISOString();
+    this.db
+      .prepare("UPDATE export_destinations SET config = ? WHERE user_id = ? AND kind = ?")
+      .run(JSON.stringify(config), userId, "notion");
   }
 
   putEmail(userId: string, config: EmailConfigRow): void {
@@ -74,7 +123,10 @@ export class ExportDestinationStore {
       const config = JSON.parse(notion.config) as NotionConfigRow;
       out.push({
         kind: "notion",
-        connected: Boolean(notion.secret),
+        // Revoked counts as not connected: the row is still here so we can
+        // name the workspace, but nothing will be delivered to it again until
+        // the user reconnects.
+        connected: Boolean(notion.secret) && !config.revokedAt,
         detail: config.workspaceName ?? config.databaseId,
       });
     }
@@ -164,7 +216,9 @@ export function adoptLegacyNotion(
   userId: string,
   legacy: { token: string; databaseId: string },
 ): void {
-  if (store.getNotion(userId)) return;
+  // `hasNotion`, not `getNotion`: a revoked connection is still the user's
+  // own and must never be replaced by the operator's legacy token.
+  if (store.hasNotion(userId)) return;
   store.putNotion(userId, legacy.token, { databaseId: legacy.databaseId });
 }
 
@@ -211,7 +265,8 @@ export function adoptLegacyNotionIfUnambiguous(
   if (destinations.hasResolvedLegacyNotion(solo)) {
     return { outcome: "already-resolved", userId: solo };
   }
-  const alreadyConnected = Boolean(destinations.getNotion(solo));
+  // Same reasoning as above — a revoked row counts as already connected.
+  const alreadyConnected = destinations.hasNotion(solo);
   if (!alreadyConnected) {
     adoptLegacyNotion(destinations, solo, legacy);
   }

@@ -6,7 +6,12 @@ import { ProviderOptions } from "./providerOptions";
 import { TranscriptStore } from "./transcriptStore";
 import { Summarize } from "./summarizer";
 import { createFinalizer, ResolveExporters } from "./finalizer";
-import { createNotionExporter, createNotionSummaryPatcher } from "./notionExporter";
+import {
+  createNotionExporter,
+  createNotionSummaryPatcher,
+  NotionApiError,
+  NotionExporterOptions,
+} from "./notionExporter";
 import { createNotionUpdater } from "./notionUpdater";
 import { ExportDestinationStore } from "./exportDestinations";
 import { keyFromEnv } from "./secretBox";
@@ -34,15 +39,61 @@ export interface ServerDeps {
  * because the boot backfill sweep in `index.ts` needs the same resolver the
  * live finalizer uses, not a second copy of this logic.
  */
-export function buildResolveExporters(destinations?: ExportDestinationStore): ResolveExporters {
+/**
+ * Note a 401 against this user's connection, then let the error continue.
+ *
+ * Wrapping here rather than at each call site means the finalizer, the boot
+ * backfill, and the summary patcher all inherit the behaviour from one place —
+ * three separate catch blocks would be three chances to drift. Only 401 counts:
+ * a 500 or a timeout is Notion having a bad day, and disabling someone's export
+ * over one would be worse than the retry it saves.
+ */
+function revokeOn401<A extends unknown[], R>(
+  destinations: ExportDestinationStore,
+  userId: string,
+  failedToken: string,
+  call: (...args: A) => Promise<R>,
+): (...args: A) => Promise<R> {
+  return async (...args) => {
+    try {
+      return await call(...args);
+    } catch (err) {
+      if (err instanceof NotionApiError && err.status === 401) {
+        // Scoped to the token this client was built with. A sweep can run for
+        // minutes, and the badge asks the user to reconnect meanwhile — an
+        // unscoped revoke would kill the fresh connection they just made.
+        destinations.markNotionRevoked(userId, failedToken);
+      }
+      throw err;
+    }
+  };
+}
+
+export interface ResolveExportersDeps {
+  /** Injectable for tests; passed through to the Notion clients. */
+  fetchImpl?: NotionExporterOptions["fetch"];
+}
+
+export function buildResolveExporters(
+  destinations?: ExportDestinationStore,
+  deps: ResolveExportersDeps = {},
+): ResolveExporters {
   return (userId) => {
+    // Returns null for a revoked connection too, so a dead token is never
+    // handed out again — the export simply does not happen until reconnect.
     const connection = destinations?.getNotion(userId);
-    if (!connection) return undefined;
-    const opts = { token: connection.token, databaseId: connection.config.databaseId };
+    if (!connection || !destinations) return undefined;
+    const opts = {
+      token: connection.token,
+      databaseId: connection.config.databaseId,
+      ...(deps.fetchImpl ? { fetch: deps.fetchImpl } : {}),
+    };
+    const revoking = <A extends unknown[], R>(call: (...args: A) => Promise<R>) =>
+      revokeOn401(destinations, userId, connection.token, call);
     return {
-      export: createNotionExporter(opts),
-      update: createNotionUpdater(opts),
-      patchSummary: createNotionSummaryPatcher(opts),
+      export: revoking(createNotionExporter(opts)),
+      update: revoking(createNotionUpdater(opts)),
+      patchSummary: revoking(createNotionSummaryPatcher(opts)),
     };
   };
 }

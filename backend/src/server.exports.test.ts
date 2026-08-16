@@ -74,6 +74,12 @@ describe("GET /app/exports", () => {
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const body = await res.text();
     expect(body).toContain("Connect Notion");
+    // A revoked connection renders a "needs reconnect" badge. Without a
+    // reconnect affordance on that same row the badge is a dead end — the
+    // only button there is Disconnect, so the page would tell the user to do
+    // something it gives them no way to do. Text-level, matching the other
+    // assertions on this page.
+    expect(body).toContain("Reconnect");
     // Fix round 1, Minor 2: the Connect link carries the device token in its
     // URL (the one place in the app that happens) — `rel="noreferrer"` stops
     // the browser from leaking this page's URL as a Referer on the
@@ -774,8 +780,37 @@ describe("adoptLegacyNotionAtBoot", () => {
     return { identity, destinations: new ExportDestinationStore(db, randomBytes(32)) };
   }
 
-  it("survives an adoption that throws, instead of taking the process down with it", () => {
+  /**
+   * A store whose write fails. Adoption no longer decrypts, but it still
+   * writes — `putNotion` and the resolution marker are both SQLite writes
+   * that can fail on a full or read-only volume, which is the hazard the
+   * boot guard actually exists for.
+   */
+  function throwingFixture() {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    identity.registerDevice("mac");
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+    destinations.putNotion = () => {
+      throw new Error("disk full");
+    };
+    return { identity, destinations };
+  }
+
+  // Adoption used to reach `getNotion` -> `secretBox.open()`, so a row it
+  // could not decrypt crashed the boot. It now asks `hasNotion`, which never
+  // decrypts, so that particular scenario is simply fine — recorded here so
+  // the improvement does not get undone silently.
+  it("no longer needs to decrypt, so an unopenable row is not a boot hazard", () => {
     const { identity, destinations } = unopenableFixture();
+    expect(() => adoptLegacyNotionIfUnambiguous(identity, destinations, legacy)).not.toThrow();
+    // And it must leave that row alone rather than treating it as an empty
+    // slot: the user's own connection, not the operator's, stays in place.
+    expect(destinations.hasNotion(identity.soleUserId()!)).toBe(true);
+  });
+
+  it("survives an adoption that throws, instead of taking the process down with it", () => {
+    const { identity, destinations } = throwingFixture();
     // Pins the premise: without this, the test would still pass if the
     // scenario quietly stopped being a throwing one.
     expect(() => adoptLegacyNotionIfUnambiguous(identity, destinations, legacy)).toThrow();

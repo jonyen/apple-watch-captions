@@ -38,6 +38,25 @@ export interface NotionExporterOptions {
  */
 export type Request = (path: string, method: string, body?: unknown) => Promise<any>;
 
+/**
+ * A non-2xx answer from Notion, carrying the status as data rather than only
+ * inside the message.
+ *
+ * Callers need to tell a revoked token (401) from a transient failure, and
+ * regex-matching a message string is the wrong way to make a decision that
+ * disables someone's export. The message text is unchanged, so anything that
+ * only logs the error reads exactly as before.
+ */
+export class NotionApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "NotionApiError";
+  }
+}
+
 /** Authenticated Notion request that throws with the API's status and message. */
 export function createRequest(opts: NotionExporterOptions): Request {
   const doFetch = opts.fetch ?? ((url, init) => fetch(url, init));
@@ -54,7 +73,10 @@ export function createRequest(opts: NotionExporterOptions): Request {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const message = (payload as { message?: string }).message ?? "unknown error";
-      throw new Error(`Notion ${method} ${path} failed: ${response.status} ${message}`);
+      throw new NotionApiError(
+        `Notion ${method} ${path} failed: ${response.status} ${message}`,
+        response.status,
+      );
     }
     return payload;
   };

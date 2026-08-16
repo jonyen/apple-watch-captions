@@ -5,6 +5,26 @@ import { IdentityStore } from "./identityStore";
 import { Config } from "./config";
 import { buildServerOptions, buildResolveExporters } from "./serverOptions";
 import { FakeTranscriptionProvider } from "./fakeTranscriptionProvider";
+import { ExportDestinationStore } from "./exportDestinations";
+import { FinalizedTranscript } from "./transcriptStore";
+import { NotionExporterOptions } from "./notionExporter";
+
+const transcript: FinalizedTranscript = {
+  name: "2026-01-01T00-00-00Z_s1",
+  userId: "alice",
+  sessionId: "s1",
+  startedAt: "2026-01-01T00:00:00.000Z",
+  endedAt: "2026-01-01T00:01:00.000Z",
+  segments: [{ at: "2026-01-01T00:00:30.000Z", text: "hello" }],
+};
+
+/** A Notion fetch that always fails with the given status. */
+const failWith = (status: number, message: string) =>
+  (async () => ({
+    ok: false,
+    status,
+    json: async () => ({ message }),
+  })) as unknown as NotionExporterOptions["fetch"];
 
 /**
  * `deployWiring.test.ts` can only confirm that index.ts's source text
@@ -122,5 +142,107 @@ describe("buildServerOptions base fields", () => {
 describe("buildResolveExporters", () => {
   it("resolves nothing for any user when there are no destinations", () => {
     expect(buildResolveExporters(undefined)("user-1")).toBeUndefined();
+  });
+});
+
+describe("buildResolveExporters revocation", () => {
+  function connected() {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const alice = identity.registerDevice("phone").userId;
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+    destinations.putNotion(alice, "ntn_secret", { databaseId: "db1" });
+    return { destinations, alice };
+  }
+
+  it("marks the destination revoked when Notion answers 401", async () => {
+    const { destinations, alice } = connected();
+    const resolve = buildResolveExporters(destinations, {
+      fetchImpl: failWith(401, "API token is invalid."),
+    });
+
+    // Tightened to /401/ so this also pins that the throw came from Notion
+    // rather than from a mis-wired stub, which absorbs the separate
+    // "re-throws the 401" test that used to sit below.
+    await expect(resolve(alice)!.export(transcript, null)).rejects.toThrow(/401/);
+    expect(destinations.getNotion(alice)).toBeNull();
+    expect(destinations.list(alice)[0]!.connected).toBe(false);
+  });
+
+  it("does not revoke on a non-auth failure", async () => {
+    const { destinations, alice } = connected();
+    const resolve = buildResolveExporters(destinations, {
+      fetchImpl: failWith(500, "boom"),
+    });
+
+    await expect(resolve(alice)!.export(transcript, null)).rejects.toThrow(/500/);
+    expect(destinations.getNotion(alice)).not.toBeNull();
+    expect(destinations.list(alice)[0]!.connected).toBe(true);
+  });
+
+
+  it("returns undefined once revoked, so nothing retries the dead token", () => {
+    const { destinations, alice } = connected();
+    destinations.markNotionRevoked(alice);
+    expect(buildResolveExporters(destinations)(alice)).toBeUndefined();
+  });
+});
+
+describe("buildResolveExporters revocation, remaining clients", () => {
+  function connected() {
+    const db = openDb(":memory:");
+    const identity = new IdentityStore(db);
+    const alice = identity.registerDevice("phone").userId;
+    const destinations = new ExportDestinationStore(db, randomBytes(32));
+    destinations.putNotion(alice, "ntn_secret", { databaseId: "db1" });
+    return { destinations, alice };
+  }
+
+  // The whole point of wrapping centrally is that all three clients behave
+  // the same. Only exercising `export` would pass an implementation that
+  // wrapped one and left the other two bare — exactly the drift the central
+  // wrapper exists to prevent.
+  it("marks revoked when patchSummary hits a 401", async () => {
+    const { destinations, alice } = connected();
+    const resolve = buildResolveExporters(destinations, {
+      fetchImpl: failWith(401, "API token is invalid."),
+    });
+    await expect(resolve(alice)!.patchSummary("page-1", "Title: x\n\nbody")).rejects.toThrow();
+    expect(destinations.getNotion(alice)).toBeNull();
+  });
+
+  it("marks revoked when update hits a 401", async () => {
+    const { destinations, alice } = connected();
+    const resolve = buildResolveExporters(destinations, {
+      fetchImpl: failWith(401, "API token is invalid."),
+    });
+    const marker = { pageId: "p1", url: "https://notion/p1" };
+    await expect(resolve(alice)!.update(transcript, null, marker)).rejects.toThrow();
+    expect(destinations.getNotion(alice)).toBeNull();
+  });
+
+  // `revokeOn401` guards on `instanceof NotionApiError` as well as the
+  // status. `failWith` can only ever produce one, so nothing else covers the
+  // instanceof half — a transport failure must not disable an export.
+  it("does not revoke when the transport itself fails", async () => {
+    const { destinations, alice } = connected();
+    const resolve = buildResolveExporters(destinations, {
+      fetchImpl: (async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as NotionExporterOptions["fetch"],
+    });
+    await expect(resolve(alice)!.export(transcript, null)).rejects.toThrow(/fetch failed/);
+    expect(destinations.getNotion(alice)).not.toBeNull();
+  });
+
+  it("does not revoke when something throws a non-Error value", async () => {
+    const { destinations, alice } = connected();
+    const resolve = buildResolveExporters(destinations, {
+      fetchImpl: (async () => {
+        throw "boom";
+      }) as unknown as NotionExporterOptions["fetch"],
+    });
+    await expect(resolve(alice)!.export(transcript, null)).rejects.toBeTruthy();
+    expect(destinations.getNotion(alice)).not.toBeNull();
   });
 });

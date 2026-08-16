@@ -116,6 +116,17 @@ export async function backfillSummaries(
       } catch (err) {
         // The summary is on disk; only the Notion page is behind.
         console.error(`page update failed for ${listed.name}:`, err);
+        // A 401 revoked the connection, and `exporters` still wraps the dead
+        // token. Drop it so the rest of the sweep keeps writing summaries to
+        // disk — that part has nothing to do with Notion — without retrying a
+        // credential that cannot work again.
+        if (opts.resolve && !opts.resolve(opts.userId)) {
+          console.error(
+            `Notion connection for ${opts.userId} was revoked mid-sweep; ` +
+              `remaining summaries are written locally only`,
+          );
+          exporters = undefined;
+        }
       }
     }
   }

@@ -3,6 +3,9 @@ import {
   createNotionExporter,
   createNotionSummaryPatcher,
   createNotionTitlePatcher,
+  createRequest,
+  NotionApiError,
+  NotionExporterOptions,
 } from "./notionExporter";
 import { FinalizedTranscript } from "./transcriptStore";
 
@@ -389,5 +392,40 @@ describe("createNotionExporter", () => {
     await exporter(transcript(), null);
 
     expect(notion.calls.filter((c) => c.url.includes("/databases/"))).toHaveLength(1);
+  });
+});
+
+describe("NotionApiError", () => {
+  it("carries the HTTP status so callers can branch on it", async () => {
+    const request = createRequest({
+      token: "t",
+      databaseId: "db",
+      fetch: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({ message: "API token is invalid." }),
+      }),
+    } as unknown as NotionExporterOptions);
+
+    await expect(request("/pages", "POST")).rejects.toBeInstanceOf(NotionApiError);
+    await request("/pages", "POST").catch((err) => {
+      expect((err as NotionApiError).status).toBe(401);
+    });
+  });
+
+  it("keeps the existing message shape", async () => {
+    const request = createRequest({
+      token: "t",
+      databaseId: "db",
+      fetch: async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({ message: "boom" }),
+      }),
+    } as unknown as NotionExporterOptions);
+
+    await expect(request("/pages", "POST")).rejects.toThrow(
+      "Notion POST /pages failed: 500 boom",
+    );
   });
 });

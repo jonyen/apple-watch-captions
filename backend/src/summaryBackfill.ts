@@ -29,6 +29,11 @@ export interface SummaryBackfillOptions {
   resolve?: ResolveExporters;
   /** Stop after this many summaries (each one is a paid model call). */
   limit?: number;
+  /**
+   * Re-summarize transcripts that already have a summary. Off by default: the
+   * summary file is the done-marker, and the boot-time sweep must stay cheap.
+   */
+  force?: boolean;
   /** Pause between transcripts, to stay clear of API rate limits. */
   delayMs?: number;
   /** Injectable for tests. */
@@ -68,9 +73,15 @@ export async function backfillSummaries(
     console.error(`could not resolve Notion connection for ${opts.userId}:`, err);
   }
 
+  // Counts model calls actually made (success or failure), not just
+  // successes — `limit` bounds paid calls, so a run of systematic failures
+  // (e.g. every transcript exceeding the token ceiling) must not keep
+  // walking the archive looking for `limit` successes that never come.
+  let attempts = 0;
+
   for (const listed of listTranscripts(opts.dir).reverse()) {
-    if (opts.limit !== undefined && result.summarized >= opts.limit) break;
-    if (listed.hasSummary) {
+    if (opts.limit !== undefined && attempts >= opts.limit) break;
+    if (listed.hasSummary && !opts.force) {
       result.skipped++;
       continue;
     }
@@ -87,6 +98,7 @@ export async function backfillSummaries(
 
     if (delayMs > 0) await sleep(delayMs);
 
+    attempts++;
     let summary: string;
     try {
       summary = await opts.summarize(transcript);

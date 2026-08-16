@@ -120,7 +120,12 @@ describe("buildServerOptions", () => {
 describe("buildServerOptions base fields", () => {
   it("passes every non-gated option straight through from config and deps", () => {
     const usage = { getUsage: async () => ({}) as never };
-    const config = baseConfig({ port: 4242, adminToken: "admin-secret", twilioForwardTo: "+15551234567" });
+    const config = baseConfig({
+      port: 4242,
+      adminToken: "admin-secret",
+      twilioForwardTo: "+15551234567",
+      callWaitAttempts: 3,
+    });
     const deps = fixtureDeps();
 
     const options = buildServerOptions(config, { ...deps, usage });
@@ -133,6 +138,7 @@ describe("buildServerOptions base fields", () => {
       transcriptsRoot: "/does-not-matter",
       usage,
       callForwardTo: "+15551234567",
+      waitAttempts: 3,
       trustProxyHeaders: false,
     });
     expect(options.transcripts).toBeDefined();

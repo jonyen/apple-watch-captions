@@ -50,4 +50,12 @@ describe("parseSummary", () => {
   it("asks the model for a title in the system prompt", () => {
     expect(SUMMARY_SYSTEM_PROMPT).toMatch(/Title:/);
   });
+
+  it("asks for one section per topic rather than a flat bullet list", () => {
+    expect(SUMMARY_SYSTEM_PROMPT).toMatch(/one section per topic/);
+  });
+
+  it("tells the model to cover the whole recording, not just the opening", () => {
+    expect(SUMMARY_SYSTEM_PROMPT).toMatch(/middle and end/);
+  });
 });

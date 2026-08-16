@@ -97,6 +97,23 @@ describe("backfillSummaries", () => {
     expect(readTranscript(scoped(root), name)?.summary).toBe("already done");
   });
 
+  it("re-summarizes an already-summarized transcript under force", async () => {
+    const name = storeSession(root, "s1", 1000);
+    writeSummary(scoped(root), name, "an existing summary");
+    const summarize = summarizer();
+
+    const result = await backfillSummaries({
+      dir: scoped(root),
+      userId: U,
+      summarize,
+      force: true,
+      delayMs: 0,
+    });
+
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(result.summarized).toBe(1);
+  });
+
   it("skips near-empty transcripts", async () => {
     storeSession(root, "abc", Date.UTC(2026, 6, 6, 1, 2, 3), ["hi"]);
     const summarize = summarizer();
@@ -148,6 +165,27 @@ describe("backfillSummaries", () => {
 
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(result.summarized).toBe(2);
+  });
+
+  it("counts a failed model call against the limit", async () => {
+    storeSession(root, "s1", 1000);
+    storeSession(root, "s2", 2000);
+    const summarize = vi.fn(async () => {
+      throw new Error("token ceiling");
+    });
+
+    const result = await backfillSummaries({
+      dir: scoped(root),
+      userId: U,
+      summarize,
+      limit: 1,
+      delayMs: 0,
+    });
+
+    // A limit bounding successes would keep walking the archive looking for
+    // a success that never comes, spending a paid call on every transcript.
+    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(result.failed).toBe(1);
   });
 
   it("adds the new summary to a page that was already exported", async () => {

@@ -1,5 +1,6 @@
 import Foundation
 import CaptionRelay
+import CaptionRelayLive
 
 /// This device's identity with the relay: a bearer token issued once at
 /// first launch and kept in the Keychain from then on. `DeviceRegistration`

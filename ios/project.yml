@@ -22,6 +22,8 @@ targets:
     dependencies:
       - target: PhoneCaptionsUpload
       - package: CaptionRelay
+      - package: CaptionRelay
+        product: CaptionRelayLive
     info:
       path: PhoneCaptions/Info.plist
       properties:

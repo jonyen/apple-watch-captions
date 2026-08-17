@@ -115,7 +115,7 @@ final class AppModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let base = Self.httpBase(from: Secrets.relayURL)
+        let base = RelayOrigin.http(from: Secrets.relayURL)
         let historyClient = RelayHistoryClient(base: base, token: Secrets.authToken)
         relay = HTTPRelayClient(base: base, token: Secrets.authToken)
         history = HistoryStore(client: historyClient)
@@ -651,14 +651,5 @@ final class AppModel: ObservableObject {
         let ended = defaults.double(forKey: Keys.endedAt)
         guard ended > 0 else { return nil }
         return LastSession(transcriptName: name, endedAt: Date(timeIntervalSince1970: ended))
-    }
-
-    /// Derive the HTTPS origin (e.g. https://host) from the configured relay URL.
-    private static func httpBase(from relayURL: URL) -> URL {
-        var components = URLComponents(url: relayURL, resolvingAgainstBaseURL: false)!
-        components.scheme = "https"
-        components.path = ""
-        components.query = nil
-        return components.url!
     }
 }

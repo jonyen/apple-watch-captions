@@ -54,9 +54,13 @@ final class PairingTests: XCTestCase {
 
     // MARK: - issueCode
 
+    /// The relay always emits `expiresAt` via `Date.toISOString()`, which
+    /// includes fractional milliseconds (`identityStore.ts:112`) — this
+    /// fixture uses that exact shape so the branch under test is the one
+    /// production actually sends, not `parseISODate`'s no-fraction fallback.
     func testIssueCodeParsesTheCodeAndExpiry() async throws {
         let transport = FakeTransport(
-            status: 200, body: ["code": "483920", "expiresAt": "2026-08-16T12:00:00Z"])
+            status: 200, body: ["code": "483920", "expiresAt": "2026-08-16T12:00:00.000Z"])
         let client = makeClient(transport)
 
         let pairing = try await client.issueCode()
@@ -193,6 +197,7 @@ final class PairingTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.url, base.appendingPathComponent("v1/pair/claim"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer tok-watch")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
 
         let body = try XCTUnwrap(request.httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])

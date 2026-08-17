@@ -20,30 +20,80 @@ private final class FakeStore: SecureTokenStore, @unchecked Sendable {
     }
 }
 
-/// Fake `DeviceRegistrar`. Counts calls so a test can assert the network was
-/// (or was not) touched, and can delay its return to make a real race between
-/// two concurrent first calls.
+/// Fake `DeviceRegistrar` that always answers with a fixed token. Counts
+/// calls so a test can assert the network was (or was not) touched.
 private final class FakeRegistrar: DeviceRegistrar, @unchecked Sendable {
     private let result: Result<String, Error>
-    private let delayMs: UInt64
     private(set) var calls = 0
 
-    init(returning token: String, delayMs: UInt64 = 0) {
+    init(returning token: String) {
         result = .success(token)
-        self.delayMs = delayMs
     }
 
     init(throwing error: Error) {
         result = .failure(error)
-        delayMs = 0
     }
 
     func register(kind: String) async throws -> String {
         calls += 1
-        if delayMs > 0 {
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-        }
         return try result.get()
+    }
+}
+
+/// A `DeviceRegistrar` that replays one scripted outcome per call, in order —
+/// used to prove a failed registration is retried cleanly on the next call
+/// rather than leaving the actor's in-flight state poisoned.
+private final class ScriptedRegistrar: DeviceRegistrar, @unchecked Sendable {
+    private var results: [Result<String, Error>]
+    private(set) var calls = 0
+
+    init(_ results: [Result<String, Error>]) {
+        self.results = results
+    }
+
+    func register(kind: String) async throws -> String {
+        calls += 1
+        precondition(!results.isEmpty, "test called the registrar more times than scripted")
+        return try results.removeFirst().get()
+    }
+}
+
+/// A `DeviceRegistrar` whose `register(kind:)` calls block until a test
+/// releases them, so a second `token()` call racing the first can be proven
+/// to have been issued while the first registration is still in flight,
+/// instead of hoping a fixed delay is long enough. Mirrors
+/// `CallCaptionsTests.GatedCallClient`.
+private actor GatedRegistrar: DeviceRegistrar {
+    private var waiters: [CheckedContinuation<String, Error>] = []
+    private var arrivalWatchers: [(need: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private(set) var calls = 0
+
+    func register(kind: String) async throws -> String {
+        calls += 1
+        notifyArrivals()
+        return try await withCheckedThrowingContinuation { waiters.append($0) }
+    }
+
+    /// Waits until `count` calls have arrived, without releasing them.
+    func waitForArrival(_ count: Int) async {
+        if calls < count {
+            await withCheckedContinuation { arrivalWatchers.append((count, $0)) }
+        }
+    }
+
+    /// Resolves every call currently waiting with `token`.
+    func releaseAll(with token: String) {
+        let toResume = waiters
+        waiters.removeAll()
+        toResume.forEach { $0.resume(returning: token) }
+    }
+
+    private func notifyArrivals() {
+        arrivalWatchers.removeAll { watcher in
+            guard calls >= watcher.need else { return false }
+            watcher.continuation.resume()
+            return true
+        }
     }
 }
 
@@ -75,21 +125,29 @@ final class DeviceRegistrationTests: XCTestCase {
         XCTAssertEqual(registrar.calls, 0)              // no network when already have one
     }
 
-    /// Two `token()` calls race before the first registration completes. Without
-    /// the actor serializing access, both would see no stored token and both
+    /// Two `token()` calls race before the first registration completes. The
+    /// registrar blocks the first call until the test explicitly releases
+    /// it, so the second call is provably issued while the first is still in
+    /// flight — a fact the test establishes, not a timing hope. Without the
+    /// actor's in-flight coalescing, both would see no stored token and both
     /// would call the registrar; this is the test that pins the actor.
     func testConcurrentFirstCallsRegisterOnce() async throws {
         let store = FakeStore(nil)
-        let registrar = FakeRegistrar(returning: "tok-A", delayMs: 20)
+        let registrar = GatedRegistrar()
         let id = DeviceRegistration(kind: "watch", store: store, registrar: registrar)
 
         async let a = id.token()
+        await registrar.waitForArrival(1)   // the first call is now blocked in the registrar
+
         async let b = id.token()
+        await registrar.releaseAll(with: "tok-A")
+
         let (tokenA, tokenB) = try await (a, b)
+        let calls = await registrar.calls
 
         XCTAssertEqual(tokenA, "tok-A")
         XCTAssertEqual(tokenB, "tok-A")
-        XCTAssertEqual(registrar.calls, 1)              // the actor serializes it
+        XCTAssertEqual(calls, 1)                        // the actor coalesced them
     }
 
     /// A registrar failure must propagate, and nothing should be persisted —
@@ -106,5 +164,33 @@ final class DeviceRegistrationTests: XCTestCase {
             XCTAssertEqual(error as? RegistrationError, RegistrationError(message: "offline"))
         }
         XCTAssertNil(store.written)
+    }
+
+    /// A failed registration must not poison the in-flight task: the `defer`
+    /// that clears it has to run on the error path too, or a call after a
+    /// failure would either hang awaiting a task that already failed, or
+    /// silently reuse that failure instead of retrying. This is the test
+    /// that would fail if the `defer` were moved or made conditional.
+    func testARetryAfterFailureRegistersAgainAndSucceeds() async throws {
+        let store = FakeStore(nil)
+        let registrar = ScriptedRegistrar([
+            .failure(RegistrationError(message: "offline")),
+            .success("tok-B"),
+        ])
+        let id = DeviceRegistration(kind: "watch", store: store, registrar: registrar)
+
+        do {
+            _ = try await id.token()
+            XCTFail("expected the first registration to fail")
+        } catch {
+            XCTAssertEqual(error as? RegistrationError, RegistrationError(message: "offline"))
+        }
+        XCTAssertNil(store.written)
+
+        let t = try await id.token()
+
+        XCTAssertEqual(t, "tok-B")
+        XCTAssertEqual(store.written, "tok-B")
+        XCTAssertEqual(registrar.calls, 2)
     }
 }

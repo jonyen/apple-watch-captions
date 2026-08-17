@@ -156,26 +156,38 @@ final class HTTPRelayClient: CaptionEngine, @unchecked Sendable {
                 return
             }
 
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-            req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-            req.httpBody = body
-
-            self.session.dataTask(with: req) { [weak self] data, response, error in
-                guard let self else { return }
-                self.queue.async {
+            // Re-enter `queue` and re-check `stopped` here: `await token()`
+            // just suspended, and `close()` — which also runs on `queue` —
+            // could have run while it did, posting `v1/stop`. Sending this
+            // POST after that would recreate the session the relay was just
+            // told to release.
+            self.queue.async {
+                guard !self.stopped else {
                     self.inFlight = false
-                    guard !self.stopped else { return }
-                    guard error == nil, let data,
-                          let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                        self.fail()
-                        return
-                    }
-                    self.deliverReadyIfNeeded()
-                    self.handle(data)
+                    return
                 }
-            }.resume()
+
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+                req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+                req.httpBody = body
+
+                self.session.dataTask(with: req) { [weak self] data, response, error in
+                    guard let self else { return }
+                    self.queue.async {
+                        self.inFlight = false
+                        guard !self.stopped else { return }
+                        guard error == nil, let data,
+                              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                            self.fail()
+                            return
+                        }
+                        self.deliverReadyIfNeeded()
+                        self.handle(data)
+                    }
+                }.resume()
+            }
         }
     }
 

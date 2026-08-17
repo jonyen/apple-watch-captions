@@ -36,11 +36,26 @@ public protocol DeviceRegistrar: Sendable {
 /// it, subsequent callers that arrive before it finishes await that same
 /// task instead of starting their own, and only the caller that started it
 /// persists the result.
+///
+/// `cached` is an in-memory memo on top of that, not a substitute for it:
+/// without it, every `token()` call re-reads the store (a Keychain XPC round
+/// trip on the real implementation), including calls from a 1 Hz-or-faster
+/// poll loop. Worse than the latency: if the store can never persist — an
+/// un-granted Keychain access group returns `errSecMissingEntitlement` and
+/// silently no-ops the write — every call with no memo takes the
+/// registration branch forever, minting a fresh device on the relay several
+/// times a second for the life of the process. The memo bounds that failure
+/// to one registration per launch. Set only by the call that actually
+/// resolved a value (the store-read branch, or the caller that persisted a
+/// fresh registration) — a concurrent caller coalescing onto that
+/// registration's `Task` gets the same string back without needing to touch
+/// `cached` itself.
 public actor DeviceRegistration {
     private let kind: String
     private let store: SecureTokenStore
     private let registrar: DeviceRegistrar
     private var inFlightRegistration: Task<String, Error>?
+    private var cached: String?
 
     public init(kind: String, store: SecureTokenStore, registrar: DeviceRegistrar) {
         self.kind = kind
@@ -53,7 +68,11 @@ public actor DeviceRegistration {
     /// so the next call simply tries again rather than persisting a partial
     /// success.
     public func token() async throws -> String {
+        if let cached {
+            return cached
+        }
         if let stored = store.read() {
+            cached = stored
             return stored
         }
         if let inFlightRegistration {
@@ -68,6 +87,7 @@ public actor DeviceRegistration {
 
         let token = try await registration.value
         store.write(token)
+        cached = token
         return token
     }
 }

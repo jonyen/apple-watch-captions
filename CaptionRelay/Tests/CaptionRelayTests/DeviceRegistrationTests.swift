@@ -20,6 +20,18 @@ private final class FakeStore: SecureTokenStore, @unchecked Sendable {
     }
 }
 
+/// A store that can never persist: `write` silently no-ops and `read` always
+/// answers nil, mirroring what `KeychainTokenStore.write` does when
+/// `SecItemAdd`/`SecItemUpdate` fails with `errSecMissingEntitlement` (an
+/// un-granted Keychain access group) — it logs and returns rather than
+/// throwing, so nothing here ever tells the caller persistence failed. Used
+/// to prove `token()` does not turn that into a fresh registration on every
+/// call — see `DeviceRegistration.cached`.
+private final class SilentStore: SecureTokenStore, @unchecked Sendable {
+    func read() -> String? { nil }
+    func write(_ token: String) {}
+}
+
 /// Fake `DeviceRegistrar` that always answers with a fixed token. Counts
 /// calls so a test can assert the network was (or was not) touched.
 private final class FakeRegistrar: DeviceRegistrar, @unchecked Sendable {
@@ -192,5 +204,26 @@ final class DeviceRegistrationTests: XCTestCase {
         XCTAssertEqual(t, "tok-B")
         XCTAssertEqual(store.written, "tok-B")
         XCTAssertEqual(registrar.calls, 2)
+    }
+
+    /// A store that can never persist must not make every `token()` call
+    /// register a fresh device — a hot poll loop against an un-granted
+    /// Keychain access group would otherwise mint a new device on the relay
+    /// several times a second, indefinitely, with nothing surfacing the
+    /// failure. The in-memory memo is what bounds this to one registration
+    /// per process launch; without it, `registrar.calls` would be 3, not 1.
+    func testAStoreThatNeverPersistsStillRegistersOnlyOnce() async throws {
+        let store = SilentStore()
+        let registrar = FakeRegistrar(returning: "tok-A")
+        let id = DeviceRegistration(kind: "watch", store: store, registrar: registrar)
+
+        let first = try await id.token()
+        let second = try await id.token()
+        let third = try await id.token()
+
+        XCTAssertEqual(first, "tok-A")
+        XCTAssertEqual(second, "tok-A")
+        XCTAssertEqual(third, "tok-A")
+        XCTAssertEqual(registrar.calls, 1)               // memoized, not re-registered
     }
 }

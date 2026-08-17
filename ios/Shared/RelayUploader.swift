@@ -27,6 +27,13 @@ final class RelayUploader: @unchecked Sendable {
     private var inFlight = false
     private var stopped = false
     private var timer: DispatchSourceTimer?
+    /// The token, once resolved. `start()` kicks off resolution immediately
+    /// rather than waiting for the first `flush()`, so this is very likely
+    /// already set by the time `stop()` needs it — `stop()` runs from
+    /// `broadcastFinished()`, after which the OS can kill this process at
+    /// any moment, and every extra `await` on the way out is a chance the
+    /// "tell the relay to release the session" POST never goes out at all.
+    private var resolvedToken: String?
 
     private let flushInterval = 1.0
 
@@ -56,6 +63,16 @@ final class RelayUploader: @unchecked Sendable {
             timer.setEventHandler { [weak self] in self?.flush() }
             timer.resume()
             self.timer = timer
+
+            // Resolve the token now rather than on the first flush a second
+            // from now, so `stop()` has the best chance of finding it
+            // already in hand — see `resolvedToken`.
+            guard self.resolvedToken == nil else { return }
+            let token = self.token
+            Task { [weak self] in
+                guard let self, let bearer = try? await token() else { return }
+                self.queue.async { self.resolvedToken = bearer }
+            }
         }
     }
 
@@ -79,10 +96,26 @@ final class RelayUploader: @unchecked Sendable {
             self.timer?.cancel()
             self.timer = nil
             let url = self.url(path: "v1/stop")
-            let token = self.token
             let session = self.session
+
+            // The common case: `start()` already resolved this, so the
+            // request goes out with no further `await` between here and the
+            // process's teardown.
+            if let bearer = self.resolvedToken {
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+                session.dataTask(with: request).resume()
+                return
+            }
+
+            // Not resolved yet — the broadcast stopped almost immediately
+            // after starting. Best-effort fallback: still try, but there is
+            // now one more `await` between here and a process the OS may
+            // already be tearing down.
+            let token = self.token
             Task {
-                guard let bearer = try? await token() else { return }   // best-effort
+                guard let bearer = try? await token() else { return }
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
@@ -114,8 +147,17 @@ final class RelayUploader: @unchecked Sendable {
         let body = pending
         pending = Data()
         let requestURL = url(path: "v1/audio")
-        let token = self.token
 
+        // The common case: `start()` already resolved the token, so this
+        // goes straight out with no `await` (and so no window for `stopped`
+        // to change underneath it — see the fallback below, which re-checks
+        // it for exactly that reason).
+        if let bearer = resolvedToken {
+            post(requestURL, body: body, bearer: bearer)
+            return
+        }
+
+        let token = self.token
         Task { [weak self] in
             guard let self else { return }
             guard let bearer = try? await token() else {
@@ -126,27 +168,44 @@ final class RelayUploader: @unchecked Sendable {
                 return
             }
 
-            var request = URLRequest(url: requestURL)
-            request.httpMethod = "POST"
-            request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-            request.httpBody = body
-
-            self.session.dataTask(with: request) { [weak self] _, response, error in
-                self?.queue.async {
-                    guard let self else { return }
+            // Re-enter `queue` and re-check `stopped`: `await token()` just
+            // suspended, and `stop()` — which also runs on `queue` — could
+            // have posted `v1/stop` while it did. Sending this POST after
+            // that would recreate the session the relay was just told to
+            // release.
+            self.queue.async {
+                guard !self.stopped else {
                     self.inFlight = false
-                    // Nothing to retry into: the audio is already gone, and holding
-                    // it would only push captions further behind. Log and continue,
-                    // so a blip costs a second rather than the session.
-                    if let error {
-                        UploadLog.append("post failed: \(error.localizedDescription)")
-                    } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                        UploadLog.append("post failed: HTTP \(http.statusCode)")
-                    }
+                    return
                 }
-            }.resume()
+                self.resolvedToken = bearer
+                self.post(requestURL, body: body, bearer: bearer)
+            }
         }
+    }
+
+    /// Issues the `v1/audio` POST. Always called already on `queue`.
+    private func post(_ url: URL, body: Data, bearer: String) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.httpBody = body
+
+        session.dataTask(with: request) { [weak self] _, response, error in
+            self?.queue.async {
+                guard let self else { return }
+                self.inFlight = false
+                // Nothing to retry into: the audio is already gone, and holding
+                // it would only push captions further behind. Log and continue,
+                // so a blip costs a second rather than the session.
+                if let error {
+                    UploadLog.append("post failed: \(error.localizedDescription)")
+                } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    UploadLog.append("post failed: HTTP \(http.statusCode)")
+                }
+            }
+        }.resume()
     }
 
     private func url(path: String) -> URL {

@@ -30,8 +30,21 @@ public struct RelayDeviceRegistrar: DeviceRegistrar {
     }
 }
 
-public enum RegistrationError: Error {
+public enum RegistrationError: Error, LocalizedError {
     case noResponse
     case badStatus(Int)
     case malformedBody
+
+    /// Short human text — this reaches the UI as-is (`History.swift`'s
+    /// `message(from:)` falls back to `error.localizedDescription` for
+    /// anything that isn't a `HistoryError`), and the default
+    /// `localizedDescription` for an uncustomized `Error` is a paragraph
+    /// like "The operation couldn't be completed. (…RegistrationError error
+    /// 1.)" — unreadable on a 176px watch screen.
+    public var errorDescription: String? {
+        switch self {
+        case .noResponse: return "Could not reach the relay"
+        case .badStatus, .malformedBody: return "Relay error"
+        }
+    }
 }

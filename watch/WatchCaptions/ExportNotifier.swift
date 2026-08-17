@@ -1,6 +1,5 @@
 import Foundation
 import UserNotifications
-import CaptionCore
 import CaptionRelay
 
 /// Tells you on the wrist that a finished transcript reached Notion.

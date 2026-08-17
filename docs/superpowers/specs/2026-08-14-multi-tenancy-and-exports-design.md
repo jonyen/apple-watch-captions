@@ -428,7 +428,8 @@ Then the client, once membership is active:
 - Billing, subscriptions, and per-user metering. No cloud STT quota exists in
   this spec.
 - On-device iPhone transcription via `SFSpeechRecognizer`. Its own spec; the
-  reference implementation is `mac/MacCaptions/LocalSpeechRelay.swift`.
+  reference implementation is `AppleSpeechEngine.swift` in
+  `github.com/jonyen/mac-live-captions`.
 - Per-user bring-your-own transcription API keys.
 - Twilio webhook signature validation.
 - Replacing the `/app` viewer's pasted-token-in-`localStorage` login with a real

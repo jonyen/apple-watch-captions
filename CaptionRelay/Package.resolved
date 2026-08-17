@@ -1,0 +1,14 @@
+{
+  "pins" : [
+    {
+      "identity" : "caption-core",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jonyen/caption-core",
+      "state" : {
+        "revision" : "56d1b240469aef40a4064f709aff13e31c94df55",
+        "version" : "0.1.0"
+      }
+    }
+  ],
+  "version" : 2
+}

@@ -1,5 +1,4 @@
 import AVFoundation
-import CaptionCore
 import CaptionRelay
 
 /// Plays the caller's audio as it arrives.

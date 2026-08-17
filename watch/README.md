@@ -31,8 +31,8 @@ though a launch after a live session lands on the menu rather than resuming
 anything on its own.
 
 ## Layout
-- `CaptionCore/` — Swift package with the pure logic (`ServerMessage`, `CaptionStore`,
-  `SessionController`, protocols). Unit-tested with `swift test`.
+- `CaptionCore` — the pure-logic Swift package (`CaptionStore`, `SessionController`,
+  protocols), pulled in remotely from [`jonyen/caption-core`](https://github.com/jonyen/caption-core) (see `project.yml`).
 - `WatchCaptions/` — the watchOS app: `RelayClient` (WebSocket), `AudioCapture` (mic →
   16 kHz mono Int16 PCM), `MicPermission`, SwiftUI views, `@main` app.
 - `Scripts/stamp-git-commit.sh` — build phase that writes the checkout's commit into
@@ -53,8 +53,10 @@ number.
 3. `cd watch && xcodegen generate && open WatchCaptions.xcodeproj`
 
 ## Test (logic)
+`CaptionCore`'s tests live in its own repo ([`jonyen/caption-core`](https://github.com/jonyen/caption-core)).
+`CaptionRelay`'s tests are local:
 ```bash
-cd watch/CaptionCore && swift test
+cd CaptionRelay && swift test
 ```
 
 ## Build (app)

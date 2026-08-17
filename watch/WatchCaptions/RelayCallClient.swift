@@ -1,5 +1,4 @@
 import Foundation
-import CaptionCore
 import CaptionRelay
 
 /// Reads the relay's current call over plain HTTP, the only networking

@@ -1,9 +1,20 @@
 import SwiftUI
+import CaptionRelay
+import CaptionRelayLive
 
 /// Settings for the watch app, edited on the phone because a watch is a poor
 /// place to change anything you only change once.
 struct SettingsView: View {
     @StateObject private var model = SettingsModel()
+    /// Task 5's relay-backed conformance to `PairingClient`, built the same
+    /// way every other relay client here is: a fixed origin plus a token
+    /// provider that resolves through `DeviceIdentity`. A plain `let` rather
+    /// than something `@State`-held — like the other clients in this app, it
+    /// is a stateless value type, so rebuilding it costs nothing.
+    private let pairingClient: PairingClient = RelayPairingClient(
+        base: Secrets.relayURL,
+        token: { try await DeviceIdentity.shared.token() }
+    )
 
     var body: some View {
         NavigationStack {
@@ -59,6 +70,16 @@ struct SettingsView: View {
                 .onChange(of: model.provider) { model.save() }
             } footer: {
                 Text("Applies to the next session. Existing sessions keep the provider they started with.")
+            }
+
+            Section {
+                NavigationLink {
+                    PairingView(client: pairingClient)
+                } label: {
+                    Label("Pair a Watch", systemImage: "link")
+                }
+            } footer: {
+                Text("Shows a code your watch can type in, which moves its transcripts into this account.")
             }
 
             if let error = model.error {

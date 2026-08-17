@@ -34,7 +34,13 @@ targets:
       path: WatchCaptions/Info.plist
       properties:
         WKApplication: true
-        WKWatchOnly: true
+        # Companion of PhoneCaptions (ios/project.yml), not standalone: the two
+        # keys below are mutually exclusive with WKWatchOnly. Independence is
+        # preserved by WKRunsIndependentlyOfCompanionApp, not by omitting the
+        # companion relationship — the standalone-cellular use case still
+        # needs the watch app fully functional with the phone app absent.
+        WKRunsIndependentlyOfCompanionApp: true
+        WKCompanionAppBundleIdentifier: com.jonyen.phonecaptions
         CFBundleDisplayName: Captions
         NSMicrophoneUsageDescription: "Used to caption what people near you are saying."
         # Keeps the app running with the mic live when the wrist drops and the

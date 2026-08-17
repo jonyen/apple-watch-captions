@@ -2,6 +2,7 @@ import Foundation
 import WatchKit
 import CaptionCore
 import CaptionRelay
+import CaptionRelayLive
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -15,6 +16,9 @@ final class AppModel: ObservableObject {
         case call
         /// Reading audio playing on the iPhone.
         case phone
+        /// Typing in the code the iPhone is showing, to merge this watch's
+        /// account into it.
+        case pairing
     }
 
     /// Navigation stack above the menu.
@@ -92,6 +96,11 @@ final class AppModel: ObservableObject {
     /// somewhere to be guarded without the controller knowing history exists.
     private let prefiller: TranscriptPrefiller
     private let settingsClient: RelaySettingsClient
+    /// Task 5's relay-backed conformance to `PairingClient`. Owned here, not
+    /// `private`, so `PairingView` — which calls `claim(code:)` itself rather
+    /// than routing it through `AppModel` — can be handed it directly, the
+    /// same way `history` and `callCaptions` are.
+    let pairingClient: PairingClient
     /// What the phone last said. Defaults until the relay answers, so the app
     /// works unchanged when it cannot be reached.
     @Published private(set) var settings: Settings = .defaults
@@ -160,6 +169,10 @@ final class AppModel: ObservableObject {
             audio: SilentCapture(),
             permission: NoMicNeeded())
         settingsClient = RelaySettingsClient(base: base, token: token)
+        // `RelayPairingClient` is Task 5's deliverable (`CaptionRelayLive`),
+        // built the same way `RelayDeviceRegistrar` is: the pure protocol
+        // lives in `CaptionRelay`, the networked conformance beside it here.
+        pairingClient = RelayPairingClient(base: base, token: token)
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
@@ -634,6 +647,10 @@ final class AppModel: ObservableObject {
     private static let exportRefreshDelay: TimeInterval = 60
 
     // MARK: - Navigation
+
+    func showPairing() {
+        path = [.pairing]
+    }
 
     func showHistory() async {
         path = [.history]

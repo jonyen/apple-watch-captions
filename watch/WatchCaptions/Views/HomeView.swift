@@ -15,6 +15,9 @@ struct HomeView: View {
     /// would only lead to a screen explaining its own uselessness.
     let onPhone: () -> Void
     var phoneBroadcasting: Bool = false
+    /// Type in the code the iPhone is showing, to merge this watch into that
+    /// account.
+    let onPair: () -> Void
     /// Which build this is, so a bug report can name one. Injectable for previews.
     var versionLabel: String = AppBuild.versionLabel
 
@@ -46,6 +49,11 @@ struct HomeView: View {
             }
             Button(action: onBrowse) {
                 Label("Transcripts", systemImage: "list.bullet")
+            }
+            // A one-time setup step, not something reached often once done —
+            // it sits below the things actually used every day.
+            Button(action: onPair) {
+                Label("Pair with iPhone", systemImage: "link")
             }
             // Sits under the actions as a caption, not another thing to tap.
             Text(versionLabel)

@@ -56,7 +56,8 @@ private struct RootView: View {
                     onBrowse: { Task { await model.showHistory() } },
                     onTakeCall: { model.takeCall() },
                     onPhone: { Task { await model.startPhoneAudio() } },
-                    phoneBroadcasting: model.phoneBroadcasting)
+                    phoneBroadcasting: model.phoneBroadcasting,
+                    onPair: { model.showPairing() })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -80,6 +81,12 @@ private struct RootView: View {
                         phone
                             // Leaving stops reading. The phone keeps broadcasting.
                             .onDisappear { model.leavePhoneAudio() }
+                    case .pairing:
+                        PairingView(client: model.pairingClient) {
+                            // Pop back to the menu, the same "done" as Stop
+                            // or hanging up a call.
+                            model.path = []
+                        }
                     }
                 }
         }

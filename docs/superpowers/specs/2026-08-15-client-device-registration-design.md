@@ -46,9 +46,18 @@ null. The clients must therefore both register and carry the header.
 ### The seam follows the codebase's own pattern
 
 The pure identity logic — the state machine *no token → register → store token →
-attach it as a bearer header* — lives in the core package behind a protocol,
-unit-tested with a fake, exactly as `MicPermissionProviding` and
-`DisplayWakeLocking` already do. The platform Keychain is the thin adapter.
+attach it as a bearer header* — lives behind a protocol, unit-tested with a fake,
+exactly as `MicPermissionProviding` already does. The platform Keychain is the
+thin adapter.
+
+**It lands in `CaptionRelay`, not `CaptionCore`.** The extraction deliberately
+made CaptionCore relay-agnostic (`b9ff2fd`: "Relay becomes CaptionEngine and
+forgets the relay"), and device registration is a relay concept — `POST
+/v1/devices`. CaptionRelay already holds every relay-facing seam
+(`CallAudioClient`, `CallCaptionsClient`, `ExportStatusClient`, `History`,
+`Settings`, `PhoneAudio`), it is repo-local (`path: ../CaptionRelay`) so it needs
+no tag-and-publish cycle, and the iOS target already depends on it while having
+no CaptionCore dependency at all.
 
 ```swift
 public protocol SecureTokenStore {
@@ -114,13 +123,27 @@ extracted `caption-core`'s actual shape — package name, products, and the
 auth-relevant surface — before writing against it. The plan states its
 assumptions; the spike replaces them with facts.
 
-### Base branch
+### Base branch: `main` (corrected)
 
-The rebuild starts from **`backup/local-main-2026-08-15`**, not `main`. That ref
-holds parked watch work — the "Tune in" rename, held-call captioning, the
-home-screen redesign, the live-caption UI — that exists nowhere else. Starting
-from `main` silently drops it. The rebuild is a three-way reconciliation: the
-parked watch work, the §7 changes above, and the extracted core as a dependency.
+**An earlier draft of this spec said to base on `backup/local-main-2026-08-15`,
+because that ref held watch work — the "Tune in" rename, the home-screen
+redesign, held-call captioning, the live-caption UI — believed to exist nowhere
+else. That is false, and was false by the time the extraction landed.**
+
+The backup ref is a strict *ancestor* of `main`: `git log backup --not main` is
+empty, and `git merge-tree main backup` yields main's own tree unchanged. The
+extraction session merged that lineage forward. "Tune in", "Off the record", and
+"Resume previous" are in `main`'s tree today (`HomeView.swift:31,36,40`), and the
+held-call work survives as `CaptionRelay/Sources/CaptionRelay/{CallAudio,
+CallVoice,CallCaptions,MuLaw}.swift`.
+
+So there is nothing to re-apply — the conflict surface is zero files. Worse,
+basing on the backup ref would be **destructive**: it predates the multi-tenant
+relay (#6), so `POST /v1/devices`, `/v1/pair/code`, and `/v1/pair/claim` — the
+endpoints this entire cycle consumes — do not exist there. `git diff backup main`
+is 201 files, +17,835/−5,750.
+
+The rebuild bases on `main`. There is no reconciliation.
 
 ### caption-core consumption
 

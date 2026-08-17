@@ -12,8 +12,12 @@
 
 ## Global Constraints
 
-- **This plan is GATED on the extraction session finishing.** It consumes the reshaped, extracted `github.com/jonyen/caption-core`. Do not start Task 2+ until Task 1's spike confirms the extraction has landed and pins the package's real shape.
-- **Base branch is `backup/local-main-2026-08-15`.** It holds parked watch work (the "Tune in" rename, held-call captioning, the home-screen redesign, the live-caption UI) that exists nowhere else. Branch the rebuild from it — NOT from `main` — or that work is silently dropped.
+- **The extraction has LANDED** (`68cf7af`, `4a221f5` on `main`). Task 1's spike is complete and its findings are folded into this plan; the gate is satisfied.
+- **Base branch is `main`.** An earlier draft said `backup/local-main-2026-08-15` — that was wrong. The backup ref is a strict *ancestor* of `main` (zero commits not on main; the "Tune in"/home-screen work is in main's tree at `HomeView.swift:31,36,40`), and it predates the multi-tenant relay, so basing there would delete the very endpoints this plan consumes. There is nothing to re-apply and no reconciliation.
+- **Two packages, not one.** `CaptionCore` (remote `github.com/jonyen/caption-core`, tag `0.1.0` = `56d1b24`, `import CaptionCore`) and `CaptionRelay` (repo-local `../CaptionRelay`, `import CaptionRelay`). The new seam goes in **CaptionRelay** — it is relay-facing, repo-local (no tag/publish cycle), and already the iOS target's only package dependency.
+- **Naming:** the protocol is `DeviceRegistrar` (the spec's `DeviceRegistering` is superseded). Note `Relay` no longer exists — it was renamed `CaptionEngine` (`b9ff2fd`) — and `DisplayWakeLocking` does not exist at all; do not cite either as precedent.
+- **`SessionController.start()` is `@discardableResult public func start() async -> Bool`** (`caption-core/Sources/CaptionCore/SessionController.swift:44`), in CaptionCore. Async *and* Bool.
+- **`Secrets.swift` is gitignored and Doppler-sourced** — absent from a fresh checkout. Create it from `Secrets.example.swift` before building either app.
 - **No relay changes.** This cycle adds no endpoint and alters none. If a task seems to need a relay change, stop and report — the relay contract is fixed at #6.
 - **Registration + pairing only.** Caption legibility, WatchConnectivity settings, and the export UI are out of scope (later cycles) even where the code sits next to them.
 - **The watch transport stays HTTP.** watchOS blocks WebSockets; the relay is HTTP for that reason. This is a header change, not a protocol change. The Twilio stream path keeps its token in the URL path (Twilio drops query strings) — untouched.
@@ -29,7 +33,9 @@ paths here as the pre-extraction reference, not gospel.
 
 ---
 
-### Task 1: Spike — pin the extracted caption-core and confirm the base
+### Task 1: Spike — pin the extracted caption-core and confirm the base ✅ COMPLETE
+
+**Done. Findings folded into Global Constraints above and the tasks below. Do not re-run — start at Task 2.** Headline: the base is `main`, the seam goes in `CaptionRelay`, and three of this plan's steps turned out already-done or impossible-as-written (noted in place).
 
 No production code. Deliverable: a written map that later tasks build on.
 
@@ -60,7 +66,7 @@ Append the findings to the spec. Commit `docs: pin the extracted caption-core fo
 
 ### Task 2: The token seam and registration logic in the core
 
-Pure logic, fully unit-tested, no Keychain, no network. **This lands in the extracted `caption-core` repo** (a local checkout during dev, per the spec); its own tests run in that package, and the apps pick it up through their local-path dependency once Task 3 repoints them. Tag a new core version (e.g. 0.1.1) at the end so release builds can pin it.
+Pure logic, fully unit-tested, no Keychain, no network. **This lands in the repo-local `CaptionRelay` package** (`/Users/jonyen/Projects/apple-watch-captions/CaptionRelay`), beside its existing relay-facing seams. Because CaptionRelay is repo-local, there is **no tag-and-publish cycle** — the apps pick the change up immediately. Run its tests with `cd CaptionRelay && swift test` (baseline: 115 tests green).
 
 **Files:**
 - Modify: the core package's protocols file (per Task 1's spike)
@@ -139,9 +145,9 @@ The platform half — the only files that touch the Keychain and the network.
 - Consumes: `SecureTokenStore`, `DeviceRegistrar`, `DeviceRegistration` from Task 2.
 - Produces: `DeviceIdentity.shared.token() async throws -> String` per app, backed by the Keychain and `POST /v1/devices`.
 
-- [ ] **Step 0: Repoint the app dependency to the extracted core**
+- [ ] **Step 0: Confirm dependencies resolve (mostly already done)**
 
-Each app's `project.yml` still names the in-repo `CaptionCore` path, which the extraction removed. Repoint both to the local `../caption-core` checkout (dev); release builds pin the tag from Task 2. Confirm both apps resolve the package and build against it before wiring anything below.
+`watch/project.yml` already points at the remote `caption-core` (`from: 0.1.0`) plus local `../CaptionRelay` — no repoint needed. **But the iOS app target `PhoneCaptions` has no package dependency at all**, and Task 4 adds one there (`SettingsModel.swift` needs the seam): add `CaptionRelay` to the iOS target. Verify both apps resolve and build before wiring anything below.
 
 - [ ] **Step 1: Keychain store**
 
@@ -166,7 +172,8 @@ Build watch and iOS for the simulator; both compile against the extracted core. 
 ### Task 4: Bearer transport swap
 
 **Files:**
-- Modify: `HTTPRelayClient.swift`, `RelayHistoryClient.swift`, `RelayCallClient.swift`, `RelayCallAudioClient.swift` (watch); the iOS relay client(s); `viewerPage.ts` (the `/app` fetch)
+- Modify (8 call sites, verified — this is more than an earlier draft listed): `watch/WatchCaptions/HTTPRelayClient.swift:151`, `RelayCallAudioClient.swift:21,35`, `RelayCallClient.swift:26,55`, `RelayHistoryClient.swift:60`, `RelaySettingsClient.swift:37`, `ios/Shared/RelayUploader.swift:131`, `ios/Shared/PresenceWatcher.swift:70`, `ios/PhoneCaptions/SettingsModel.swift:78`
+- **NOT** `backend/src/viewerPage.ts` — it already sends `Bearer` (landed in `6466113`). That step is done.
 - Modify: `Secrets.swift` / `Secrets.example.swift` (both apps) — drop `authToken`
 - Modify: `AppModel.swift` (watch) and the iOS equivalent — resolve the token from `DeviceIdentity` before constructing clients
 
@@ -180,15 +187,17 @@ Each client currently takes `init(base:token:)` and appends `?token=` in its URL
 
 - [ ] **Step 2: Source the token from DeviceIdentity**
 
-At app launch (`AppModel.init` / iOS equivalent), the clients are built with `Secrets.authToken`. Replace that: `await DeviceIdentity.shared.token()` once, then construct the clients with the resolved token. The watch token is stable after first registration (pairing does not rotate it, per the relay contract), so resolving once per launch is correct. Handle the first-launch async: the app already has a launch path that awaits (mic permission) — register there, before the first relay call.
+**An earlier draft said to `await DeviceIdentity.shared.token()` inside `AppModel.init`. That is impossible:** `AppModel.init(defaults:)` is **synchronous** (`watch/WatchCaptions/AppModel.swift:116`) and eagerly constructs every relay client with `Secrets.authToken` (lines 119–155), each holding a `let token: String`.
+
+Pick one and record why in the commit: **(a)** give each client a token *provider* (`@Sendable () async -> String`) instead of a stored `String`, so construction stays synchronous and the token resolves on first use; or **(b)** defer client construction out of `init` into the existing async launch path (`AppModel.launch()` already awaits mic permission). (a) is less invasive and keeps `init` total; (b) matches "resolve once per launch" more literally. The watch token is stable after first registration — pairing does not rotate it — so either is correct.
 
 - [ ] **Step 3: Drop the shared secret**
 
 Remove `authToken` from `Secrets.swift` and `Secrets.example.swift` in both apps; keep `relayURL`. Grep both app targets for `authToken` — zero hits when done.
 
-- [ ] **Step 4: `/app` viewer**
+- [ ] **Step 4: `/app` viewer — ALREADY DONE, verify only**
 
-`viewerPage.ts:70`'s `fetch` moves its token from the query string to an `Authorization` header (the page already holds the token in `localStorage`; this is a `fetch`, so it can set the header).
+`backend/src/viewerPage.ts:70` already sends `Authorization: Bearer` (landed with the multi-tenant relay, `6466113`). Confirm and move on; change nothing.
 
 - [ ] **Step 5: Build both apps + run the backend suite**
 

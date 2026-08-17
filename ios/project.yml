@@ -21,6 +21,7 @@ targets:
           - Secrets.swift
     dependencies:
       - target: PhoneCaptionsUpload
+      - package: CaptionRelay
     info:
       path: PhoneCaptions/Info.plist
       properties:

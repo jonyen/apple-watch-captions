@@ -12,9 +12,14 @@ import CaptionRelay
 /// sessions, and a session it recreated from a later post must come back live
 /// rather than quietly starting to save. A podcast does not belong in the
 /// transcript list.
-final class RelayUploader {
+final class RelayUploader: @unchecked Sendable {
     private let base: URL
-    private let token: String
+    /// Resolves this device's bearer token from `DeviceIdentity`. A provider
+    /// rather than a stored `String`, so construction stays synchronous and
+    /// the token — which may need a first-launch registration round trip —
+    /// resolves lazily on first use instead. See `HTTPRelayClient` (the
+    /// Watch's equivalent) for the fuller rationale.
+    private let token: @Sendable () async throws -> String
     private let session: URLSession
     private let queue = DispatchQueue(label: "relay.upload")
 
@@ -32,7 +37,7 @@ final class RelayUploader {
     /// mono Int16 is 64 KB.
     private let maxPending = 64_000
 
-    init(base: URL, token: String) {
+    init(base: URL, token: @escaping @Sendable () async throws -> String) {
         self.base = base
         self.token = token
         let config = URLSessionConfiguration.default
@@ -73,9 +78,16 @@ final class RelayUploader {
             self.stopped = true
             self.timer?.cancel()
             self.timer = nil
-            var request = URLRequest(url: self.url(path: "v1/stop"))
-            request.httpMethod = "POST"
-            self.session.dataTask(with: request).resume()   // best-effort
+            let url = self.url(path: "v1/stop")
+            let token = self.token
+            let session = self.session
+            Task {
+                guard let bearer = try? await token() else { return }   // best-effort
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+                session.dataTask(with: request).resume()
+            }
         }
     }
 
@@ -101,26 +113,40 @@ final class RelayUploader {
         inFlight = true
         let body = pending
         pending = Data()
+        let requestURL = url(path: "v1/audio")
+        let token = self.token
 
-        var request = URLRequest(url: url(path: "v1/audio"))
-        request.httpMethod = "POST"
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
-
-        session.dataTask(with: request) { [weak self] _, response, error in
-            self?.queue.async {
-                guard let self else { return }
-                self.inFlight = false
-                // Nothing to retry into: the audio is already gone, and holding
-                // it would only push captions further behind. Log and continue,
-                // so a blip costs a second rather than the session.
-                if let error {
-                    UploadLog.append("post failed: \(error.localizedDescription)")
-                } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    UploadLog.append("post failed: HTTP \(http.statusCode)")
+        Task { [weak self] in
+            guard let self else { return }
+            guard let bearer = try? await token() else {
+                self.queue.async {
+                    self.inFlight = false
+                    UploadLog.append("post failed: could not resolve device token")
                 }
+                return
             }
-        }.resume()
+
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "POST"
+            request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+            request.httpBody = body
+
+            self.session.dataTask(with: request) { [weak self] _, response, error in
+                self?.queue.async {
+                    guard let self else { return }
+                    self.inFlight = false
+                    // Nothing to retry into: the audio is already gone, and holding
+                    // it would only push captions further behind. Log and continue,
+                    // so a blip costs a second rather than the session.
+                    if let error {
+                        UploadLog.append("post failed: \(error.localizedDescription)")
+                    } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                        UploadLog.append("post failed: HTTP \(http.statusCode)")
+                    }
+                }
+            }.resume()
+        }
     }
 
     private func url(path: String) -> URL {
@@ -128,7 +154,6 @@ final class RelayUploader {
             url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "session", value: PhoneAudio.sessionID),
-            URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "ephemeral", value: "1"),
         ]
         return components.url!

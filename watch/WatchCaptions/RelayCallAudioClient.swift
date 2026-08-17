@@ -5,7 +5,9 @@ import CaptionRelay
 /// a third less data on a link that is already the bottleneck.
 struct RelayCallAudioClient: CallAudioClient, CallVoiceClient {
     let base: URL
-    let token: String
+    /// Resolves this device's bearer token from `DeviceIdentity`. A provider
+    /// rather than a stored `String` — see `HTTPRelayClient`.
+    let token: @Sendable () async throws -> String
 
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -18,10 +20,11 @@ struct RelayCallAudioClient: CallAudioClient, CallVoiceClient {
         var components = URLComponents(
             url: base.appendingPathComponent("v1/call/audio"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "since", value: String(since)),
         ]
-        let (data, response) = try await Self.session.data(from: components.url!)
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(try await token())", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await Self.session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw HistoryError.message("Relay error")
         }
@@ -30,12 +33,10 @@ struct RelayCallAudioClient: CallAudioClient, CallVoiceClient {
     }
 
     func send(_ pcm: Data) async throws {
-        var components = URLComponents(
-            url: base.appendingPathComponent("v1/call/audio"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "token", value: token)]
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: base.appendingPathComponent("v1/call/audio"))
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(try await token())", forHTTPHeaderField: "Authorization")
         request.httpBody = pcm
         let (_, response) = try await Self.session.data(for: request)
         guard let http = response as? HTTPURLResponse else {

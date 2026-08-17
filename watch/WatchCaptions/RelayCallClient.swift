@@ -6,7 +6,9 @@ import CaptionRelay
 /// unit-tested against the relay's real response shape.
 struct RelayCallClient: CallClient {
     let base: URL
-    let token: String
+    /// Resolves this device's bearer token from `DeviceIdentity`. A provider
+    /// rather than a stored `String` — see `HTTPRelayClient`.
+    let token: @Sendable () async throws -> String
 
     /// Short timeout on purpose: this runs on every foreground to decide
     /// whether to open call captions, so an unreachable relay has to fail fast
@@ -23,7 +25,6 @@ struct RelayCallClient: CallClient {
         var components = URLComponents(
             url: base.appendingPathComponent("v1/call"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "since", value: String(since)),
         ]
         // Only a poll from the call screen claims presence. The relay hands an
@@ -31,7 +32,9 @@ struct RelayCallClient: CallClient {
         // launch probe — which runs whatever the user opened the app for —
         // deliberately omits it.
         if ready { components.queryItems?.append(URLQueryItem(name: "ready", value: "1")) }
-        let (data, response) = try await Self.session.data(from: components.url!)
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(try await token())", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await Self.session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw HistoryError.message("Relay error")
         }
@@ -50,11 +53,9 @@ struct RelayCallClient: CallClient {
     /// the phone holds this one). That is the outcome the caller wanted, so
     /// it is not an error.
     func end() async throws {
-        var components = URLComponents(
-            url: base.appendingPathComponent("v1/call/end"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "token", value: token)]
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: base.appendingPathComponent("v1/call/end"))
         request.httpMethod = "POST"
+        request.setValue("Bearer \(try await token())", forHTTPHeaderField: "Authorization")
         let (_, response) = try await Self.session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw HistoryError.message("Relay error")

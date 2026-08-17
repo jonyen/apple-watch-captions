@@ -116,14 +116,21 @@ final class AppModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let base = RelayOrigin.http(from: Secrets.relayURL)
-        let historyClient = RelayHistoryClient(base: base, token: Secrets.authToken)
-        relay = HTTPRelayClient(base: base, token: Secrets.authToken)
+        // A provider, not a resolved `String`: `init` is synchronous and
+        // constructs every relay client eagerly, but the token comes from
+        // `DeviceIdentity`, whose `token()` is `async throws` (it may need to
+        // register this device with the relay on first launch). Each client
+        // now holds this closure and resolves it per request instead of a
+        // stored secret — see `HTTPRelayClient`'s doc comment.
+        let token: @Sendable () async throws -> String = { try await DeviceIdentity.shared.token() }
+        let historyClient = RelayHistoryClient(base: base, token: token)
+        relay = HTTPRelayClient(base: base, token: token)
         history = HistoryStore(client: historyClient)
         exports = ExportWatcher(client: historyClient, defaults: defaults)
-        let callClient = RelayCallClient(base: base, token: Secrets.authToken)
+        let callClient = RelayCallClient(base: base, token: token)
         self.callClient = callClient
         callCaptions = CallCaptions(client: callClient, store: store)
-        let audioClient = RelayCallAudioClient(base: base, token: Secrets.authToken)
+        let audioClient = RelayCallAudioClient(base: base, token: token)
         let voice = CallVoice(client: audioClient)
         callVoice = voice
         let player = audioPlayer
@@ -144,7 +151,7 @@ final class AppModel: ObservableObject {
         // HistoryStore, whose `detail` belongs to the history screen.
         prefiller = TranscriptPrefiller(history: historyClient)
         let phoneRelay = HTTPRelayClient(
-            base: base, token: Secrets.authToken,
+            base: base, token: token,
             fixedSessionID: PhoneAudio.sessionID)
         phoneRelay.mode = .live
         phoneController = SessionController(
@@ -152,7 +159,7 @@ final class AppModel: ObservableObject {
             relay: phoneRelay,
             audio: SilentCapture(),
             permission: NoMicNeeded())
-        settingsClient = RelaySettingsClient(base: base, token: Secrets.authToken)
+        settingsClient = RelaySettingsClient(base: base, token: token)
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }

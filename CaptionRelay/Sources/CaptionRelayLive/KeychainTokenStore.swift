@@ -13,15 +13,27 @@ import CaptionRelay
 /// One generic-password item, keyed by this app's bundle id plus a fixed
 /// suffix so it cannot collide with another app's Keychain entry, and a fixed
 /// account since there is only ever one token per install.
+///
+/// `service` and `accessGroup` are overridable for the one case where two
+/// separate targets must resolve to the *same* item: an app and its
+/// extension. `Bundle.main.bundleIdentifier` differs between an app and its
+/// extension process (different bundle id), so the default service string
+/// alone would mint two Keychain items instead of sharing one — and without
+/// an explicit `accessGroup` (via a Keychain Sharing entitlement both
+/// targets declare), the extension cannot read the app's item at all,
+/// regardless of the service string. Pass both explicitly when that sharing
+/// is required; the defaults are unchanged for a single-target app.
 public struct KeychainTokenStore: SecureTokenStore {
     private let service: String
     private let account = "device-token"
+    private let accessGroup: String?
 
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "device-identity", category: "keychain")
 
-    public init() {
-        service = (Bundle.main.bundleIdentifier ?? "device-identity") + ".relay-device-token"
+    public init(service: String? = nil, accessGroup: String? = nil) {
+        self.service = service ?? (Bundle.main.bundleIdentifier ?? "device-identity") + ".relay-device-token"
+        self.accessGroup = accessGroup
     }
 
     public func read() -> String? {
@@ -63,10 +75,12 @@ public struct KeychainTokenStore: SecureTokenStore {
     }
 
     private func baseQuery() -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        return query
     }
 }

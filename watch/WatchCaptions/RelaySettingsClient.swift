@@ -6,7 +6,9 @@ import CaptionRelay
 /// where it is unit-tested against the relay's real response shape.
 struct RelaySettingsClient {
     let base: URL
-    let token: String
+    /// Resolves this device's bearer token from `DeviceIdentity`. A provider
+    /// rather than a stored `String` — see `HTTPRelayClient`.
+    let token: @Sendable () async throws -> String
 
     /// Short timeout on purpose: both of these gate a launch, so an unreachable
     /// relay has to fail fast and let the app land on the menu with defaults
@@ -34,9 +36,11 @@ struct RelaySettingsClient {
     private func get(path: String, query: [URLQueryItem]) async -> [String: Any]? {
         var components = URLComponents(
             url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "token", value: token)] + query
-        guard let url = components.url,
-              let (data, response) = try? await Self.session.data(from: url),
+        if !query.isEmpty { components.queryItems = query }
+        guard let url = components.url, let bearer = try? await token() else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await Self.session.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200
         else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]

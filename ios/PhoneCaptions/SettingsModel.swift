@@ -20,7 +20,6 @@ final class SettingsModel: ObservableObject {
     static let textSizeRange: ClosedRange<Double> = 12...30
 
     private let base = Secrets.relayURL
-    private let token = Secrets.authToken
     private let session = URLSession(configuration: .default)
     /// Coalesces edits: dragging the size slider must not post per pixel.
     private var writeTask: Task<Void, Never>?
@@ -73,13 +72,12 @@ final class SettingsModel: ObservableObject {
     }
 
     private func request(method: String, body: Data?) async -> [String: Any]? {
-        var components = URLComponents(
-            url: base.appendingPathComponent("v1/settings"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "token", value: token)]
-        guard let url = components.url else { return nil }
+        let url = base.appendingPathComponent("v1/settings")
+        guard let bearer = try? await DeviceIdentity.shared.token() else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }

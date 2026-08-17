@@ -48,8 +48,9 @@ number.
 
 ## Setup
 1. `cp WatchCaptions/Secrets.example.swift WatchCaptions/Secrets.swift`
-2. Edit `Secrets.swift`: set `relayURL` to `wss://watch-captions-relay.fly.dev/stream` and
-   `authToken` to the token from the Fly deploy (`/tmp/auth.token`). This file is gitignored.
+2. Edit `Secrets.swift`: set `relayURL` to `wss://watch-captions-relay.fly.dev/stream`. This
+   file is gitignored. No auth token to fill in — the app registers itself with the relay
+   on first launch and keeps the token it's issued in the Keychain (`DeviceIdentity`).
 3. `cd watch && xcodegen generate && open WatchCaptions.xcodeproj`
 
 ## Test (logic)
@@ -77,7 +78,8 @@ cd watch && xcodebuild build -project WatchCaptions.xcodeproj -scheme WatchCapti
    **Continue** — the transcript so far reappears above the live captions, and you can
    scroll up to read it. Browse → a transcript → "Continue this session" does the same.
    (Tapping **Stop** ends the session for good — it is never resumed.)
-5. Error check: temporarily set a wrong `authToken` → app shows "Connection lost" / Try Again.
+5. Error check: temporarily point `relayURL` at an unreachable host → app shows
+   "Connection lost" / Try Again.
 6. Live caption check: from the menu, tap the waveform button (**Live caption**), speak,
    then tap **Stop**. Open **Transcripts** and confirm it's unchanged — no new row, no
    summary, nothing exported to Notion. This is hand-only: there's no test target for

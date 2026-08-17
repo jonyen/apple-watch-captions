@@ -6,7 +6,14 @@ import CaptionRelay
 /// (TN3135), but high-level `URLSession` requests are always allowed. Audio is
 /// batched and POSTed roughly once per second; new caption events come back in
 /// each response.
-final class HTTPRelayClient: CaptionEngine {
+///
+/// `@unchecked Sendable`: all mutable state is confined to `queue` (see the
+/// "Internals" mark below), the same discipline this type already relied on
+/// before `flush()`/`close()` had to `await` a token — that `await` is what
+/// makes the compiler check Sendability here at all, since it now hops
+/// through a `Task`, whose closures are checked more strictly than a plain
+/// `DispatchQueue.async`.
+final class HTTPRelayClient: CaptionEngine, @unchecked Sendable {
     var onEvent: (@MainActor (CaptionEvent) -> Void)?
     var onClose: (@MainActor () -> Void)?
     /// Fires once with the transcript this session is writing to, so the app
@@ -15,7 +22,12 @@ final class HTTPRelayClient: CaptionEngine {
     var onTranscript: (@MainActor (String) -> Void)?
 
     private let base: URL
-    private let token: String
+    /// Resolves this device's bearer token, from `DeviceIdentity` — a
+    /// provider rather than a stored `String` because `AppModel.init` is
+    /// synchronous and constructs this client eagerly; the provider defers
+    /// resolution (registering on first use, via the Keychain thereafter)
+    /// to when a request is actually sent.
+    private let token: @Sendable () async throws -> String
     private let session: URLSession
     private let queue = DispatchQueue(label: "relay.http")
     /// A session id shared with another device, rather than one this client
@@ -47,7 +59,7 @@ final class HTTPRelayClient: CaptionEngine {
 
     /// `base` is the relay origin (e.g. https://host); `token` authorizes requests.
     /// `fixedSessionID` joins an existing session instead of starting a new one.
-    init(base: URL, token: String, fixedSessionID: String? = nil) {
+    init(base: URL, token: @escaping @Sendable () async throws -> String, fixedSessionID: String? = nil) {
         self.base = base
         self.token = token
         self.fixedSessionID = fixedSessionID
@@ -99,9 +111,16 @@ final class HTTPRelayClient: CaptionEngine {
             // same way leaving call captions does not hang up the call — so
             // this client stops polling and tells the relay nothing.
             guard self.fixedSessionID == nil else { return }
-            var req = URLRequest(url: self.url(path: "v1/stop"))
-            req.httpMethod = "POST"
-            self.session.dataTask(with: req).resume()   // best-effort release
+            let url = self.url(path: "v1/stop")
+            let token = self.token
+            let session = self.session
+            Task {
+                guard let bearer = try? await token() else { return }   // best-effort release
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+                session.dataTask(with: req).resume()
+            }
         }
     }
 
@@ -120,26 +139,44 @@ final class HTTPRelayClient: CaptionEngine {
         inFlight = true
         let body = pending
         pending = Data()
+        let url = url(path: "v1/audio", since: lastSeq)
+        let token = self.token
 
-        var req = URLRequest(url: url(path: "v1/audio", since: lastSeq))
-        req.httpMethod = "POST"
-        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        req.httpBody = body
-
-        session.dataTask(with: req) { [weak self] data, response, error in
+        Task { [weak self] in
             guard let self else { return }
-            self.queue.async {
-                self.inFlight = false
-                guard !self.stopped else { return }
-                guard error == nil, let data,
-                      let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let bearer: String
+            do {
+                bearer = try await token()
+            } catch {
+                self.queue.async {
+                    self.inFlight = false
+                    guard !self.stopped else { return }
                     self.fail()
-                    return
                 }
-                self.deliverReadyIfNeeded()
-                self.handle(data)
+                return
             }
-        }.resume()
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+            req.httpBody = body
+
+            self.session.dataTask(with: req) { [weak self] data, response, error in
+                guard let self else { return }
+                self.queue.async {
+                    self.inFlight = false
+                    guard !self.stopped else { return }
+                    guard error == nil, let data,
+                          let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                        self.fail()
+                        return
+                    }
+                    self.deliverReadyIfNeeded()
+                    self.handle(data)
+                }
+            }.resume()
+        }
     }
 
     /// Build a request URL for the current session, optionally with a `since` cursor.
@@ -148,7 +185,6 @@ final class HTTPRelayClient: CaptionEngine {
             url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         var items = [
             URLQueryItem(name: "session", value: sessionID),
-            URLQueryItem(name: "token", value: token),
         ]
         // Joining someone else's session means reading it, never producing it.
         // The relay uses this to tell an audience apart from a source, so the

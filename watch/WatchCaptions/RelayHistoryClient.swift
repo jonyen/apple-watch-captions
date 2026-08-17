@@ -7,7 +7,9 @@ import CaptionRelay
 /// relay's real response shape.
 struct RelayHistoryClient: HistoryClient, ExportStatusClient {
     let base: URL
-    let token: String
+    /// Resolves this device's bearer token from `DeviceIdentity`. A provider
+    /// rather than a stored `String` — see `HTTPRelayClient`.
+    let token: @Sendable () async throws -> String
 
     func list() async throws -> [TranscriptListItem] {
         try decodeTranscriptList(await get())
@@ -20,7 +22,7 @@ struct RelayHistoryClient: HistoryClient, ExportStatusClient {
     /// Whether this transcript has reached Notion. Its own endpoint rather than
     /// `detail`, which would ship every caption back on each poll.
     func exportStatus(name: String) async throws -> ExportStatus {
-        let (data, response) = try await URLSession.shared.data(from: endpoint(name, "export"))
+        let (data, response) = try await send(URLRequest(url: endpoint(name, "export")))
         // A transcript the relay has never heard of will not turn up later — a
         // session that captured nothing writes no transcript at all. Report it
         // as unavailable so the wait ends, rather than throwing, which reads as
@@ -36,17 +38,23 @@ struct RelayHistoryClient: HistoryClient, ExportStatusClient {
     func delete(name: String) async throws {
         var request = URLRequest(url: endpoint(name))
         request.httpMethod = "DELETE"
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await send(request)
         try check(response)
     }
 
     private func get(_ path: String...) async throws -> [String: Any] {
-        let (data, response) = try await URLSession.shared.data(from: endpoint(path))
+        let (data, response) = try await send(URLRequest(url: endpoint(path)))
         try check(response)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw HistoryError.message("Unreadable response")
         }
         return json
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        var request = request
+        request.setValue("Bearer \(try await token())", forHTTPHeaderField: "Authorization")
+        return try await URLSession.shared.data(for: request)
     }
 
     private func endpoint(_ path: String...) -> URL {
@@ -56,9 +64,7 @@ struct RelayHistoryClient: HistoryClient, ExportStatusClient {
     private func endpoint(_ path: [String]) -> URL {
         var url = base.appendingPathComponent("v1/transcripts")
         for component in path { url = url.appendingPathComponent(component) }
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "token", value: token)]
-        return components.url!
+        return url
     }
 
     private func check(_ response: URLResponse) throws {

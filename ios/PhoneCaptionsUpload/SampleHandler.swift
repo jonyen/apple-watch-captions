@@ -17,8 +17,10 @@ import CaptionRelay
 /// would only spend memory this extension does not have — the limit is 50 MB.
 class SampleHandler: RPBroadcastSampleHandler {
     private let converter = PCMConverter()
-    private lazy var uploader = RelayUploader(base: Secrets.relayURL, token: Secrets.authToken)
-    private lazy var presence = PresenceWatcher(base: Secrets.relayURL, token: Secrets.authToken)
+    private lazy var uploader = RelayUploader(
+        base: Secrets.relayURL, token: { try await DeviceIdentity.shared.token() })
+    private lazy var presence = PresenceWatcher(
+        base: Secrets.relayURL, token: { try await DeviceIdentity.shared.token() })
     /// Whether the Watch is reading. Audio captured while nobody is watching is
     /// dropped rather than sent — the broadcast may be running for a while
     /// before you look at your wrist, and those minutes are billed by the

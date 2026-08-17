@@ -17,9 +17,11 @@ import CaptionRelay
 /// A poll rather than a push, because the phone has no channel the Watch can
 /// reach directly, and because presence is a fading fact rather than an event:
 /// the Watch stops reading by going away, which nothing announces.
-final class PresenceWatcher {
+final class PresenceWatcher: @unchecked Sendable {
     private let base: URL
-    private let token: String
+    /// Resolves this device's bearer token from `DeviceIdentity`. A provider
+    /// rather than a stored `String` — see `RelayUploader`.
+    private let token: @Sendable () async throws -> String
     private let session: URLSession
     private var task: Task<Void, Never>?
 
@@ -28,7 +30,7 @@ final class PresenceWatcher {
     /// request every few seconds is far cheaper than the audio it gates.
     private let interval: Duration = .seconds(3)
 
-    init(base: URL, token: String) {
+    init(base: URL, token: @escaping @Sendable () async throws -> String) {
         self.base = base
         self.token = token
         let config = URLSessionConfiguration.default
@@ -67,12 +69,12 @@ final class PresenceWatcher {
             url: base.appendingPathComponent("v1/presence"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "session", value: PhoneAudio.sessionID),
-            URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "role", value: "producer"),
         ]
-        guard let url = components.url else { return false }
+        guard let url = components.url, let bearer = try? await token() else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         guard let (data, response) = try? await session.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

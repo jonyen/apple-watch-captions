@@ -71,17 +71,25 @@ headphone case ever becomes worth its ceremony.
 
 ```bash
 cd ios
-cp Shared/Secrets.example.swift Shared/Secrets.swift   # then edit relay URL + token
+cp Shared/Secrets.example.swift Shared/Secrets.swift   # then edit relay URL
 xcodegen generate && open PhoneCaptions.xcodeproj
 ```
+
+No auth token to fill in — the app (and its upload extension) register
+themselves with the relay on first launch and keep the token they're issued in
+the Keychain (`DeviceIdentity`).
 
 Requires a physical iPhone. Signed by a **free personal team**, which shapes two
 things:
 
-- **No entitlements.** App Groups, push, and the rest are paid-membership
-  capabilities, and free provisioning refuses a build that requests one. That is
-  why the phone and the Watch agree on a fixed session id
-  (`PhoneAudio.sessionID`, in CaptionRelay) rather than negotiating one.
+- **Almost no entitlements.** App Groups, push, and the rest are
+  paid-membership capabilities, and free provisioning refuses a build that
+  requests one. That is why the phone and the Watch agree on a fixed session id
+  (`PhoneAudio.sessionID`, in CaptionRelay) rather than negotiating one. The one
+  exception is Keychain Sharing, between `PhoneCaptions` and
+  `PhoneCaptionsUpload` (`DeviceIdentity`'s doc comment explains why) — it's not
+  on the paid-membership list, but it is the first entitlement this project has
+  asked for, so treat it as unconfirmed on a real device until it's been tried.
 - **Seven days.** The build stops launching after a week; rebuild and reinstall.
   An always-on utility that expires weekly is the strongest argument for paying
   the $99.

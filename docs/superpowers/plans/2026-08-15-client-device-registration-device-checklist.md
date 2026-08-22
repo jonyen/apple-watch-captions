@@ -29,7 +29,9 @@ summaries and call audio.
 A staging app costs a few cents for the hour and touches nothing:
 
 ```bash
-cd ~/Projects/apple-watch-captions            # branch: docs/client-device-registration
+cd ~/Projects/apple-watch-captions
+git checkout docs/client-device-registration && git pull
+# main does NOT contain this cycle's code — building from it fails at xcodegen
 cd backend
 fly apps create watch-captions-relay-staging
 fly volumes create transcripts --size 1 -a watch-captions-relay-staging --region sjc --yes
@@ -44,8 +46,9 @@ Notes:
   email, and encryption are all optional and irrelevant to this test.
 - `fly.toml` already sets `TRUST_PROXY_HEADERS = "true"`, which the
   registration rate limiter needs on Fly.
-- Registration is limited to **10 per IP per hour**. Two devices plus a
-  few retries fit comfortably; scripted reinstall loops will not.
+- Registration is limited to **10 per IP per hour**. A full run costs ~2-3
+  registrations, so about three complete restarts fit in one hour; scripted
+  reinstall loops will not.
 
 **Inspecting relay state.** There is deliberately no HTTP endpoint listing
 devices. Inspect the identity database directly (Node 24 image, `node:sqlite`
@@ -136,10 +139,25 @@ anything else, or a group present on one binary but not the other, fails
 this phase; stop and report rather than continuing.
 
 **Set up the failure detector now:** open **Console.app**, select the
-iPhone, filter `subsystem:com.jonyen.phonecaptions category:keychain`.
-If the entitlement is refused at runtime, the **only** symptom anywhere is
-`Keychain add failed: -34018` in this stream. Nothing in the app UI will
-tell you. Leave it running through Phase 3.
+iPhone, and build the filter as two tokens: **Subsystem begins with**
+`com.jonyen.phonecaptions` and **Category** `keychain`. Begins-with matters:
+the app logs under `com.jonyen.phonecaptions` but the broadcast extension —
+the process whose Keychain write Phase 3 actually tests — logs under
+`com.jonyen.phonecaptions.upload`, and an exact-match filter silently
+excludes it. If the entitlement is refused at runtime, the **only** symptom
+anywhere is `Keychain add failed: -34018` in this stream. Nothing in the app
+UI will tell you. Leave it running through Phase 3.
+
+**One desk check while you're here** — no client can even *form* a
+query-string token (the relay keeps a `?token=` fallback for the old viewer,
+so bearer-only transport is proven in the clients, not observable on the
+server):
+
+```bash
+grep -rn "token=" watch/WatchCaptions ios/Shared ios/PhoneCaptions ios/PhoneCaptionsUpload
+```
+
+☐ Zero hits — no app code can send a token any way but the bearer header.
 
 ---
 
@@ -161,7 +179,16 @@ second account.
 2. ☐ Start a **screen broadcast** with captions (Control Center → screen
    record long-press → PhoneCaptions), let it run ~10 s, stop it.
 
-3. ☐ Run the device-inspection one-liner. **Verdict:**
+3. ☐ **Teardown check** (the race the code specifically guards): note the
+   time you stopped the broadcast, then
+   `fly ssh console -a watch-captions-relay-staging -C "ls -la /data/transcripts"`
+   — the phone user's directory holds **one** `.jsonl` for that session, and
+   re-listing a minute later shows it unchanged. A *second* file sharing the
+   same session suffix, or one that keeps growing after the stop, means a
+   `v1/audio` landed after `v1/stop` and re-opened the session — the exact
+   post-stop window and extension-teardown fixes (I1/I2) failing on real
+   hardware. Report it; don't rationalize it.
+4. ☐ Run the device-inspection one-liner. **Verdict:**
    - `devices` has **exactly one row with `kind: "phone"`** → the design
      holds. ✅
    - Two phone rows with different `user_id`s → the extension minted its
@@ -189,11 +216,14 @@ This is the "before" picture the merge must change.
 
 **Know the lockout first:** five failed claims in 10 minutes and the watch
 is refused outright (`429`) for the rest of the window — deliberate
-brute-force protection (`server.ts:120`). The Crown UI shows a retry
-message either way; if you're sure the code was right and it still refuses,
-you're likely rate-limited — wait out the window, don't reinstall.
-Codes expire after **10 minutes**; the phone screen shows a countdown and
-can reissue (10 issues/hour).
+brute-force protection (`server.ts:120`). **The two refusals look
+different, and that's your diagnostic:** a wrong/expired/consumed code shows
+an orange message with the relay's actual reason; a rate-limit `429` throws
+and renders as the red **"Couldn't reach the relay. Check your
+connection…"** error. So a "connection" error on a watch whose network is
+obviously fine means you're rate-limited — wait out the window, don't
+reinstall and don't debug Wi-Fi. Codes expire after **10 minutes**; the
+phone screen shows a countdown and can reissue (10 issues/hour).
 
 1. ☐ Phone → Settings → Pair a Watch → note the six digits.
 2. ☐ Watch → Home → **Pair with iPhone** → dial each digit with the
@@ -220,7 +250,13 @@ cellular case must still work.
 
 1. ☐ Phone: Airplane Mode (or leave it in another room).
 2. ☐ Watch: New session → captions still stream (watch's own Wi-Fi/LTE).
-3. ☐ Companion note (observational, no pass/fail): how the watch app now
+3. ☐ **Reboot persistence:** restart the watch, unlock it once, open the
+   app, run a short session — then inspect: the device count is
+   **unchanged** (no re-registration; the Keychain item survived the
+   reboot). The stricter case — a *pre*-first-unlock read, which
+   `kSecAttrAccessibleAfterFirstUnlock` exists for — can't be driven by
+   hand and stays accepted-untested; record it as such.
+4. ☐ Companion note (observational, no pass/fail): how the watch app now
    appears in the iPhone's Watch app is worth a glance — the companion
    relationship (`WKCompanionAppBundleIdentifier`) couldn't be verified in
    any simulator.
@@ -234,7 +270,8 @@ cellular case must still work.
 | `Keychain add failed: -34018` in Console | Entitlement not granted at runtime | Xcode → PhoneCaptions target → Signing & Capabilities: is Keychain Sharing present with the `…phonecaptions.shared` group? Re-run with `-allowProvisioningUpdates`; check the profile on the developer portal |
 | Two `kind:"phone"` device rows | App and extension not sharing the item — group mismatch or one binary unsigned for it | Re-run Phase 2's codesign check on **both** binaries; diff the two outputs |
 | Pair screen never shows a code | Phone registration/bearer failing | `fly logs -a …-staging` for the request; check `relayURL` in the built `Secrets.swift` |
-| Correct code → still "didn't work" | Expired (10 min), already consumed, or you're rate-limited (429 after 5 misses) | Reissue on the phone; if reissue also fails, wait out the 10-minute window |
+| Correct code → orange "didn't work" message | Expired (10 min) or already consumed | Reissue on the phone and retype |
+| Red "Couldn't reach the relay" while the network is clearly fine | Rate-limited: 429 after 5 missed claims — it renders as a connection error, not a code error | Wait out the 10-minute window; don't reinstall, don't debug Wi-Fi |
 | Watch can't reach staging at all | URL typo, or the `wss://…/stream` form got mangled | Confirm `RelayOrigin` output: the origin is `https://watch-captions-relay-staging.fly.dev` |
 | Watch transcripts didn't merge in UI | `moveTranscripts` failure (logged, not surfaced) or claim actually failed | `fly logs` for "transcript move failed during pairing"; re-run the DB check — if `user_id` moved, it's the files; if not, the claim |
 | A device that ran an older test build re-registers | Expected once: the iOS access group moved between builds, orphaning the old Keychain item | Ignore the extra device row from the old build, or wipe staging and restart the checklist |

@@ -38,7 +38,7 @@
 
 ---
 
-### Task B1: Project wiring — package, models, deployment target
+### Task 1: Project wiring — package, models, deployment target
 
 **Files:**
 - Modify: `watch/project.yml`
@@ -111,7 +111,7 @@ git commit -m "build(watch): depend on MoonshineKit and bundle the Moonshine Tin
 
 ---
 
-### Task B2: MoonshineEngine
+### Task 2: MoonshineEngine
 
 **Files:**
 - Create: `watch/WatchCaptions/MoonshineEngine.swift`
@@ -246,7 +246,7 @@ git commit -m "feat(watch): MoonshineEngine captions on-device through Moonshine
 
 ---
 
-### Task B3: The "On device" session
+### Task 3: The "On device" session
 
 **Files:**
 - Modify: `watch/WatchCaptions/Views/CaptionView.swift` (the `CaptionIndicator` enum at the top)
@@ -371,7 +371,7 @@ git commit -m "feat(watch): On device session captions with Moonshine Tiny on th
 
 ---
 
-### Task B4: On-device verification and docs
+### Task 4: On-device verification and docs
 
 **Files:**
 - Modify: `watch/README.md`, root `README.md` (one line in "Related repos" and the layout table)

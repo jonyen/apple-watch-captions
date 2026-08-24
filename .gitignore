@@ -14,6 +14,10 @@ watch/Models/
 CaptionRelay/.build/
 CaptionRelay/.swiftpm/
 
+# transcriber-mac package
+transcriber-mac/.build/
+transcriber-mac/.swiftpm/
+
 # iOS app
 ios/*.xcodeproj
 ios/Shared/Secrets.swift

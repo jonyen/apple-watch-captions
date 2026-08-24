@@ -236,4 +236,121 @@ describe("caption server", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("relays client caption frames to the connected client and persists the final line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "transcripts-caption-frame-"));
+    try {
+      const identity = new IdentityStore(openDb(":memory:"));
+      const device = identity.registerDevice("watch");
+      const providers: FakeTranscriptionProvider[] = [];
+      const server = startServer({
+        port: 0,
+        identity,
+        createProvider: () => {
+          const p = new FakeTranscriptionProvider();
+          providers.push(p);
+          return p;
+        },
+        transcripts: new TranscriptStore({ root: dir }),
+        transcriptsRoot: dir,
+      });
+      running = server;
+      const port = (server.address() as AddressInfo).port;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${device.token}`);
+      await new Promise((r) => ws.on("open", r));
+
+      ws.send(JSON.stringify({ caption: { text: "hi", isFinal: false } }));
+      const interim = await waitForMessage(ws);
+      expect(interim).toEqual({ type: "caption", text: "hi", isFinal: false });
+
+      ws.send(JSON.stringify({ caption: { text: "hi there", isFinal: true } }));
+      const final = await waitForMessage(ws);
+      expect(final).toEqual({ type: "caption", text: "hi there", isFinal: true });
+
+      // Caption and audio frames may interleave freely — this session already
+      // sent caption frames above; audio still reaches the (eagerly created)
+      // provider untouched.
+      ws.send(Buffer.from("pcm-bytes"));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(Buffer.concat(providers[0].receivedAudio).toString()).toBe("pcm-bytes");
+
+      ws.close();
+      await new Promise((r) => setTimeout(r, 20));
+
+      const transcripts = listTranscripts(userDir(dir, device.userId));
+      expect(transcripts).toHaveLength(1);
+      expect(transcripts[0].segmentCount).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finalizes exactly once on close for a caption-only session that sends zero audio", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "transcripts-caption-only-"));
+    try {
+      const identity = new IdentityStore(openDb(":memory:"));
+      const device = identity.registerDevice("watch");
+      const providers: FakeTranscriptionProvider[] = [];
+      const store = new TranscriptStore({ root: dir });
+      const finalizeSpy = vi.spyOn(store, "finalize");
+      const server = startServer({
+        port: 0,
+        identity,
+        createProvider: () => {
+          const p = new FakeTranscriptionProvider();
+          providers.push(p);
+          return p;
+        },
+        transcripts: store,
+        transcriptsRoot: dir,
+      });
+      running = server;
+      const port = (server.address() as AddressInfo).port;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${device.token}`);
+      await new Promise((r) => ws.on("open", r));
+
+      ws.send(JSON.stringify({ caption: { text: "hello", isFinal: true } }));
+      await waitForMessage(ws);
+
+      ws.close();
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(finalizeSpy).toHaveBeenCalledTimes(1);
+      // No audio was ever sent on this session, yet the provider still opened
+      // eagerly on connect — see the report on the cost of not lazy-loading it.
+      expect(providers).toHaveLength(1);
+      expect(providers[0].closed).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores malformed caption frames without closing the session", async () => {
+    const { port, token } = startWithFakes();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${token}`);
+    await new Promise((r) => ws.on("open", r));
+
+    const received: unknown[] = [];
+    ws.on("message", (data) => received.push(JSON.parse(data.toString())));
+
+    ws.send(JSON.stringify({ caption: { isFinal: true } })); // missing text
+    ws.send(JSON.stringify({ caption: { text: "hi", isFinal: "true" } })); // wrong type: isFinal
+    ws.send(JSON.stringify({ caption: { text: 123, isFinal: true } })); // wrong type: text
+    ws.send(JSON.stringify({ caption: "oops" })); // caption not an object
+    ws.send(JSON.stringify({ unknown: true })); // unrelated frame — unchanged existing behavior
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(received).toEqual([]);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+
+    // The session survived every malformed frame above: a well-formed caption
+    // frame still works.
+    ws.send(JSON.stringify({ caption: { text: "still alive", isFinal: true } }));
+    const ok = await waitForMessage(ws);
+    expect(ok).toEqual({ type: "caption", text: "still alive", isFinal: true });
+
+    ws.close();
+  });
 });

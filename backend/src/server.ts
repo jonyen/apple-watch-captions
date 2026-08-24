@@ -1285,21 +1285,42 @@ function handleConnection(
       session.handleAudio(data);
       return;
     }
-    // A text control frame. Only `{"finish":true}` is recognized today: it
-    // starts the provider's graceful-finish handshake (needed by the Apple
-    // provider, which only emits its true final result after one — Deepgram
-    // finalizes on VAD pauses during the stream and doesn't need this) while
-    // the socket stays open, so the eventual final caption still has
-    // somewhere to go. The client is expected to close once it has that
-    // final; the ordinary `close` handler below finalizes the transcript
-    // then, same as ever.
+    // A text control frame. Recognized shapes:
+    //   - `{"finish":true}` starts the provider's graceful-finish handshake
+    //     (needed by the Apple provider, which only emits its true final
+    //     result after one — Deepgram finalizes on VAD pauses during the
+    //     stream and doesn't need this) while the socket stays open, so the
+    //     eventual final caption still has somewhere to go. The client is
+    //     expected to close once it has that final; the ordinary `close`
+    //     handler below finalizes the transcript then, same as ever.
+    //   - `{"caption":{"text":"...","isFinal":true|false}}` is a caption the
+    //     client (an on-device transcriber) computed itself, for a session
+    //     with no audio ever arriving. Routed into `session.injectTranscript`
+    //     — the exact handling a transcript from the wired provider gets — so
+    //     it is indistinguishable downstream: same store write, same
+    //     live-viewer fan-out, same finalize-on-close semantics. Audio and
+    //     caption frames may freely interleave on the same session.
+    // Anything else — malformed JSON, an unrecognized shape, a malformed
+    // `caption` payload — is silently ignored, same as always: no reply, no
+    // close, the session stays exactly as it was.
     let parsed: unknown;
     try {
       parsed = JSON.parse(data.toString("utf8"));
     } catch {
       return;
     }
-    if ((parsed as { finish?: unknown } | null)?.finish === true) session.close();
+    const frame = parsed as { finish?: unknown; caption?: unknown } | null;
+    if (frame?.finish === true) {
+      session.close();
+      return;
+    }
+    const caption = frame?.caption;
+    if (caption && typeof caption === "object") {
+      const { text, isFinal } = caption as { text?: unknown; isFinal?: unknown };
+      if (typeof text === "string" && typeof isFinal === "boolean") {
+        session.injectTranscript({ text, isFinal });
+      }
+    }
   });
   ws.on("close", closeOnce);
   ws.on("error", closeOnce);

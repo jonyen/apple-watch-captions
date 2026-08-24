@@ -17,7 +17,10 @@ import { adoptLegacyNotionAtBoot } from "./exportDestinations";
 import { buildServerOptions, buildResolveExporters } from "./serverOptions";
 
 const config = loadConfig(process.env);
-const deepgram = createClient(config.deepgramApiKey) as unknown as DeepgramLike;
+// A placeholder key when unset (e.g. this relay only runs the `apple`
+// provider) — the SDK client is constructed lazily and unused unless a
+// session actually selects `deepgram`, which providerFactory guards against.
+const deepgram = createClient(config.deepgramApiKey ?? "unset") as unknown as DeepgramLike;
 
 /**
  * Pick the summarizer backend: an explicit SUMMARY_PROVIDER wins, otherwise

@@ -5,7 +5,8 @@ import { APPLE_DEFAULT_URL } from "./appleProvider";
 
 export interface Config {
   port: number;
-  deepgramApiKey: string;
+  /** Optional; required only when a session actually selects the `deepgram` provider. */
+  deepgramApiKey?: string;
   /** Where session transcripts are persisted (a Fly volume in prod). */
   transcriptsDir: string;
   /** Operator-only token for /v1/usage. */
@@ -78,8 +79,13 @@ export interface NotionConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  const deepgramApiKey = env.DEEPGRAM_API_KEY;
-  if (!deepgramApiKey) throw new Error("DEEPGRAM_API_KEY is required");
+  // Required only when this relay's default backend is (or falls back to)
+  // deepgram — a deployment that only ever uses the `apple` provider (ring)
+  // has no deepgram credentials at all.
+  const deepgramApiKey = env.DEEPGRAM_API_KEY || undefined;
+  if (!deepgramApiKey && env.TRANSCRIPTION_PROVIDER !== "apple") {
+    throw new Error("DEEPGRAM_API_KEY is required");
+  }
   const port = env.PORT ? Number(env.PORT) : 8080;
   const transcriptsDir = env.TRANSCRIPTS_DIR || "./data/transcripts";
   const publicBaseUrl = env.PUBLIC_BASE_URL || undefined;

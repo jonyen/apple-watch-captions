@@ -1281,7 +1281,25 @@ function handleConnection(
   };
 
   ws.on("message", (data: Buffer, isBinary: boolean) => {
-    if (isBinary) session.handleAudio(data);
+    if (isBinary) {
+      session.handleAudio(data);
+      return;
+    }
+    // A text control frame. Only `{"finish":true}` is recognized today: it
+    // starts the provider's graceful-finish handshake (needed by the Apple
+    // provider, which only emits its true final result after one — Deepgram
+    // finalizes on VAD pauses during the stream and doesn't need this) while
+    // the socket stays open, so the eventual final caption still has
+    // somewhere to go. The client is expected to close once it has that
+    // final; the ordinary `close` handler below finalizes the transcript
+    // then, same as ever.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data.toString("utf8"));
+    } catch {
+      return;
+    }
+    if ((parsed as { finish?: unknown } | null)?.finish === true) session.close();
   });
   ws.on("close", closeOnce);
   ws.on("error", closeOnce);

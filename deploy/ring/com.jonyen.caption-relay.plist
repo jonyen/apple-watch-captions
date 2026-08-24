@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jonyen.caption-relay</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/jonyen/apps/watch-captions-relay/run-relay.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/jonyen/apps/watch-captions-relay/backend</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!--
+    com.jonyen.caption-transcriber must be up before this reads audio, but
+    the relay itself boots fine even if the sidecar isn't ready yet — the
+    Apple provider just fails the first connect attempt and the client
+    retries. No explicit ordering dependency is declared for that reason.
+  -->
+
+  <key>StandardOutPath</key>
+  <string>/Users/jonyen/Library/Logs/caption-relay.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/jonyen/Library/Logs/caption-relay.log</string>
+</dict>
+</plist>

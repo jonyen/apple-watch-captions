@@ -18,10 +18,16 @@ final class MoonshineEngine: CaptionEngine {
     /// segment is dropped silently and the next one gets its chance.
     static let failureLimit = 3
 
+    /// Audio kept while the models load, so the first sentence spoken after
+    /// tapping the row is captioned instead of lost. 30 s at 16 kHz; beyond
+    /// that the oldest audio gives way.
+    static let loadBufferLimit = 480_000
+
     private let modelDirectory: URL
     private let lock = NSLock()
     private var live: LiveTranscriber?
     private var loading = false
+    private var pending: [Int16] = []
     private var consecutiveFailures = 0
     private let log = Logger(subsystem: "com.jonyen.watchcaptions", category: "MoonshineEngine")
 
@@ -29,6 +35,12 @@ final class MoonshineEngine: CaptionEngine {
         self.modelDirectory = modelDirectory
     }
 
+    /// Reports `.ready` immediately — before the models have loaded — so the
+    /// session controller starts the mic while the app is still frontmost.
+    /// watchOS refuses to *begin* recording from the background, and the model
+    /// load takes long enough for the wrist to drop; once recording is live,
+    /// the audio background mode keeps it running. Audio arriving before the
+    /// models are up is buffered and transcribed when they are.
     func start() {
         lock.lock()
         consecutiveFailures = 0
@@ -38,9 +50,14 @@ final class MoonshineEngine: CaptionEngine {
             emit(.ready)
             return
         }
-        guard !loading else { lock.unlock(); return }
+        if loading {
+            lock.unlock()
+            emit(.ready)
+            return
+        }
         loading = true
         lock.unlock()
+        emit(.ready)
 
         let directory = modelDirectory
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -54,14 +71,30 @@ final class MoonshineEngine: CaptionEngine {
                 live.onPartial = { [weak self] text in self?.report(text, isFinal: false) }
                 live.onFinal = { [weak self] text in self?.report(text, isFinal: true) }
                 live.onError = { [weak self] error in self?.failed(error) }
-                self.lock.lock()
-                self.live = live
-                self.loading = false
-                self.lock.unlock()
-                self.emit(.ready)
+                // Drain buffered audio into the transcriber before publishing
+                // it: once `self.live` is set the audio thread feeds directly,
+                // and a chunk must never land ahead of the speech that
+                // preceded it. New audio can arrive during a drain, so loop
+                // until a drain finds the buffer empty.
+                while true {
+                    self.lock.lock()
+                    let buffered = self.pending
+                    self.pending.removeAll()
+                    if buffered.isEmpty {
+                        self.live = live
+                        self.loading = false
+                        self.lock.unlock()
+                        break
+                    }
+                    self.lock.unlock()
+                    live.feed(buffered)
+                }
             } catch {
                 self?.log.error("model load failed: \(String(describing: error), privacy: .public)")
-                self?.lock.lock(); self?.loading = false; self?.lock.unlock()
+                self?.lock.lock()
+                self?.loading = false
+                self?.pending.removeAll()
+                self?.lock.unlock()
                 self?.emit(.error(message: "On-device model failed to load"))
             }
         }
@@ -69,8 +102,21 @@ final class MoonshineEngine: CaptionEngine {
 
     /// Called on the audio thread.
     func send(_ audio: Data) {
-        lock.lock(); let live = self.live; lock.unlock()
-        guard let live, audio.count >= 2 else { return }
+        guard audio.count >= 2 else { return }
+        lock.lock()
+        guard let live else {
+            if loading {
+                var samples = [Int16](repeating: 0, count: audio.count / 2)
+                _ = samples.withUnsafeMutableBytes { audio.copyBytes(to: $0) }
+                pending.append(contentsOf: samples)
+                if pending.count > Self.loadBufferLimit {
+                    pending.removeFirst(pending.count - Self.loadBufferLimit)
+                }
+            }
+            lock.unlock()
+            return
+        }
+        lock.unlock()
         var samples = [Int16](repeating: 0, count: audio.count / 2)
         _ = samples.withUnsafeMutableBytes { audio.copyBytes(to: $0) }
         live.feed(samples)
@@ -80,7 +126,10 @@ final class MoonshineEngine: CaptionEngine {
     /// `SessionController.stop()` has already cleared `running`, so a final
     /// flushed here would be discarded anyway.
     func close() {
-        lock.lock(); let live = self.live; lock.unlock()
+        lock.lock()
+        pending.removeAll()
+        let live = self.live
+        lock.unlock()
         live?.reset()
     }
 

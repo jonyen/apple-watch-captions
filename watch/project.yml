@@ -56,7 +56,10 @@ targets:
           - audio
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.watchcaptions.watchkitapp
+        # WatchKit requires a companion app's watch bundle id to be the
+        # companion's id plus a suffix; anything else fails to install
+        # (MIInstallerErrorDomain 101, WatchKitAppBundleIDNotPrefixed).
+        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions.watchkitapp
         GENERATE_INFOPLIST_FILE: NO
         # The commit stamp reaches outside the sandbox: it runs git in the
         # checkout and edits the built plist.

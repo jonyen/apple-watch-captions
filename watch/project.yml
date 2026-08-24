@@ -21,7 +21,7 @@ targets:
         excludes:
           - Secrets.example.swift
           - Icon
-      - path: Models/MoonshineTiny
+      - path: Models/Moonshine
         type: folder
         buildPhase: resources
     dependencies:

@@ -16,6 +16,7 @@ describe("loadConfig", () => {
       anthropicApiKey: undefined,
       deepgramPhoneModel: "phonecall",
       trustProxyHeaders: false,
+      appleTranscriberUrl: "ws://127.0.0.1:8790",
     });
   });
 
@@ -222,5 +223,35 @@ describe("call captioning config", () => {
     expect(loadConfig(base).twilioForwardTo).toBeUndefined();
     expect(loadConfig({ ...base, TWILIO_FORWARD_TO: "+15551234567" }).twilioForwardTo)
       .toBe("+15551234567");
+  });
+});
+
+describe("apple provider config", () => {
+  const base = { DEEPGRAM_API_KEY: "k" };
+
+  it("defaults the transcriber URL to the local sidecar", () => {
+    expect(loadConfig(base).appleTranscriberUrl).toBe("ws://127.0.0.1:8790");
+  });
+
+  it("allows the transcriber URL to be overridden", () => {
+    expect(loadConfig({ ...base, APPLE_TRANSCRIBER_URL: "ws://127.0.0.1:9999" }).appleTranscriberUrl)
+      .toBe("ws://127.0.0.1:9999");
+  });
+
+  it("leaves the default transcription provider unset by default", () => {
+    expect(loadConfig(base).transcriptionProvider).toBeUndefined();
+  });
+
+  it("reads TRANSCRIPTION_PROVIDER as the relay's default provider", () => {
+    expect(loadConfig({ ...base, TRANSCRIPTION_PROVIDER: "apple" }).transcriptionProvider)
+      .toBe("apple");
+  });
+
+  it("warns and ignores an unrecognized TRANSCRIPTION_PROVIDER", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({ ...base, TRANSCRIPTION_PROVIDER: "bogus" });
+    expect(cfg.transcriptionProvider).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('TRANSCRIPTION_PROVIDER="bogus"'));
+    warn.mockRestore();
   });
 });

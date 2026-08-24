@@ -4,7 +4,7 @@ import { PROVIDER_NAMES as VIA_SERVER } from "./server";
 
 describe("provider options", () => {
   it("lists the providers the relay implements", () => {
-    expect(PROVIDER_NAMES).toEqual(["deepgram", "openai", "assemblyai"]);
+    expect(PROVIDER_NAMES).toEqual(["deepgram", "openai", "assemblyai", "apple"]);
   });
 
   // server.ts re-exports these, so existing importers keep working.

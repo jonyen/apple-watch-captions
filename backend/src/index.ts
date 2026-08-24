@@ -2,15 +2,11 @@ import { join, dirname } from "path";
 import { mkdirSync, readdirSync, statSync, existsSync } from "fs";
 import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
-import { startServer, ProviderOptions } from "./server";
+import { startServer } from "./server";
 import { openDb } from "./db";
 import { IdentityStore } from "./identityStore";
-import { DeepgramProvider, DeepgramLike, telephonyOptions } from "./deepgramProvider";
-import { OpenAIProvider } from "./openaiProvider";
-import { AssemblyAIProvider } from "./assemblyaiProvider";
-import { ChannelSplitProvider } from "./channelSplitProvider";
-import { UnavailableProvider } from "./unavailableProvider";
-import { TranscriptionProvider } from "./transcriptionProvider";
+import { DeepgramLike } from "./deepgramProvider";
+import { buildProviderFactory } from "./providerFactory";
 import { Summarize, createClaudeSummarizer } from "./summarizer";
 import { createGeminiSummarizer } from "./geminiSummarizer";
 import { backfillNotion } from "./notionBackfill";
@@ -64,41 +60,12 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 const db = openDb(config.dbPath);
 const identity = new IdentityStore(db);
 
-/**
- * Deepgram transcribes the 2-channel stream natively; OpenAI and AssemblyAI
- * are mono-only, so dual-channel sessions get a ChannelSplitProvider running
- * one upstream connection per channel.
- */
-function createProvider(opts?: ProviderOptions): TranscriptionProvider {
-  const dual = opts?.channels === 2;
-  const monoOnly = (
-    name: string,
-    apiKey: string | undefined,
-    make: (key: string) => TranscriptionProvider,
-  ): TranscriptionProvider => {
-    if (!apiKey) {
-      return new UnavailableProvider(`${name} is not configured on the relay`);
-    }
-    return dual ? new ChannelSplitProvider(() => make(apiKey)) : make(apiKey);
-  };
-
-  switch (opts?.provider) {
-    case "openai":
-      return monoOnly("OpenAI", config.openaiApiKey, (key) => new OpenAIProvider(key));
-    case "assemblyai":
-      return monoOnly("AssemblyAI", config.assemblyaiApiKey, (key) => new AssemblyAIProvider(key));
-    default:
-      // Telephony is mono by definition — one caller, one track — so it never
-      // combines with the dual-channel path.
-      if (opts?.telephony) {
-        return new DeepgramProvider(deepgram, telephonyOptions(config.deepgramPhoneModel));
-      }
-      return new DeepgramProvider(
-        deepgram,
-        dual ? { channels: 2, multichannel: true } : undefined,
-      );
-  }
-}
+// `buildProviderFactory` is the actual provider-selection logic (see
+// providerFactory.ts for why it lives there rather than inline here, mirroring
+// buildServerOptions): it can be unit-tested against a fake config and a fake
+// Deepgram client, which a switch statement embedded at module scope in this
+// file cannot be.
+const createProvider = buildProviderFactory(config, { deepgram });
 
 // `buildServerOptions` is the actual gating logic (see serverOptions.ts for
 // why it lives there rather than inline here): every optional piece is

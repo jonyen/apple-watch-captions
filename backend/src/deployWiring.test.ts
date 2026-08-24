@@ -112,6 +112,19 @@ describe("deployment wiring", () => {
     expect(read("fly.toml")).not.toMatch(/^\s*EMAIL_FROM\s*=/m);
   });
 
+  // Provider selection (Task 4, apple provider) went through the same
+  // extraction as trustProxyHeaders above: buildProviderFactory is unit
+  // tested directly (providerFactory.test.ts) against a fake config and a
+  // fake Deepgram client, but nothing boots index.ts, so what's left to
+  // check here is only that the entrypoint actually wires the real config
+  // and deepgram client into it, rather than building providers some other
+  // way.
+  it("builds session providers from the loaded config via buildProviderFactory", () => {
+    expect(read("src/index.ts")).toMatch(
+      /const createProvider = buildProviderFactory\(config, \{ deepgram \}\);/,
+    );
+  });
+
   it("never commits the Resend API key to the Fly config", () => {
     // Matches an actual assignment, not a comment mentioning the name (e.g.
     // one pointing the reader at `fly secrets set` instead) — the point is

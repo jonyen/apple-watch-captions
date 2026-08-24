@@ -1,5 +1,7 @@
 import { join } from "path";
 import { NotionOAuthConfig } from "./notionOAuth";
+import { PROVIDER_NAMES, ProviderName } from "./providerOptions";
+import { APPLE_DEFAULT_URL } from "./appleProvider";
 
 export interface Config {
   port: number;
@@ -56,6 +58,14 @@ export interface Config {
   resendApiKey?: string;
   /** Optional; the From address transcript and verification emails are sent from. */
   emailFrom?: string;
+  /**
+   * Optional; the relay-wide default transcription backend when a session
+   * doesn't request one explicitly (`ProviderOptions.provider` always wins).
+   * Unset means the existing default, deepgram.
+   */
+  transcriptionProvider?: ProviderName;
+  /** Base URL of the local caption-transcriber sidecar (Task 3's Apple provider). */
+  appleTranscriberUrl: string;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -99,7 +109,20 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     publicBaseUrl,
     resendApiKey: env.RESEND_API_KEY || undefined,
     emailFrom: env.EMAIL_FROM || undefined,
+    transcriptionProvider: loadTranscriptionProvider(env),
+    appleTranscriberUrl: env.APPLE_TRANSCRIBER_URL || APPLE_DEFAULT_URL,
   };
+}
+
+/** Only the backends we actually implement; anything else is a typo. */
+function loadTranscriptionProvider(env: NodeJS.ProcessEnv): ProviderName | undefined {
+  const value = env.TRANSCRIPTION_PROVIDER;
+  if (!value) return undefined;
+  if ((PROVIDER_NAMES as readonly string[]).includes(value)) return value as ProviderName;
+  console.warn(
+    `Ignoring TRANSCRIPTION_PROVIDER="${value}" — expected one of ${PROVIDER_NAMES.join(", ")}`,
+  );
+  return undefined;
 }
 
 /**

@@ -1,4 +1,4 @@
-export const PROVIDER_NAMES = ["deepgram", "openai", "assemblyai"] as const;
+export const PROVIDER_NAMES = ["deepgram", "openai", "assemblyai", "apple"] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 export interface ProviderOptions {

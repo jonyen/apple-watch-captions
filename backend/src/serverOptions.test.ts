@@ -42,6 +42,7 @@ function baseConfig(overrides: Partial<Config> = {}): Config {
     dbPath: "/does-not-matter/identity.db",
     deepgramPhoneModel: "phonecall",
     trustProxyHeaders: false,
+    appleTranscriberUrl: "ws://127.0.0.1:8790",
     ...overrides,
   };
 }

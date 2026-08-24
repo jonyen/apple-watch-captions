@@ -30,19 +30,32 @@ Watch/iPhone ──wss (Funnel)──► ring: Node relay (backend/, unchanged p
 WebSocket server on `127.0.0.1:8790` (env `PORT` overrides). One WS connection per
 transcription session.
 
-- Client → server, binary frames: raw PCM, 16 kHz, mono, s16le — the same bytes the
-  relay feeds Deepgram today.
+- Client → server, binary frames: raw PCM in the configured wire format — 16 kHz
+  mono s16le by default, the same bytes the relay feeds Deepgram today.
+- Client → server, text frames:
+  - `{"config": {"locale": "en-US", "format": "pcm16k"}}` — optional, and only
+    valid as the FIRST frame of the connection (both keys optional; `format` is
+    `pcm16k` | `mulaw8k`, `mulaw8k` being Twilio's µ-law 8 kHz mono call audio,
+    which the sidecar decodes and resamples so call captions survive Deepgram's
+    departure). If the first frame is binary, defaults apply (`en-US`, `pcm16k`).
+    Query parameters are NOT part of the protocol — Network.framework's WebSocket
+    server offers no public API to read the request path.
+  - `{"finish": true}` — end of input. The client must NOT close the socket to
+    signal end-of-input (NWProtocolWebSocket refuses all sends once a peer close
+    has been delivered): it sends this frame, keeps the socket open, and waits.
 - Server → client, text frames, one JSON object each:
   - `{"ready": true}` — sent once when the transcriber is set up and audio may flow.
-  - `{"text": "...", "isFinal": false}` — volatile (partial) result; replaces the
-    previous partial.
+  - `{"text": "...", "isFinal": false}` — volatile (partial) result, a CUMULATIVE
+    full text that replaces the previous partial.
   - `{"text": "...", "isFinal": true}` — finalized segment.
+  - `{"done": true}` — after `{"finish": true}`: finalization is complete and every
+    transcript has been sent. The SERVER closes the connection after sending it.
   - `{"error": "message"}` — fatal; the server closes the connection after sending.
-- Client closes the socket to end the session; the sidecar finalizes and drops state.
-- Query parameter `?locale=en-US` optional; default `en-US`.
-- Query parameter `?format=pcm16k|mulaw8k`, default `pcm16k`. `mulaw8k` is Twilio
-  call audio (µ-law, 8 kHz mono); the sidecar decodes µ-law and lets its
-  AVAudioConverter resample, so call captions survive Deepgram's departure.
+- A client that disconnects without `{"finish": true}` gets no final — the sidecar
+  just tears the session down. Clients wanting the final wait for `{"done": true}`
+  (bounded by their own timeout; the sidecar's finalize has a 10 s watchdog).
+- Progressive partials while audio streams at real-time pace are a REQUIREMENT of
+  this protocol, not an implementation detail — live captions are the product.
 
 ## Node side
 

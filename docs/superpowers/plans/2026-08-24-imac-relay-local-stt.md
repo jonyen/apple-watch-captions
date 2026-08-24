@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Sidecar protocol exactly as the spec defines it: binary frames = audio in; text frames = one JSON object each of `{"ready":true}`, `{"text":...,"isFinal":bool}`, `{"error":"..."}`; query params `locale` (default `en-US`) and `format` = `pcm16k` (default) | `mulaw8k`; listen address `127.0.0.1:8790`, `PORT` env overrides.
+- Sidecar protocol exactly as the spec defines it (amended 2026-08-24 after Task 3's findings): binary frames = audio in; client text frames `{"config":{"locale","format"}}` (first frame only; format `pcm16k` default | `mulaw8k`) and `{"finish":true}` (end of input — the client never closes to signal it); server text frames `{"ready":true}`, `{"text":...,"isFinal":bool}` (partials are cumulative), `{"done":true}` then server closes, `{"error":"..."}` then server closes. No query parameters. Listen address `127.0.0.1:8790`, `PORT` env overrides. Progressive partials at real-time audio pace are a hard requirement.
 - Provider name is `"apple"`; env `APPLE_TRANSCRIBER_URL` default `ws://127.0.0.1:8790`.
 - `backend/` changes must keep every existing test green (`npm test` in backend/). No change to `watch/`, `ios/`, `CaptionRelay/` except the Secrets URL swap in Task 7.
 - The working tree holds unrelated untracked files (`mac/`, `watch/CaptionCore/`, `*.prod-backup`) — commit only files each task names.
@@ -376,7 +376,7 @@ ws.on("close", () => process.exit(0));
 
 **Files:**
 - Create: `backend/src/appleProvider.ts`, `backend/src/appleProvider.test.ts`
-- Modify: `backend/src/providerOptions.ts` (add `"apple"` to `PROVIDER_NAMES`), plus the single place providers are constructed from `ProviderOptions`/env (find it via `grep -rn "DeepgramProvider" backend/src` — wire `provider === "apple"` and `TRANSCRIPTION_PROVIDER=apple` default there, passing `APPLE_TRANSCRIBER_URL ?? "ws://127.0.0.1:8790"` and appending `?format=mulaw8k` when `telephony`).
+- Modify: `backend/src/providerOptions.ts` (add `"apple"` to `PROVIDER_NAMES`), plus the single place providers are constructed from `ProviderOptions`/env (find it via `grep -rn "DeepgramProvider" backend/src` — wire `provider === "apple"` and `TRANSCRIPTION_PROVIDER=apple` default there, passing `APPLE_TRANSCRIBER_URL ?? "ws://127.0.0.1:8790"` and a `format` of `mulaw8k` when `telephony`, which the provider delivers as the first-frame `{"config":{...}}` message — the protocol has no query parameters).
 
 **Interfaces:**
 - Consumes: `TranscriptionProvider`, `Transcript` from `./transcriptionProvider`; `ws` package (already a dependency).

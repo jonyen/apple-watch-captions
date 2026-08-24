@@ -148,6 +148,17 @@ describe("buildProviderFactory", () => {
     expect(conns).toHaveLength(1);
   });
 
+  it("reports Deepgram unavailable when no key is configured (e.g. an apple-only deployment)", () => {
+    const { client, conns } = fakeDeepgram();
+    const createProvider = buildProviderFactory(
+      fakeConfig({ deepgramApiKey: undefined, transcriptionProvider: "apple" }),
+      { deepgram: client },
+    );
+    const provider = createProvider({ provider: "deepgram" });
+    expect(provider).toBeInstanceOf(UnavailableProvider);
+    expect(conns).toHaveLength(0);
+  });
+
   it("reports OpenAI unavailable when no key is configured", () => {
     const { client } = fakeDeepgram();
     const createProvider = buildProviderFactory(fakeConfig(), { deepgram: client });

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { WebSocket } from "ws";
 import { AddressInfo } from "net";
 import { mkdtempSync, rmSync } from "fs";
@@ -189,6 +189,49 @@ describe("caption server", () => {
       const transcripts = listTranscripts(userDir(dir, device.userId));
       expect(transcripts).toHaveLength(1);
       expect(transcripts[0].segmentCount).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("starts the provider's graceful finish on a {finish:true} text frame, while the socket stays open, and finalizes exactly once at eventual socket close", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "transcripts-finish-"));
+    try {
+      const identity = new IdentityStore(openDb(":memory:"));
+      const device = identity.registerDevice("watch");
+      const providers: FakeTranscriptionProvider[] = [];
+      const store = new TranscriptStore({ root: dir });
+      const finalizeSpy = vi.spyOn(store, "finalize");
+      const server = startServer({
+        port: 0,
+        identity,
+        createProvider: () => {
+          const p = new FakeTranscriptionProvider();
+          providers.push(p);
+          return p;
+        },
+        transcripts: store,
+        transcriptsRoot: dir,
+      });
+      running = server;
+      const port = (server.address() as AddressInfo).port;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream?token=${device.token}`);
+      await new Promise((r) => ws.on("open", r));
+
+      ws.send(JSON.stringify({ finish: true }));
+      await new Promise((r) => setTimeout(r, 20));
+
+      // The provider's graceful finish started right away, and the socket
+      // is still open — the eventual final has somewhere to go.
+      expect(providers[0].closed).toBe(true);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      expect(finalizeSpy).not.toHaveBeenCalled();
+
+      ws.close();
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(finalizeSpy).toHaveBeenCalledTimes(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

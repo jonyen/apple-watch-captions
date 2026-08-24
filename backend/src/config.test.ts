@@ -142,6 +142,12 @@ describe("loadConfig", () => {
   it("throws when DEEPGRAM_API_KEY is missing", () => {
     expect(() => loadConfig({})).toThrow(/DEEPGRAM_API_KEY/);
   });
+
+  it("boots without DEEPGRAM_API_KEY when TRANSCRIPTION_PROVIDER=apple", () => {
+    const cfg = loadConfig({ TRANSCRIPTION_PROVIDER: "apple" });
+    expect(cfg.deepgramApiKey).toBeUndefined();
+    expect(cfg.transcriptionProvider).toBe("apple");
+  });
 });
 
 // Final review, Important 2: `fly.toml` ships PUBLIC_BASE_URL pointing at

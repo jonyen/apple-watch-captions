@@ -66,6 +66,9 @@ export function buildProviderFactory(
         return dual ? new ChannelSplitProvider(make) : make();
       }
       default:
+        if (!config.deepgramApiKey) {
+          return new UnavailableProvider("deepgram is not configured on the relay");
+        }
         // Telephony is mono by definition — one caller, one track — so it
         // never combines with the dual-channel path.
         if (opts?.telephony) {

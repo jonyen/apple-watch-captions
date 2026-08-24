@@ -2,13 +2,16 @@ name: WatchCaptions
 options:
   bundleIdPrefix: com.jonyen.watchcaptions
   deploymentTarget:
-    watchOS: "10.0"
+    watchOS: "11.0"
 packages:
   CaptionCore:
     url: https://github.com/jonyen/caption-core
     from: 0.1.0
   CaptionRelay:
     path: ../CaptionRelay
+  MoonshineKit:
+    url: https://github.com/jonyen/moonshine-coreml
+    from: 0.1.0
 targets:
   WatchCaptions:
     type: application
@@ -18,11 +21,15 @@ targets:
         excludes:
           - Secrets.example.swift
           - Icon
+      - path: Models/MoonshineTiny
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: CaptionCore
       - package: CaptionRelay
       - package: CaptionRelay
         product: CaptionRelayLive
+      - package: MoonshineKit
     postCompileScripts:
       # Stamps GitCommit into the built Info.plist for the home screen's build
       # line. After the plist is processed, before signing, and every build —

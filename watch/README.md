@@ -30,6 +30,11 @@ last *saved* session is left alone and still waiting under **Continue last**,
 though a launch after a live session lands on the menu rather than resuming
 anything on its own.
 
+### On device
+
+**On device** — captions computed on the watch with Moonshine Tiny (watchOS 11+,
+best on S9 and later); nothing leaves the watch and nothing is saved.
+
 ## Layout
 - `CaptionCore` — the pure-logic Swift package (`CaptionStore`, `SessionController`,
   protocols), pulled in remotely from [`jonyen/caption-core`](https://github.com/jonyen/caption-core) (see `project.yml`).
@@ -51,7 +56,10 @@ number.
 2. Edit `Secrets.swift`: set `relayURL` to `wss://watch-captions-relay.fly.dev/stream`. This
    file is gitignored. No auth token to fill in — the app registers itself with the relay
    on first launch and keeps the token it's issued in the Keychain (`DeviceIdentity`).
-3. `cd watch && xcodegen generate && open WatchCaptions.xcodeproj`
+3. `Scripts/fetch-moonshine.sh` — downloads the on-device Moonshine Tiny models (~55 MB)
+   into `Models/MoonshineTiny/`; the project references that folder, so generate after
+   fetching.
+4. `cd watch && xcodegen generate && open WatchCaptions.xcodeproj`
 
 ## Test (logic)
 `CaptionCore`'s tests live in its own repo ([`jonyen/caption-core`](https://github.com/jonyen/caption-core)).

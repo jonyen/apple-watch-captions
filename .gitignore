@@ -8,6 +8,7 @@ backend/.env
 # watchOS app
 watch/*.xcodeproj
 watch/WatchCaptions/Secrets.swift
+watch/Models/
 
 # CaptionRelay package
 CaptionRelay/.build/

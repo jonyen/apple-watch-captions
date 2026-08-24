@@ -2,60 +2,33 @@ import Foundation
 import Network
 
 /// Runs the sidecar's WebSocket server: one `TranscriberSession` per
-/// connection, binary frames in (audio), JSON text frames out
-/// (`{"ready":true}` / `{"text":...,"isFinal":...}` / `{"error":...}`
-/// then close). Listens on 127.0.0.1 only.
+/// connection, speaking protocol v2 (see the design doc's "Sidecar protocol"
+/// section). Listens on 127.0.0.1 only.
 ///
-/// LOCALE/FORMAT LIMITATION (flagged for the controller — see task-3-report):
-/// the wire protocol calls for `locale`/`format` query parameters on the
-/// connection URL (e.g. `ws://127.0.0.1:8790/?format=mulaw8k`). Network.framework's
-/// public API for `NWProtocolWebSocket` — both the Swift overlay
-/// (`NWProtocolWebSocket.Options.setClientRequestHandler`, which hands back
-/// only `subprotocols` and `additionalHeaders`) and the underlying C API
-/// (`nw_ws_request_t` in `<Network/ws_options.h>`, which likewise only
-/// enumerates subprotocols and additional headers) — never exposes the
-/// client's HTTP request line, path, or query string. The framework consumes
-/// and validates the handshake internally. So there is no public-API way to
-/// read `?locale=`/`?format=` here: every connection uses the defaults below
-/// (en-US / pcm16k) regardless of what the client's URL contains. Task 4's
-/// planned `?format=mulaw8k` suffix for telephony will therefore currently
-/// have no effect on the server. If per-connection format/locale is needed,
-/// the two workable channels given this API are (a) a custom HTTP header —
-/// visible via `additionalHeaders` in `setClientRequestHandler`, settable
-/// from Node's `ws` client via the `headers` constructor option — or (b) a
-/// WebSocket subprotocol name encoding the params (visible via
-/// `subprotocols` there and `selectedSubprotocol` in the frame metadata).
-///
-/// CLOSE-TIMING LIMITATION (flagged for the controller — see task-3-report):
-/// `TranscriberSession` only emits transcript events once `finish()` calls
-/// `finalizeAndFinishThroughEndOfInput()` — verified (via `--file` mode with
-/// timestamped output) to hold even when audio is fed in real time with no
-/// gaps, i.e. the analyzer withholds *all* results, partials included, until
-/// finalize, rather than streaming them as it goes. `finish()` here only
-/// runs once `receiveLoop` sees the client's close (by design — "On client
-/// close: await session.finish()"). But NWProtocolWebSocket, once it has
-/// delivered an inbound close frame to the app, refuses all further sends on
-/// that connection (`connection.send` completes immediately with `ENOTCONN`)
-/// — verified by attempting a send in the same tick `receiveMessage` hands
-/// back the close opcode, and separately by reproducing the identical
-/// ENOTCONN-on-second-send behavior with `TranscriberSession` removed
-/// entirely from the picture, then ruling it out again once the send after
-/// close was the only thing changed back. Net effect: with a client that
-/// signals "done" only by closing (as the wire protocol currently
-/// specifies), the final transcript can never reach it. `ws-smoke.mjs`'s
-/// `{"ready":true}` line above by itself confirms the handshake, audio
-/// ingestion, and JSON-out mechanics all work — the transcript itself came
-/// out byte-correct in every trial (see task-3-report.md's transcript
-/// dump); only the last leg (delivering it before the peer's close finishes
-/// tearing the connection down) is blocked by this. No public API found to
-/// suppress it. This needs either a wire-protocol change (an explicit
-/// end-of-audio signal distinct from closing) or a fix upstream in
-/// `TranscriberSession` (streaming results before finalize) — not something
-/// fixable from this file alone.
+/// Protocol v2, per connection:
+/// - Optional FIRST text frame `{"config":{"locale":...,"format":...}}`
+///   selects locale/format (both keys optional; `format` is `pcm16k` |
+///   `mulaw8k`). A binary first frame means defaults (en-US / pcm16k).
+///   Query parameters are NOT part of the protocol: Network.framework's
+///   WebSocket server (`NWProtocolWebSocket.Options.setClientRequestHandler`
+///   and the underlying `nw_ws_request_t` C API) never exposes the client's
+///   request line, path, or query string, so config rides in-band instead.
+/// - Binary frames are audio for `session.feed`.
+/// - Text frame `{"finish":true}` ends input WITHOUT closing the socket:
+///   the server finalizes the session, flushes every remaining transcript
+///   event, sends `{"done":true}`, and then the SERVER closes. Clients must
+///   not signal end-of-input by closing — NWProtocolWebSocket tears down the
+///   write path the moment an inbound close frame is delivered (all further
+///   sends fail ENOTCONN), so nothing sent after a peer close can arrive.
+/// - A client that disconnects without `{"finish":true}` gets no final; the
+///   session is just torn down (`finish()` still runs exactly once so the
+///   analyzer shuts down cleanly; its 10 s watchdog bounds that).
+/// - A config frame after audio has started is a protocol error:
+///   `{"error":"config after audio"}`, then the server closes.
 enum WebSocketServer {
-    /// Locale the server ensures/reserves at startup and uses for every
-    /// connection (see the type-level note on why this can't vary per
-    /// connection today).
+    /// Locale whose model the server ensures at startup (the default for
+    /// sessions whose config doesn't name one). A config frame naming a
+    /// different locale triggers `ensureModel` for it at session start.
     static let defaultLocale = Locale(identifier: "en-US")
     static let defaultFormat: WireFormat = .pcm16k
 
@@ -78,8 +51,8 @@ enum WebSocketServer {
 
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
-        // Accept every handshake; see the type-level note above on why we
-        // can't select locale/format from the request here.
+        // Accept every handshake; per-connection config arrives in-band (see
+        // the type-level note on why it can't come from the request URL).
         wsOptions.setClientRequestHandler(queue) { _, _ in
             NWProtocolWebSocket.Response(status: .accept, subprotocol: nil)
         }
@@ -127,65 +100,71 @@ enum WebSocketServer {
         try await Task.sleep(nanoseconds: .max)
     }
 
-    /// Owns one connection end to end: creates the session, pumps its events
-    /// out as JSON text frames, pumps incoming binary frames into it, and
-    /// closes down on either side ending. Logs one open + one close line.
+    /// How a connection's receive phase ended.
+    private enum Outcome {
+        /// Client sent `{"finish":true}`: finalize, flush, `{"done":true}`,
+        /// then the server closes.
+        case finished
+        /// Client closed/dropped, a receive error occurred, or a protocol
+        /// error was already answered with `{"error":...}` + close: tear the
+        /// session down, no final delivery.
+        case teardown
+    }
+
+    /// Owns one connection end to end. The session is created lazily from
+    /// the first frame (config text frame, or binary/finish implying
+    /// defaults); its events are pumped out as JSON text frames by a
+    /// forwarder task; `session.finish()` runs exactly once, on this
+    /// function's single exit path, whatever ended the receive phase.
     private static func handleConnection(_ connection: NWConnection) async {
         connection.start(queue: queue)
         FileHandle.standardError.write(Data("transcriber: connection open\n".utf8))
 
-        let session: TranscriberSession
-        do {
-            session = try await TranscriberSession(locale: defaultLocale, format: defaultFormat)
-        } catch {
-            await sendJSON(["error": "\(error)"], on: connection)
-            connection.cancel()
-            FileHandle.standardError.write(
-                Data("transcriber: connection closed (session init failed)\n".utf8))
-            return
-        }
-
+        var session: TranscriberSession?
         // Forwards session.events -> JSON text frames until the stream
-        // completes; returns whether an `.error` event was seen so the
-        // caller knows the connection was already cancelled.
-        let forwarder = Task<Bool, Never> {
-            var sawError = false
-            for await event in session.events {
-                switch event {
-                case .ready:
-                    await sendJSON(["ready": true], on: connection)
-                case .transcript(let text, let isFinal):
-                    await sendJSON(["text": text, "isFinal": isFinal], on: connection)
-                case .error(let message):
-                    sawError = true
-                    await sendJSON(["error": message], on: connection)
-                    // Don't wait around for more audio/finalization once the
-                    // session has errored: unblock receiveLoop's pending
-                    // receive now so finish() runs and the connection winds
-                    // down promptly.
-                    connection.cancel()
+        // completes; yields whether an `.error` event was seen so the exit
+        // path knows the connection was already cancelled.
+        var forwarder: Task<Bool, Never>?
+
+        /// Creates the session + forwarder. On failure sends `{"error":...}`
+        /// and closes; returns whether the session is usable.
+        func startSession(locale: Locale, format: WireFormat) async -> Bool {
+            do {
+                if locale.identifier != defaultLocale.identifier {
+                    try await TranscriberSession.ensureModel(locale: locale)
                 }
+                let newSession = try await TranscriberSession(locale: locale, format: format)
+                session = newSession
+                forwarder = Task<Bool, Never> {
+                    var sawError = false
+                    for await event in newSession.events {
+                        switch event {
+                        case .ready:
+                            await sendJSON(["ready": true], on: connection)
+                        case .transcript(let text, let isFinal):
+                            await sendJSON(["text": text, "isFinal": isFinal], on: connection)
+                        case .error(let message):
+                            sawError = true
+                            await sendJSON(["error": message], on: connection)
+                            // Don't wait around for more audio/finalization
+                            // once the session has errored: unblock the
+                            // receive loop's pending receive now so finish()
+                            // runs and the connection winds down promptly.
+                            connection.cancel()
+                        }
+                    }
+                    return sawError
+                }
+                return true
+            } catch {
+                await sendJSON(["error": "\(error)"], on: connection)
+                await closeGracefully(connection)
+                return false
             }
-            return sawError
         }
 
-        await receiveLoop(connection, session: session)
-        // Exactly one finish() call for this session, on this single path,
-        // regardless of whether the client closed cleanly, dropped the
-        // connection, or the forwarder already cancelled us after an error.
-        await session.finish()
-        let sawError = await forwarder.value
-        if !sawError {
-            await closeGracefully(connection)
-        }
-        FileHandle.standardError.write(Data("transcriber: connection closed\n".utf8))
-    }
-
-    /// Reads binary frames into `session.feed`; returns on a client close
-    /// frame, a receive error (including our own `connection.cancel()`), or
-    /// a plain end-of-stream.
-    private static func receiveLoop(_ connection: NWConnection, session: TranscriberSession) async {
-        while true {
+        var outcome = Outcome.teardown
+        receive: while true {
             let (content, context, isComplete, error) = await withCheckedContinuation {
                 (continuation: CheckedContinuation<(Data?, NWConnection.ContentContext?, Bool, NWError?), Never>) in
                 connection.receiveMessage { content, context, isComplete, error in
@@ -194,20 +173,106 @@ enum WebSocketServer {
             }
             if let error {
                 FileHandle.standardError.write(Data("transcriber: receive ended: \(error)\n".utf8))
-                return
+                break receive
             }
             let opcode = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                 as? NWProtocolWebSocket.Metadata)?.opcode
-            if opcode == .close {
-                return
-            }
-            if opcode == .binary, let content, !content.isEmpty {
-                session.feed(content)
-            }
-            if content == nil, isComplete {
-                return
+            switch opcode {
+            case .close:
+                break receive
+            case .binary:
+                guard let content, !content.isEmpty else { break }
+                if session == nil {
+                    // Binary first frame: defaults apply.
+                    guard await startSession(locale: defaultLocale, format: defaultFormat) else {
+                        break receive
+                    }
+                }
+                session?.feed(content)
+            case .text:
+                guard let content,
+                      let object = (try? JSONSerialization.jsonObject(with: content)) as? [String: Any]
+                else {
+                    await sendJSON(["error": "malformed text frame"], on: connection)
+                    await closeGracefully(connection)
+                    break receive
+                }
+                if let config = object["config"] {
+                    guard session == nil else {
+                        await sendJSON(["error": "config after audio"], on: connection)
+                        await closeGracefully(connection)
+                        break receive
+                    }
+                    guard let (locale, format) = parseConfig(config) else {
+                        await sendJSON(["error": "bad config"], on: connection)
+                        await closeGracefully(connection)
+                        break receive
+                    }
+                    guard await startSession(locale: locale, format: format) else {
+                        break receive
+                    }
+                } else if object["finish"] as? Bool == true {
+                    if session == nil {
+                        // finish with no audio: still deliver ready + done so
+                        // the client's wait terminates deterministically.
+                        guard await startSession(locale: defaultLocale, format: defaultFormat) else {
+                            break receive
+                        }
+                    }
+                    outcome = .finished
+                    break receive
+                } else {
+                    FileHandle.standardError.write(
+                        Data("transcriber: ignoring unrecognized text frame\n".utf8))
+                }
+            default:
+                if content == nil, isComplete {
+                    break receive
+                }
             }
         }
+
+        if let session {
+            if outcome == .teardown {
+                // No final delivery on this path (the peer is gone or the
+                // error/close frame is already out); cancel now so any
+                // forwarder sends fail fast instead of queueing.
+                connection.cancel()
+            }
+            // Exactly one finish() call for this session, on this single
+            // path, regardless of how the receive phase ended. finish()
+            // flushes every remaining transcript through `events` (the
+            // forwarder sends them) and has its own 10 s watchdog.
+            await session.finish()
+            let sawError = await forwarder?.value ?? false
+            if outcome == .finished, !sawError {
+                await sendJSON(["done": true], on: connection)
+                await closeGracefully(connection)
+            }
+        } else {
+            connection.cancel()
+        }
+        FileHandle.standardError.write(Data("transcriber: connection closed\n".utf8))
+    }
+
+    /// Validates a `{"config":...}` payload. Both keys optional; a
+    /// non-object payload, a non-string/empty `locale`, or an unknown
+    /// `format` value is rejected (unknown extra keys are ignored).
+    private static func parseConfig(_ payload: Any) -> (Locale, WireFormat)? {
+        guard let dict = payload as? [String: Any] else { return nil }
+        var locale = defaultLocale
+        var format = defaultFormat
+        if let rawLocale = dict["locale"] {
+            guard let identifier = rawLocale as? String, !identifier.isEmpty else { return nil }
+            locale = Locale(identifier: identifier)
+        }
+        if let rawFormat = dict["format"] {
+            guard let name = rawFormat as? String, let parsed = WireFormat(rawValue: name) else {
+                return nil
+            }
+            format = parsed
+        }
+        return (locale, format)
     }
 
     /// Each text frame gets its own `ContentContext` identifier so
@@ -229,8 +294,7 @@ enum WebSocketServer {
     }
 
     /// Sends a normal-closure WebSocket close frame, then tears down the
-    /// connection. Only used on the non-error path — after an `.error`
-    /// event the forwarder has already force-cancelled the connection.
+    /// connection.
     private static func closeGracefully(_ connection: NWConnection) async {
         let closeMetadata = NWProtocolWebSocket.Metadata(opcode: .close)
         closeMetadata.closeCode = .protocolCode(.normalClosure)

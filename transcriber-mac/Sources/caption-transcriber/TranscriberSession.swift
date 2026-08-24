@@ -51,9 +51,19 @@ actor TranscriberSession {
     }
 
     init(locale: Locale, format: WireFormat) async throws {
+        // `.fastResults` is required for progressive (real-time-paced) delivery,
+        // not just an optimization: without it, `transcriber.results` withholds
+        // every volatile result until `finalizeAndFinishThroughEndOfInput()` is
+        // called, regardless of how audio is paced going in -- confirmed by
+        // comparing identical feeds with/without this option (see
+        // task-3-report.md's "Fix round" section). `.progressiveTranscription`
+        // (the preset `ensureModel` uses to size the asset download) already
+        // bundles `[.fastResults, .volatileResults]`; this reconstructs that
+        // same reporting set explicitly since transcriptionOptions/
+        // attributeOptions need to stay empty here.
         let transcriber = SpeechTranscriber(locale: locale,
                                             transcriptionOptions: [],
-                                            reportingOptions: [.volatileResults],
+                                            reportingOptions: [.volatileResults, .fastResults],
                                             attributeOptions: [])
         // Note: bestAvailableAudioFormat lives on SpeechAnalyzer, not SpeechTranscriber.
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {

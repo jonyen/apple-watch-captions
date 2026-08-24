@@ -7,7 +7,7 @@ import { randomUUID, timingSafeEqual } from "crypto";
 import { bearerToken, resolveToken } from "./auth";
 import { IdentityStore, DeviceKind, Principal } from "./identityStore";
 import { CaptionSession, OutboundMessage } from "./captionSession";
-import { TranscriptionProvider } from "./transcriptionProvider";
+import { Transcript, TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
 import { CurrentCall } from "./currentCall";
 import { ReaderPresence } from "./readerPresence";
@@ -97,6 +97,12 @@ export interface CaptionServer {
 
 /** Cap on a single audio POST body (~512 KB ≈ 16 s of 16 kHz mono Int16). */
 const MAX_AUDIO_BYTES = 512 * 1024;
+/**
+ * Cap on a single caption POST body. Lines are short sentences of text; 64 KB
+ * comfortably holds the biggest batch a client would queue up across a retry,
+ * and anything larger is not caption lines.
+ */
+const MAX_CAPTION_BYTES = 64 * 1024;
 const REAP_INTERVAL_MS = 5_000;
 /** A registration body is `{"kind":"watch"}`; anything larger is not one. */
 const MAX_REGISTRATION_BYTES = 1024;
@@ -744,7 +750,10 @@ async function handleRequest(
     return;
   }
 
-  if (req.method === "POST" && (url.pathname === "/v1/audio" || url.pathname === "/v1/stop")) {
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/v1/audio" || url.pathname === "/v1/captions" || url.pathname === "/v1/stop")
+  ) {
     const principal = principalFor(req, url, opts);
     if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
@@ -805,6 +814,70 @@ async function handleRequest(
         // and always absent for a live session, which creates none. Asking the
         // store rather than the query string keeps the answer stable for the
         // whole session, even if a later post drops the flag.
+        transcript: store.isEphemeral(principal.userId, session)
+          ? undefined
+          : opts.transcripts?.activeName(principal.userId, session),
+      });
+      return;
+    }
+
+    if (url.pathname === "/v1/captions") {
+      // Caption lines the client transcribed itself — the HTTP mirror of
+      // /stream's `{"caption":…}` frames, for the watch, which cannot open a
+      // WebSocket (TN3135; the same reason /v1/audio exists). Same auth,
+      // same client-chosen `session` id, same lifecycle as an audio session:
+      // created lazily on the first post, finalized by /v1/stop or the idle
+      // reaper. No transcription provider is opened for a session created
+      // here — there is no audio to transcribe (see
+      // `SessionStore.injectCaptions`).
+      let body: Buffer;
+      try {
+        body = await readBody(req, MAX_CAPTION_BYTES);
+      } catch {
+        sendJSON(res, 413, { error: "body too large" });
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.toString("utf8"));
+      } catch {
+        sendJSON(res, 400, { error: "invalid json" });
+        return;
+      }
+      // Unlike /stream, which silently ignores a malformed frame, HTTP has a
+      // status line to answer with — and a 400 must leave everything exactly
+      // as it was: validation happens before the session is created or
+      // touched, so a malformed body can neither mint a session nor kill one.
+      const rawLines = (parsed as { lines?: unknown } | null)?.lines;
+      if (!Array.isArray(rawLines)) {
+        sendJSON(res, 400, { error: "missing lines" });
+        return;
+      }
+      const lines: Transcript[] = [];
+      for (const line of rawLines) {
+        if (!isCaptionLine(line)) {
+          sendJSON(res, 400, { error: "malformed line" });
+          return;
+        }
+        lines.push({ text: line.text, isFinal: line.isFinal });
+      }
+      // The same append-to-an-existing-transcript binding the audio path has,
+      // with the same only-before-the-session-exists rule. Checked after
+      // validation — unlike /v1/audio, which reads `resume` before its body —
+      // so a rejected post cannot leave a reopened transcript bound to a
+      // session that was never created.
+      const resume = url.searchParams.get("resume");
+      if (resume && !store.has(principal.userId, session)) {
+        opts.transcripts?.reopen(principal.userId, session, resume);
+      }
+      store.injectCaptions(principal.userId, session, lines);
+      const { events, seq } = store.drain(principal.userId, session, since);
+      sendJSON(res, 200, {
+        events: flatten(events),
+        seq,
+        // Same contract as /v1/audio: names the transcript this session is
+        // writing to, so the client can offer to resume it later. Absent
+        // until the first final line creates the file.
         transcript: store.isEphemeral(principal.userId, session)
           ? undefined
           : opts.transcripts?.activeName(principal.userId, session),
@@ -1066,6 +1139,13 @@ function safeDecode(value: string): string | undefined {
 
 function flatten(events: { seq: number; payload: OutboundMessage }[]) {
   return events.map((e) => ({ seq: e.seq, ...e.payload }));
+}
+
+/** One client-computed caption line: `{"text":"…","isFinal":true|false}`. */
+function isCaptionLine(value: unknown): value is { text: string; isFinal: boolean } {
+  if (typeof value !== "object" || value === null) return false;
+  const { text, isFinal } = value as { text?: unknown; isFinal?: unknown };
+  return typeof text === "string" && typeof isFinal === "boolean";
 }
 
 /**

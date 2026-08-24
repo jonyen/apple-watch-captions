@@ -87,6 +87,28 @@ recovery. Boot-time re-adoption of such a directory is not built.
 - Clients MUST wait for `{"type":"ready"}` before sending audio; frames sent earlier are dropped.
 - Bad token → connection closed with code `4001`.
 
+### Client-computed captions over HTTP
+
+`POST /v1/captions?session=<id>` accepts caption lines the client transcribed
+itself (on-device transcription), as JSON:
+
+```
+{"lines":[{"text":"…","isFinal":false},{"text":"…","isFinal":true}]}
+```
+
+The HTTP mirror of `/stream`'s `{"caption":…}` frames, for the watch, which
+cannot open a WebSocket (TN3135 — the same reason `/v1/audio` exists). Same
+bearer auth and client-chosen `session` id as the audio path, and the same
+lifecycle: the session is created lazily on the first post and finalized by
+`POST /v1/stop?session=<id>` or the idle timeout. Only finals are persisted;
+the response carries the same `{events, seq, transcript}` shape as
+`/v1/audio` (`transcript` names the file once the first final creates it, so
+the client can `resume=` it later — the query param works here too). No
+transcription provider is opened for a caption-only session — there is no
+audio to transcribe — and audio sent later under the same session id is
+dropped rather than transcribed. Malformed bodies get a `400` and change
+nothing.
+
 ## Run
 
 ```bash

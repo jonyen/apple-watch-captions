@@ -211,6 +211,63 @@ describe("SessionStore ephemeral sessions", () => {
   });
 });
 
+describe("SessionStore caption injection", () => {
+  it("creates a caption-only session with no transcription provider", () => {
+    const { store, providers } = makeStore();
+    store.injectCaptions("u1", "s1", [{ text: "hi", isFinal: false }]);
+    expect(store.has("u1", "s1")).toBe(true);
+    expect(providers).toHaveLength(0);
+  });
+
+  it("buffers injected lines like provider captions and appends only finals", () => {
+    const { store, appended } = makeStore();
+    store.injectCaptions("u1", "s1", [
+      { text: "hel", isFinal: false },
+      { text: "hello world", isFinal: true },
+    ]);
+    const { events, seq } = store.drain("u1", "s1", 0);
+    expect(seq).toBe(2);
+    expect(events.map((e) => e.payload)).toEqual([
+      { type: "caption", text: "hel", isFinal: false },
+      { type: "caption", text: "hello world", isFinal: true },
+    ]);
+    expect(appended).toEqual(["hello world"]);
+  });
+
+  it("finalizes a caption-only session on stop and on idle reap, like audio", () => {
+    let t = 0;
+    const { store, finalized } = makeStore({ idleTimeoutMs: 100, now: () => t });
+    store.injectCaptions("u1", "s1", [{ text: "kept.", isFinal: true }]);
+    store.stop("u1", "s1");
+    expect(finalized).toEqual(["s1"]);
+
+    store.injectCaptions("u1", "s2", [{ text: "kept too.", isFinal: true }]);
+    t = 1000;
+    store.reapIdle();
+    expect(store.has("u1", "s2")).toBe(false);
+    expect(finalized).toEqual(["s1", "s2"]);
+  });
+
+  it("injects into an existing audio session rather than replacing it", () => {
+    const { store, providers, appended } = makeStore();
+    store.feed("u1", "s1", Buffer.from("audio"));
+    store.injectCaptions("u1", "s1", [{ text: "typed.", isFinal: true }]);
+    expect(providers).toHaveLength(1); // the audio session's provider, untouched
+    expect(appended).toEqual(["typed."]);
+  });
+
+  it("refreshes activity, so injecting keeps the session alive", () => {
+    let t = 0;
+    const { store } = makeStore({ idleTimeoutMs: 100, now: () => t });
+    store.injectCaptions("u1", "s1", [{ text: "x", isFinal: true }]);
+    t = 80;
+    store.injectCaptions("u1", "s1", []); // empty batch still counts as activity
+    t = 150;
+    store.reapIdle();
+    expect(store.has("u1", "s1")).toBe(true);
+  });
+});
+
 describe("provider options", () => {
   it("passes them to the factory when the session is created", () => {
     const seen: (ProviderOptions | undefined)[] = [];

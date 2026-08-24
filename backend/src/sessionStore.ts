@@ -1,6 +1,6 @@
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { ProviderOptions } from "./providerOptions";
-import { TranscriptionProvider } from "./transcriptionProvider";
+import { Transcript, TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
 
 export interface SeqEvent {
@@ -95,6 +95,23 @@ export class SessionStore {
   }
 
   /**
+   * Route caption lines the client transcribed itself into a session, lazily
+   * creating it caption-only on first use — the HTTP mirror of the `/stream`
+   * caption frame. Each line goes through `CaptionSession.injectTranscript`,
+   * so downstream (the event buffer a viewer drains, the transcript append
+   * for finals, finalize on stop/reap) it is indistinguishable from a line a
+   * wired provider emitted. A session created here opens no transcription
+   * provider — there is no audio to transcribe (see `captionOnlyProvider`);
+   * lines injected into an existing audio session share that session's
+   * buffer and transcript instead.
+   */
+  injectCaptions(userId: string, id: string, lines: Transcript[]): void {
+    const session = this.getOrCreate(userId, id, false, undefined, true);
+    session.lastActivity = this.now();
+    for (const line of lines) session.caption.injectTranscript(line);
+  }
+
+  /**
    * Events with `seq > since`, and the latest seq. Prunes events the client has
    * already acknowledged (`seq <= since`) so the buffer stays bounded.
    */
@@ -153,12 +170,13 @@ export class SessionStore {
     id: string,
     ephemeral: boolean,
     providerOpts?: ProviderOptions,
+    captionOnly = false,
   ): Session {
     const key = sessionKey(userId, id);
     const existing = this.sessions.get(key);
     if (existing) return existing;
 
-    const provider = this.createProvider(providerOpts);
+    const provider = captionOnly ? captionOnlyProvider() : this.createProvider(providerOpts);
     const session: Session = {
       caption: undefined as unknown as CaptionSession,
       events: [],
@@ -182,4 +200,22 @@ export class SessionStore {
     this.sessions.set(key, session);
     return session;
   }
+}
+
+/**
+ * Stands in for the transcription provider on a session whose captions the
+ * client computes itself (`injectCaptions`): there is no audio to transcribe,
+ * so nothing should be opened against Deepgram or the Apple sidecar only to
+ * idle for the session's whole lifetime. Like `ephemeral`, being caption-only
+ * is fixed at creation — audio that later arrives for such a session lands
+ * here and is dropped rather than transcribed.
+ */
+function captionOnlyProvider(): TranscriptionProvider {
+  return {
+    onTranscript: () => {},
+    onReady: () => {},
+    onError: () => {},
+    sendAudio: () => {},
+    close: () => {},
+  };
 }

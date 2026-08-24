@@ -274,6 +274,160 @@ ssh ring 'launchctl bootout gui/501/com.jonyen.caption-transcriber 2>/dev/null; 
   from this directory, since they are correctness fixes to the relay
   itself, not ring-specific deployment files.
 
+## Task 6: Tailscale Funnel exposure (public internet access)
+
+The relay (`ring:8080`) is now also reachable from the public internet at:
+
+```
+https://ring.tailb6f6c9.ts.net:10000/
+```
+
+**Coexistence with doorlog.** `ring` already runs doorlog behind `tailscale
+serve`/`funnel`. Before touching anything, `tailscale serve status` was run
+and its exact output recorded:
+
+```
+# Funnel on:
+#     - https://ring.tailb6f6c9.ts.net
+
+https://ring.tailb6f6c9.ts.net (Funnel on)
+|-- /                    proxy http://127.0.0.1:8787
+|-- /ring/token-exchange proxy http://127.0.0.1:8096
+
+http://ring (tailnet only)
+http://ring.tailb6f6c9.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:8099
+
+https://ring.tailb6f6c9.ts.net:8443 (tailnet only)
+|-- / proxy http://127.0.0.1:8100
+
+https://ring.tailb6f6c9.ts.net:9443 (tailnet only)
+|-- / proxy http://127.0.0.1:8110
+```
+
+Doorlog's mapping lives on port 80 (tailnet-only, `/` → `127.0.0.1:8099`);
+the existing public Funnel on 443 proxies unrelated services (`8787`,
+`8096`), and 8443/9443 are tailnet-only serve mappings (`8100`, `8110`).
+None of these were modified. Tailscale Funnel is only permitted on ports
+443, 8443, and 10000 per tailnet; 443 already carries doorlog-adjacent
+funnel mappings and 8443 already carries a tailnet-only serve mapping for
+an unrelated service, so **10000** — otherwise unused — was chosen for the
+relay to guarantee zero interference:
+
+```
+ssh ring '/usr/local/bin/tailscale funnel --bg --https=10000 http://127.0.0.1:8080'
+```
+
+(`tailscale` isn't on ring's non-interactive SSH `PATH`; invoked via its
+full path, `/usr/local/bin/tailscale`, a wrapper around
+`/Applications/Tailscale.app/Contents/MacOS/tailscale`. No ACL/policy error
+was hit — Funnel was already enabled for this tailnet.)
+
+Output:
+```
+Available on the internet:
+
+https://ring.tailb6f6c9.ts.net:10000/
+|-- proxy http://127.0.0.1:8080
+
+Funnel started and running in the background.
+To disable the proxy, run: tailscale funnel --https=10000 off
+```
+
+`tailscale serve status` re-run immediately after, confirming doorlog's
+mappings (port 80 → 8099, port 443 → 8787/8096, 8443 → 8100, 9443 → 8110)
+were untouched — only a new `:10000 (Funnel on)` entry was added:
+
+```
+# Funnel on:
+#     - https://ring.tailb6f6c9.ts.net:10000
+#     - https://ring.tailb6f6c9.ts.net
+
+https://ring.tailb6f6c9.ts.net:10000 (Funnel on)
+|-- / proxy http://127.0.0.1:8080
+
+https://ring.tailb6f6c9.ts.net (Funnel on)
+|-- /                    proxy http://127.0.0.1:8787
+|-- /ring/token-exchange proxy http://127.0.0.1:8096
+
+http://ring (tailnet only)
+http://ring.tailb6f6c9.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:8099
+
+https://ring.tailb6f6c9.ts.net:8443 (tailnet only)
+|-- / proxy http://127.0.0.1:8100
+
+https://ring.tailb6f6c9.ts.net:9443 (tailnet only)
+|-- / proxy http://127.0.0.1:8110
+```
+
+### Verification from off-tailnet (this Mac's public internet path)
+
+**Healthz over the funnel:**
+```
+curl -sS -i https://ring.tailb6f6c9.ts.net:10000/healthz
+# HTTP/2 200
+# ok
+```
+
+**Unauthenticated rejection.** The funnel URL is public — the relay's
+per-device token is the only guard. `/v1/devices` (device registration) is
+intentionally open by design, so the check that matters is `/stream`: a
+plain WebSocket connect with no `?token=` completes the HTTP upgrade (the
+`ws` library reports `OPEN`) but the relay immediately closes it —
+confirmed with a throwaway Node client:
+```
+OPEN (unexpected!)
+closed 4001 unauthorized
+```
+Code `4001` is the relay's own "unauthorized" close code
+(`backend/src/server.ts`, `resolveToken` returning no principal), not a
+generic transport failure — the same rejection path a plain `curl` GET to
+`/stream` also hits from the HTTP side (`404`, since `/stream` has no
+non-upgrade route).
+
+**End-to-end WS stream proof**, over the public funnel URL, using a
+throwaway token minted via the funnel itself
+(`POST https://ring.tailb6f6c9.ts.net:10000/v1/devices`) and `hello.wav`
+(the same asset Task 5 used), streamed as raw PCM16 mono 16 kHz to
+`wss://ring.tailb6f6c9.ts.net:10000/stream?token=<token>` (same protocol as
+Task 5's on-tailnet proof: binary PCM chunks, then `{"finish":true}`):
+
+```
+{"type":"ready"}
+{"type":"caption","text":"Hello","isFinal":false}
+...
+{"type":"caption","text":"Hello, this is a test of captions running on the","isFinal":false}
+(finish sent)
+{"type":"caption","text":"Hello, this is a test of captions running on the watch","isFinal":false}
+{"type":"caption","text":"Hello, this is a test of captions running on the watch.","isFinal":false}
+{"type":"caption","text":"Hello, this is a test of captions running on the watch.","isFinal":true}
+closed 1005 partial=true final=true
+```
+
+Partials and a true final both arrived over the public funnel URL,
+confirming the full chain (public internet → Tailscale Funnel → relay on
+ring:8080 → Apple provider → transcriber sidecar on ring:8790 →
+SpeechAnalyzer → back out) works end to end, off-tailnet.
+
+### Notes / concerns for Task 7
+
+- The relay is now reachable from the open internet at
+  `https://ring.tailb6f6c9.ts.net:10000/`. Auth is enforced solely by the
+  per-device token on `/stream` (and presumably other data-bearing routes —
+  not independently re-audited here beyond `/stream` and `/v1/devices`);
+  worth a broader auth audit of every route before relying on this for
+  anything sensitive long-term.
+- `/v1/devices` registration is unauthenticated by design (anyone can mint a
+  throwaway device/token) — same as it was over the tailnet in Task 5, now
+  simply reachable publicly too. This registered one more throwaway `watch`
+  device in the identity DB (on top of Task 5's), for this task's own
+  smoke test.
+- To disable the funnel later: `ssh ring "/usr/local/bin/tailscale funnel --https=10000 off"`.
+- `tailscale` is not on ring's default non-interactive SSH PATH; use
+  `/usr/local/bin/tailscale` (a thin wrapper around
+  `/Applications/Tailscale.app/Contents/MacOS/tailscale`).
+
 ## Concerns for whoever picks up Task 6/7
 
 - The relay's identity DB on ring now has exactly one throwaway `watch`

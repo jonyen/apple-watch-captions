@@ -24,10 +24,11 @@ final class AppModel: ObservableObject {
     @Published var path: [Route] = []
     /// True while a session is capturing, which takes over the whole screen.
     @Published private(set) var capturing = false
-    /// True when the session on screen is not resumable — live-only, or
-    /// on-device (whose kept transcript the relay never names to the watch,
-    /// so there is nothing to offer resuming either). Drives the relay
-    /// sessions' indicator, and keeps the session out of the resume offer.
+    /// True when the session on screen keeps nothing by itself — live-only,
+    /// or on-device. Drives the relay sessions' indicator, and marks a
+    /// session that ends without a named transcript as deliberately ended
+    /// (see `rememberCurrentSession` — a kept on-device session whose
+    /// transcript the relay did name is remembered despite this flag).
     @Published private(set) var live = false
 
     // MARK: - Home-screen toggles
@@ -150,6 +151,11 @@ final class AppModel: ObservableObject {
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
         onDeviceEngine.onKept = { [weak self] kept in self?.onDeviceKept = kept }
+        // A kept on-device session learns its relay transcript's name from
+        // the caption uploader's first acknowledged post — the same
+        // bookkeeping the relay engine's onTranscript feeds, so
+        // `rememberCurrentSession` can offer to resume the transcript later.
+        onDeviceEngine.onTranscript = { [weak self] name in self?.currentTranscript = name }
     }
 
     // MARK: - Launching
@@ -248,10 +254,12 @@ final class AppModel: ObservableObject {
     private func startOnDeviceSession(keep: Bool) async {
         stoppedExplicitly = false
         currentTranscript = nil
-        // A kept on-device session does leave a relay transcript, but the
-        // `/stream` path never tells the watch its name, so like a live
-        // session it is not resumable — and `rememberCurrentSession` should
-        // treat it the same way.
+        // A kept on-device session leaves a relay transcript, and the HTTP
+        // caption path names it to the watch (the old WebSocket path never
+        // did). `live` still marks the session as keeping nothing *by
+        // itself*: if no post is ever acknowledged there is no name, and
+        // `rememberCurrentSession` then treats the session as deliberately
+        // ended rather than offering some older relay session afterwards.
         live = true
         onDevice = true
         onDeviceKeep = keep
@@ -348,17 +356,21 @@ final class AppModel: ObservableObject {
     }
 
     private func rememberCurrentSession() {
-        // A live session leaves nothing this watch could resume — no
-        // transcript at all, or (kept on-device) one whose name the relay
-        // never shares — so there is nothing to offer on Start; and marking
-        // it as deliberately stopped keeps the next Start from offering
-        // whichever saved session preceded it, which would read as the app
-        // ignoring the choice you just made.
-        if live {
-            stoppedExplicitly = true
+        // The transcript name is what decides whether there is anything to
+        // offer on Start. A kept on-device session gets one from the caption
+        // uploader's HTTP responses (see `onDeviceEngine.onTranscript`), so
+        // despite `live` it is recorded like any saved session — switching
+        // the toggles back to relay mode within the window offers to resume
+        // it, and the relay appends to the same transcript. Without a name —
+        // a genuinely live session, an unkept on-device one, or a kept one
+        // whose posts never reached the relay — there is nothing to offer,
+        // and marking the session deliberately ended keeps the next Start
+        // from offering whichever saved session preceded it, which would
+        // read as the app ignoring the choice you just made.
+        guard let name = currentTranscript else {
+            if live { stoppedExplicitly = true }
             return
         }
-        guard let name = currentTranscript else { return }
         let session = LastSession(transcriptName: name, endedAt: Date())
         lastSession = session
         defaults.set(name, forKey: Keys.transcriptName)

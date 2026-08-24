@@ -1,185 +1,245 @@
 import Foundation
 import os
 
-/// Sends caption lines to the relay's `/stream` WebSocket, so a session whose
-/// captions are computed on the watch still leaves a transcript on the relay.
+/// Posts caption lines to the relay's `/v1/captions` endpoint, so a session
+/// whose captions are computed on the watch still leaves a transcript on the
+/// relay.
 ///
-/// The write half only: no audio ever goes up this socket, and whatever the
-/// relay sends back is read and discarded — the local engine is the source of
-/// truth for the screen. Each final line goes up as a text frame,
-/// `{"caption":{"text":"…","isFinal":true}}`, which the relay stores exactly
-/// like a line it transcribed itself; a caption-only session sends no audio,
-/// and the relay finalizes the transcript when the socket closes, so
-/// `close()` is the whole "done" gesture.
+/// HTTP, not the `/stream` WebSocket the relay also accepts caption frames
+/// on: watchOS blocks WebSockets for normal apps (TN3135) — the very reason
+/// `HTTPRelayClient` talks HTTP — so this client mirrors that shape instead.
+/// A client-minted session id names the relay session (`?session=`, same as
+/// the audio path), each post carries the bearer token, the relay creates
+/// the session lazily on the first post, and `close()` posts `/v1/stop`,
+/// which finalizes the transcript exactly as it does for an audio session
+/// (the relay's idle timeout finalizes it anyway if the stop never arrives).
+///
+/// The write half only: no audio ever goes up, and the response is read for
+/// just two fields — the `transcript` name (reported once through
+/// `onTranscript`, so the app can offer to resume the transcript later; the
+/// old WebSocket path could never learn it) and the `seq` cursor, echoed
+/// back as `since` so the relay prunes its event buffer. The local engine is
+/// the source of truth for the screen.
 ///
 /// Failure here is lost persistence, never a session error: captions keep
-/// coming from the local engine either way. A connect or send failure only
-/// logs and reports through `onKept`, so the captions screen can fall back to
-/// its not-saved indicator. There is no reconnect: a session that loses the
-/// relay midway finishes as a partial transcript rather than juggling gaps.
-///
-/// The handshake mirrors what the other relay clients derive from
-/// `Secrets.relayURL`: that wss URL is used as-is — it already names
-/// `/stream` — with this device's bearer token appended as `?token=`, which
-/// is where the relay's upgrade handler looks (WebSocket upgrades carry the
-/// token in the query, unlike the HTTP endpoints' `Authorization` header —
-/// sent here too, for symmetry with those clients).
+/// coming from the local engine either way. Lines queue in memory while a
+/// post is in flight and go up as one batch; a batch that fails is retried
+/// once and then dropped with a log line, with `onKept` reporting the
+/// downgrade so the captions screen falls back to its not-saved indicator.
+/// Later lines still get their own attempt — a transient blip costs the
+/// lines queued during it, not the rest of the transcript — and a later
+/// acknowledged post flips the indicator back.
 ///
 /// `@unchecked Sendable`: all mutable state is confined to `queue`, the same
 /// discipline as `HTTPRelayClient`.
 final class CaptionUploader: @unchecked Sendable {
-    /// Reports whether lines are reaching the relay: true after the first
-    /// send the socket acknowledges, false again if the socket fails later.
-    /// Never fires for a clean `close()`.
+    /// Reports whether lines are reaching the relay: true after each
+    /// acknowledged post that carried lines, false again when a batch is
+    /// dropped. Never fires for a clean `close()`.
     var onKept: (@MainActor (Bool) -> Void)?
+    /// Fires once with the transcript this session is writing to, when the
+    /// relay first names it (its first response after a final line landed).
+    var onTranscript: (@MainActor (String) -> Void)?
 
-    private let url: URL
+    private struct Line {
+        let text: String
+        let isFinal: Bool
+    }
+
+    private let base: URL
     /// Resolves this device's bearer token — the same provider every relay
-    /// client holds, resolved when the connection is actually made.
+    /// client holds, resolved when a request is actually sent.
     private let token: @Sendable () async throws -> String
     private let session: URLSession
     private let queue = DispatchQueue(label: "caption.uploader")
 
-    private var task: URLSessionWebSocketTask?
-    /// Frames queued while the token resolves; the socket task itself queues
-    /// anything sent before its handshake finishes.
-    private var pending: [String] = []
+    /// This session's relay name — minted per uploader, one uploader per
+    /// session, the same way `HTTPRelayClient` mints one per connect.
+    private let sessionID = UUID().uuidString
+    /// Lines awaiting the next post; whatever accumulates while a post is in
+    /// flight goes up together as one batch.
+    private var pending: [Line] = []
+    private var inFlight = false
     private var closed = false
-    private var failed = false
+    private var stopSent = false
     private var kept = false
+    private var transcriptDelivered = false
+    private var lastSeq = 0
     private let log = Logger(subsystem: "com.jonyen.watchcaptions", category: "CaptionUploader")
 
-    /// `url` is the relay's `/stream` WebSocket URL (`Secrets.relayURL`);
-    /// `token` authorizes the upgrade.
-    init(url: URL = Secrets.relayURL, token: @escaping @Sendable () async throws -> String) {
-        self.url = url
+    /// `base` is the relay's HTTP(S) origin — derived from `Secrets.relayURL`
+    /// the same way every other relay client derives it; `token` authorizes
+    /// each request.
+    init(
+        base: URL = RelayOrigin.http(from: Secrets.relayURL),
+        token: @escaping @Sendable () async throws -> String
+    ) {
+        self.base = base
         self.token = token
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15   // fail the handshake rather than hang
+        config.timeoutIntervalForRequest = 15   // fail a post rather than hang
         session = URLSession(configuration: config)
     }
 
-    /// Open the socket. Lines sent before it is up are queued, so the first
-    /// sentence of the session is kept, not raced against the handshake.
-    func connect() {
+    /// Nothing to open over HTTP: the relay creates the session lazily on the
+    /// first post, the same way `/v1/audio` does for an audio session. Kept
+    /// so the engine's start sequence reads like the other relay clients'.
+    func connect() {}
+
+    /// Queue one caption line. Safe to call from any thread; dropped silently
+    /// once `close()` has run.
+    func send(text: String, isFinal: Bool) {
+        queue.async { [weak self] in
+            guard let self, !self.closed else { return }
+            self.pending.append(Line(text: text, isFinal: isFinal))
+            self.flushNext()
+        }
+    }
+
+    /// Flush whatever is still queued, then post `/v1/stop` — which is what
+    /// tells the relay the session is over: it finalizes the transcript, the
+    /// same call `HTTPRelayClient` ends its sessions with.
+    func close() {
+        queue.async { [weak self] in
+            guard let self, !self.closed else { return }
+            self.closed = true
+            self.flushNext()
+        }
+    }
+
+    // MARK: - Internals (all run on `queue`)
+
+    /// Post the queued lines if nothing is in flight; once closed and
+    /// drained, post the stop instead. Every completion path funnels back
+    /// here, so the stop can never overtake a caption post — a stop arriving
+    /// first would finalize the transcript before its last line, and a post
+    /// arriving after would lazily recreate the session it just released.
+    private func flushNext() {
+        guard !inFlight else { return }
+        if pending.isEmpty {
+            if closed, !stopSent {
+                stopSent = true
+                sendStop()
+            }
+            return
+        }
+        let batch = pending
+        pending.removeAll()
+        inFlight = true
+        post(batch, retriesLeft: 1)
+    }
+
+    private func post(_ batch: [Line], retriesLeft: Int) {
         let token = self.token
         Task { [weak self] in
             let bearer: String
             do {
                 bearer = try await token()
             } catch {
-                self?.queue.async { self?.fail("could not resolve device token: \(error)") }
+                self?.queue.async {
+                    self?.attemptFailed(
+                        batch,
+                        retriesLeft: retriesLeft,
+                        reason: "could not resolve device token: \(error)")
+                }
                 return
             }
             guard let self else { return }
             self.queue.async {
-                guard !self.closed, !self.failed, self.task == nil else { return }
-                var request = URLRequest(url: self.streamURL(bearer: bearer))
-                request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-                let task = self.session.webSocketTask(with: request)
-                self.task = task
-                task.resume()
-                self.receiveLoop(task)
-                let queued = self.pending
-                self.pending.removeAll()
-                for frame in queued { self.transmit(frame, over: task) }
+                var req = URLRequest(url: self.url(path: "v1/captions", since: self.lastSeq))
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+                req.httpBody = Self.body(for: batch)
+                self.session.dataTask(with: req) { [weak self] data, response, error in
+                    guard let self else { return }
+                    self.queue.async {
+                        guard error == nil, let data,
+                              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                            let status = (response as? HTTPURLResponse).map { "HTTP \($0.statusCode)" }
+                            self.attemptFailed(
+                                batch,
+                                retriesLeft: retriesLeft,
+                                reason: error?.localizedDescription ?? status ?? "no response")
+                            return
+                        }
+                        self.posted(batch, response: data)
+                    }
+                }.resume()
             }
         }
     }
 
-    /// Queue one caption line. Safe to call from any thread; drops silently
-    /// once the socket has failed — the loss is already reported via `onKept`.
-    func send(text: String, isFinal: Bool) {
-        guard let frame = Self.frame(text: text, isFinal: isFinal) else { return }
-        queue.async { [weak self] in
-            guard let self, !self.closed, !self.failed else { return }
-            if let task = self.task {
-                self.transmit(frame, over: task)
-            } else {
-                self.pending.append(frame)
+    /// An acknowledged post: the relay stored the batch. Note the seq cursor
+    /// and the transcript name, flip the indicator, and keep draining.
+    private func posted(_ batch: [Line], response data: Data) {
+        inFlight = false
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let seq = obj["seq"] as? Int { lastSeq = max(lastSeq, seq) }
+            if let name = obj["transcript"] as? String, !transcriptDelivered {
+                transcriptDelivered = true
+                if let onTranscript { Task { @MainActor in onTranscript(name) } }
             }
         }
-    }
-
-    /// Close the socket normally. This is what tells the relay the session is
-    /// over: it finalizes the transcript on close.
-    func close() {
-        queue.async { [weak self] in
-            guard let self, !self.closed else { return }
-            self.closed = true
-            self.pending.removeAll()
-            self.task?.cancel(with: .normalClosure, reason: nil)
-            self.task = nil
+        // Only a post that carried lines proves the transcript is being kept;
+        // this also flips the indicator back after an earlier dropped batch.
+        if !batch.isEmpty, !kept {
+            kept = true
+            deliverKept(true)
         }
+        flushNext()
     }
 
-    // MARK: - Internals (all run on `queue`)
-
-    /// `Secrets.relayURL` with the bearer token in the query, where the
-    /// relay's upgrade handler reads it.
-    private func streamURL(bearer: String) -> URL {
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        var items = components.queryItems ?? []
-        items.append(URLQueryItem(name: "token", value: bearer))
-        components.queryItems = items
-        return components.url!
-    }
-
-    private static func frame(text: String, isFinal: Bool) -> String? {
-        let object: [String: Any] = ["caption": ["text": text, "isFinal": isFinal]]
-        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func transmit(_ frame: String, over task: URLSessionWebSocketTask) {
-        task.send(.string(frame)) { [weak self] error in
-            guard let self else { return }
-            self.queue.async {
-                guard !self.closed else { return }
-                if let error {
-                    self.fail("send failed: \(error.localizedDescription)")
-                } else if !self.kept {
-                    // First acknowledged line: the transcript exists on the
-                    // relay now, so the screen may say so.
-                    self.kept = true
-                    self.deliverKept(true)
-                }
-            }
-        }
-    }
-
-    /// Read and discard whatever the relay sends. The loop exists to notice
-    /// the socket dying — a server-side close or transport failure surfaces
-    /// here — not for the content.
-    private func receiveLoop(_ task: URLSessionWebSocketTask) {
-        task.receive { [weak self] result in
-            guard let self else { return }
-            self.queue.async {
-                guard !self.closed, !self.failed else { return }
-                switch result {
-                case .success:
-                    self.receiveLoop(task)
-                case .failure(let error):
-                    self.fail("socket failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    /// Give up on persistence, quietly: log, drop the socket and anything
-    /// queued, and let `onKept` downgrade the indicator. The session itself
+    /// One attempt failed: try the batch once more, then drop it. Dropping is
+    /// lost persistence, quietly — log, downgrade the indicator via `onKept`,
+    /// and move on to whatever queued since (or the stop). The session itself
     /// is never touched.
-    private func fail(_ reason: String) {
-        guard !closed, !failed else { return }
-        failed = true
-        log.error("captions not kept — \(reason, privacy: .public)")
-        pending.removeAll()
-        task?.cancel(with: .normalClosure, reason: nil)
-        task = nil
+    private func attemptFailed(_ batch: [Line], retriesLeft: Int, reason: String) {
+        if retriesLeft > 0 {
+            post(batch, retriesLeft: retriesLeft - 1)
+            return
+        }
+        log.error(
+            "dropping \(batch.count) caption line(s) after retry — \(reason, privacy: .public)")
+        inFlight = false
         if kept {
             kept = false
             deliverKept(false)
         }
+        flushNext()
+    }
+
+    /// Best-effort release, exactly like `HTTPRelayClient.close()`: the relay
+    /// finalizes on its idle timeout anyway if this never lands.
+    private func sendStop() {
+        let url = url(path: "v1/stop")
+        let token = self.token
+        let session = self.session
+        Task {
+            guard let bearer = try? await token() else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+            session.dataTask(with: req).resume()
+        }
+    }
+
+    /// Build a request URL for this session, optionally with a `since` cursor.
+    private func url(path: String, since: Int? = nil) -> URL {
+        var c = URLComponents(
+            url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        var items = [URLQueryItem(name: "session", value: sessionID)]
+        if let since { items.append(URLQueryItem(name: "since", value: String(since))) }
+        c.queryItems = items
+        return c.url!
+    }
+
+    /// `{"lines":[{"text":"…","isFinal":true}, …]}` — the endpoint's batch
+    /// shape, one-or-more lines per post.
+    private static func body(for batch: [Line]) -> Data {
+        let lines = batch.map { ["text": $0.text, "isFinal": $0.isFinal] as [String: Any] }
+        return (try? JSONSerialization.data(withJSONObject: ["lines": lines]))
+            ?? Data(#"{"lines":[]}"#.utf8)
     }
 
     private func deliverKept(_ kept: Bool) {

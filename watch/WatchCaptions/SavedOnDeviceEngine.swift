@@ -3,7 +3,7 @@ import CaptionCore
 
 /// The on-device engine, with the transcript kept: a `MoonshineEngine` does
 /// the captioning exactly as in an unkept session, and every final line it
-/// produces is also forwarded to the relay over a `CaptionUploader`, so the
+/// produces is also posted to the relay through a `CaptionUploader`, so the
 /// session ends up stored — and summarized and exported — like any saved
 /// relay session.
 ///
@@ -17,7 +17,8 @@ import CaptionCore
 /// The uploader can never fail the session — see `CaptionUploader` — so
 /// `onEvent`/`onClose` are Moonshine's alone; the uploader reports only
 /// through `onKept`, which drives the captions screen's saved/not-saved
-/// indicator.
+/// indicator, and `onTranscript`, which names the relay transcript so the
+/// app can offer to resume it later.
 ///
 /// Not `Sendable` and needs no lock: `start()`/`close()` run on the main
 /// actor (`SessionController` is `@MainActor`) and the engine tap below is a
@@ -29,15 +30,18 @@ final class SavedOnDeviceEngine: CaptionEngine {
     /// Fires with whether this session's lines are reaching the relay. See
     /// `CaptionUploader.onKept`.
     var onKept: (@MainActor (Bool) -> Void)?
+    /// Fires once with the transcript this session is writing to, when the
+    /// relay names it. See `CaptionUploader.onTranscript`.
+    var onTranscript: (@MainActor (String) -> Void)?
     /// Whether the next session uploads its lines. Set before `start()`;
     /// read once per connect, like `HTTPRelayClient.mode`.
     var keep = false
 
     private let engine: MoonshineEngine
-    /// A fresh uploader per kept session — a socket is a per-session thing —
-    /// injected as a factory so this type never learns URLs or tokens.
+    /// A fresh uploader per kept session — a relay session is a per-session
+    /// thing — injected as a factory so this type never learns URLs or tokens.
     private let makeUploader: () -> CaptionUploader
-    /// The current session's socket; nil while `keep` was false at `start()`.
+    /// The current session's uploader; nil while `keep` was false at `start()`.
     private var uploader: CaptionUploader?
 
     init(engine: MoonshineEngine, makeUploader: @escaping () -> CaptionUploader) {
@@ -57,6 +61,7 @@ final class SavedOnDeviceEngine: CaptionEngine {
         if keep {
             let uploader = makeUploader()
             uploader.onKept = { [weak self] kept in self?.onKept?(kept) }
+            uploader.onTranscript = { [weak self] name in self?.onTranscript?(name) }
             self.uploader = uploader
             uploader.connect()
         } else {
@@ -71,7 +76,8 @@ final class SavedOnDeviceEngine: CaptionEngine {
     }
 
     func close() {
-        // Closing the socket is what finalizes the relay's transcript.
+        // Closing the uploader flushes its queue and posts /v1/stop, which is
+        // what finalizes the relay's transcript.
         uploader?.close()
         uploader = nil
         engine.close()

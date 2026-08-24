@@ -91,6 +91,9 @@ final class AppModel: ObservableObject {
     /// because it joins a session the phone owns rather than starting one — but
     /// it shares `store`, since only one thing is ever on screen.
     private let phoneController: SessionController
+    /// The on-device session. Its own controller and engine — Moonshine on
+    /// Core ML instead of the relay — but the same store and the same mic.
+    private let onDeviceController: SessionController
     /// Restores a resumed session's scrollback behind `controller`. Kept off
     /// `SessionController` itself so a fetch that outlives its session has
     /// somewhere to be guarded without the controller knowing history exists.
@@ -109,6 +112,10 @@ final class AppModel: ObservableObject {
     /// "Continue last" bookkeeping — none of which apply to reading a session
     /// this Watch does not own.
     @Published private(set) var readingPhone = false
+    /// True while the running mic session is the on-device one, so Stop,
+    /// retry and the indicator address the right controller. Live-only by
+    /// construction: nothing reaches the relay.
+    @Published private(set) var onDevice = false
     /// Whether the phone has fed the shared session recently.
     ///
     /// Drives two things: whether the menu offers iPhone audio at all, and
@@ -156,6 +163,11 @@ final class AppModel: ObservableObject {
             audio: AudioCapture(),
             permission: micPermission
         )
+        onDeviceController = SessionController(
+            store: store,
+            relay: MoonshineEngine(),
+            audio: AudioCapture(),
+            permission: micPermission)
         // Resuming a session restores its transcript; this reads it. Kept off
         // HistoryStore, whose `detail` belongs to the history screen.
         prefiller = TranscriptPrefiller(history: historyClient)
@@ -479,6 +491,18 @@ final class AppModel: ObservableObject {
         await startCaptions(mode: .live)
     }
 
+    /// Caption on the watch itself. Live-only: there is no transcript to
+    /// resume or browse afterwards.
+    func startOnDevice() async {
+        stoppedExplicitly = false
+        currentTranscript = nil
+        live = true
+        onDevice = true
+        path = [.captions]
+        capturing = true
+        await onDeviceController.start()
+    }
+
     func continueLast() async {
         guard let name = lastSession?.transcriptName else { return }
         await startCaptions(mode: .saved(resuming: name))
@@ -491,7 +515,9 @@ final class AppModel: ObservableObject {
     /// Restart after a connection error, in the mode that failed. Retrying a
     /// live session must not quietly start recording one.
     func retry() async {
-        if live {
+        if onDevice {
+            await startOnDevice()
+        } else if live {
             await startLive()
         } else {
             await startNew()
@@ -538,11 +564,16 @@ final class AppModel: ObservableObject {
     }
 
     private func endCapture() {
-        controller.stop()
-        prefiller.cancel()
+        if onDevice {
+            onDeviceController.stop()
+        } else {
+            controller.stop()
+            prefiller.cancel()
+        }
         rememberCurrentSession()
         capturing = false
         live = false
+        onDevice = false
     }
 
     /// Stops capture and records the session: a saved session as resumable —
@@ -552,7 +583,7 @@ final class AppModel: ObservableObject {
     /// substitute for `endCapture()`. Currently uncalled.
     func pause() {
         guard capturing else { return }
-        controller.stop()
+        (onDevice ? onDeviceController : controller).stop()
         prefiller.cancel()
         rememberCurrentSession()
     }

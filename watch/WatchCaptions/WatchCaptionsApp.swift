@@ -52,6 +52,7 @@ private struct RootView: View {
                     lastSession: model.lastSession,
                     onNew: { Task { await model.startNew() } },
                     onLive: { Task { await model.startLive() } },
+                    onOnDevice: { Task { await model.startOnDevice() } },
                     onContinue: { Task { await model.continueLast() } },
                     onBrowse: { Task { await model.showHistory() } },
                     onTakeCall: { model.takeCall() },
@@ -100,7 +101,7 @@ private struct RootView: View {
         case .listening:
             CaptionView(
                 store: store,
-                indicator: model.live ? .liveOnly : .recording,
+                indicator: model.onDevice ? .onDevice : (model.live ? .liveOnly : .recording),
                 textSize: model.settings.captionTextSize,
                 onStop: { model.stop() },
                 onTalkChanged: nil)

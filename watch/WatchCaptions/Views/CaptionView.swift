@@ -8,6 +8,8 @@ enum CaptionIndicator {
     case recording
     /// A mic session keeping nothing.
     case liveOnly
+    /// A mic session captioned on the watch itself; nothing is saved.
+    case onDevice
     /// Reading a live phone call.
     case call
     /// The call is over, or its captions are.
@@ -19,6 +21,7 @@ enum CaptionIndicator {
         switch self {
         case .recording: return "Recording"
         case .liveOnly: return "Live only, not saved"
+        case .onDevice: return "On device, not saved"
         case .call: return "Tuned in"
         case .phone: return "Reading iPhone audio"
         case .callEnded(.ended): return "Audio ended"
@@ -99,6 +102,8 @@ struct CaptionView: View {
                 case .recording:
                     Circle().fill(.green)
                 case .liveOnly:
+                    Circle().strokeBorder(.green, lineWidth: 1.5)
+                case .onDevice:
                     Circle().strokeBorder(.green, lineWidth: 1.5)
                 case .call:
                     Circle().fill(.blue)

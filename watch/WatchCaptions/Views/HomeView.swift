@@ -7,6 +7,8 @@ struct HomeView: View {
     let onNew: () -> Void
     /// Caption without keeping a transcript.
     let onLive: () -> Void
+    /// Caption on the watch itself — no relay, nothing saved.
+    let onOnDevice: () -> Void
     let onContinue: () -> Void
     let onBrowse: () -> Void
     let onTakeCall: () -> Void
@@ -34,6 +36,10 @@ struct HomeView: View {
                 Label("Off the record", systemImage: "circle")
             }
             .accessibilityHint("Captions on screen only. Nothing is saved.")
+            Button(action: onOnDevice) {
+                Label("On device", systemImage: "cpu")
+            }
+            .accessibilityHint("Captions computed on the watch. Nothing is saved.")
             if lastSession != nil {
                 Button(action: onContinue) {
                     Label("Resume previous", systemImage: "arrow.clockwise")

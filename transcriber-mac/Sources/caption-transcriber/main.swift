@@ -63,4 +63,18 @@ if let i = args.firstIndex(of: "--file"), i + 1 < args.count {
     }
     exit(0)
 }
-print("caption-transcriber: --file <wav> | server (Task 3)")
+
+// Server mode is the default (no args): WebSocket server on 127.0.0.1;
+// PORT env overrides the port.
+let port: UInt16 = {
+    if let raw = ProcessInfo.processInfo.environment["PORT"], let value = UInt16(raw) {
+        return value
+    }
+    return 8790
+}()
+do {
+    try await WebSocketServer.run(port: port)
+} catch {
+    FileHandle.standardError.write(Data("transcriber: server failed: \(error)\n".utf8))
+    exit(1)
+}

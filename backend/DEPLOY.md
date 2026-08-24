@@ -1,4 +1,31 @@
-# Deploying the STT Relay to Fly.io
+# Deploying the STT Relay
+
+## Current deployment reality (as of 2026-08-24)
+
+The relay now runs on the user's iMac, `ring`, reachable over Tailscale —
+**not on Fly**. It runs as a user LaunchAgent (`com.jonyen.caption-relay`,
+port 8080) alongside a local Apple-transcription sidecar
+(`com.jonyen.caption-transcriber`, port 8790, wraps `SpeechAnalyzer`), and is
+exposed to the public internet via Tailscale Funnel at
+`https://ring.tailb6f6c9.ts.net:10000/`. `TRANSCRIPTION_PROVIDER=apple` points
+the relay at the sidecar instead of Deepgram; there is no Deepgram key
+configured on ring. See [`deploy/ring/README.md`](../deploy/ring/README.md)
+for the full deployment (directory layout, launchd plists, the env file, and
+how to redeploy after a code change).
+
+The Fly deployment below is **retired-pending**: the app (`watch-captions-relay`)
+still exists and is soaking as a rollback path, but the apps (watch/iOS
+`Secrets.swift`) now point at ring, and real transcript/session data has been
+migrated off the Fly volume (see "Data migration from Fly" below). Once the
+ring deployment has soaked for a few days, the Fly app is scaled to zero and
+its Deepgram key revoked — see the retirement checklist in
+`deploy/ring/README.md`.
+
+The rest of this document describes the **original Fly.io deployment**,
+retained for reference and as a rollback path until the ring deployment has
+soaked.
+
+---
 
 The service runs via `tsx` (see README). Fly builds the `Dockerfile` and runs it.
 Config lives in `fly.toml`. Secrets — `DEEPGRAM_API_KEY` and (optionally)
@@ -6,6 +33,33 @@ Config lives in `fly.toml`. Secrets — `DEEPGRAM_API_KEY` and (optionally)
 `AUTH_TOKEN`: devices authenticate by self-registering with `POST /v1/devices`
 and getting their own bearer token back — see backend/README.md
 "Authentication".
+
+## Data migration from Fly (2026-08-24)
+
+The live Fly deployment (`watch-captions-relay`, machine last updated
+2026-08-15) turned out to predate the multi-tenant identity database
+entirely — it runs on Node 20 (the identity DB requires Node ≥23.4's
+built-in `node:sqlite`, hence the current `Dockerfile`'s `node:24-slim`), has
+no `identity.db` at all, and stores transcripts as loose files directly under
+`/data/transcripts` rather than per-user subdirectories. There was no
+`identity.db` to `fly ssh sftp get` — the brief's assumption that one existed
+did not hold.
+
+Instead, the 114 loose transcript files (50 `.jsonl` sessions, 32
+`.summary.md`, 32 `.notion.json`, plus a legacy `settings.json`) were pulled
+down (`fly ssh console -C "tar czf - -C /data/transcripts ."`, piped straight
+to a file — never a value was printed) and copied onto ring's
+`TRANSCRIPTS_DIR` root via `rsync`. The relay's own `migrateFlatTranscripts`
+(`backend/src/tenantMigration.ts`), which already exists specifically for
+this "pre-multi-tenant flat directory" case, ran automatically on the next
+boot: it minted one new `mac`-kind user + device for the migrated history,
+moved all 114 files under that user's directory, and logged the one-time
+bearer token needed to view it at `/app`. Two throwaway `watch` devices
+registered during Tasks 5–6's smoke tests remain in ring's identity DB
+(harmless test data, `"Hello, this is a test of captions running on the
+watch."`) — deleting them was left for the user (see
+`.superpowers/sdd/2026-08-24-imac-relay-local-stt/task-7-report.md` for the
+exact IDs and cleanup command).
 
 ## Prerequisites
 

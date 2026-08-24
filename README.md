@@ -2,8 +2,13 @@
 
 A standalone **watchOS** app that listens through the Watch microphone and shows
 **live captions** of nearby speech on your wrist — no phone app required. Audio is
-streamed to a small relay that runs it through [Deepgram](https://deepgram.com)
-speech-to-text and streams caption text back.
+streamed to a small relay — now running on the user's iMac (`ring`), reachable via
+Tailscale Funnel, using Apple's on-device `SpeechAnalyzer` through a local
+transcriber sidecar instead of a cloud STT provider (originally
+[Deepgram](https://deepgram.com) on Fly.io; see
+[`backend/DEPLOY.md`](backend/DEPLOY.md) and
+[`deploy/ring/README.md`](deploy/ring/README.md)) — which streams caption text
+back.
 
 Runs whenever the app is open (no buttons); works over the paired iPhone, Wi‑Fi,
 or the Watch's own **cellular** when the phone is away.

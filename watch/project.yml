@@ -11,7 +11,7 @@ packages:
     path: ../CaptionRelay
   MoonshineKit:
     url: https://github.com/jonyen/moonshine-coreml
-    from: 0.1.0
+    from: 0.2.0
 targets:
   WatchCaptions:
     type: application

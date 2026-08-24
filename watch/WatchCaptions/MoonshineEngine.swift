@@ -45,7 +45,10 @@ final class MoonshineEngine: CaptionEngine {
         let directory = modelDirectory
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let model = try MoonshineModel(directory: directory)
+                // CPU only: on watch hardware the ANE accepts this model at
+                // load but fails every prediction (ANEProgramProcessRequestDirect
+                // status=0x1d), and Core ML does not fall back at that point.
+                let model = try MoonshineModel(directory: directory, computeUnits: .cpuOnly)
                 let live = LiveTranscriber(transcriber: Transcriber(model: model))
                 guard let self else { return }
                 live.onPartial = { [weak self] text in self?.report(text, isFinal: false) }

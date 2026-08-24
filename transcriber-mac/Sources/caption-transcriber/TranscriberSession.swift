@@ -9,6 +9,11 @@ import Speech
 /// pump task, which decodes, converts to the analyzer's preferred format, and
 /// forwards buffers to the analyzer — so buffers reach the analyzer in call
 /// order (the sketch's Task-per-feed would not guarantee that).
+///
+/// Lifecycle: callers MUST call `finish()` when the input ends — it drains
+/// remaining audio, delivers the final transcript, and completes `events`.
+/// A session dropped without `finish()` is reclaimed by a best-effort deinit
+/// (tasks cancelled, streams finished), but the final transcript is lost.
 actor TranscriberSession {
     enum Event {
         case ready
@@ -22,6 +27,10 @@ actor TranscriberSession {
     private let analyzer: SpeechAnalyzer
     private var resultsTask: Task<Void, Never>?
     private var pumpTask: Task<Void, Never>?
+
+    /// How long `finish()` waits for the analyzer to finalize before forcing
+    /// the streams closed so consumers never hang.
+    private static let finishTimeout: UInt64 = 10_000_000_000  // 10 s
 
     /// Downloads the on-device transcription model for `locale` if needed.
     static func ensureModel(locale: Locale) async throws {
@@ -64,6 +73,18 @@ actor TranscriberSession {
 
         analyzer = SpeechAnalyzer(modules: [transcriber])
 
+        // Start the analyzer BEFORE spawning the worker tasks: if start throws,
+        // no tasks exist to leak. No results can be missed — audio only flows
+        // once the pump task runs.
+        do {
+            try await analyzer.start(inputSequence: inputStream)
+        } catch {
+            feedIn.finish()
+            inputBuilder.finish()
+            eventsIn.finish()
+            throw error
+        }
+
         resultsTask = Task { [eventsIn] in
             do {
                 for try await result in transcriber.results {
@@ -73,6 +94,10 @@ actor TranscriberSession {
             } catch {
                 eventsIn.yield(.error(String(describing: error)))
             }
+            // The results sequence ending (normally or on error) means no more
+            // transcripts can ever arrive — complete `events` so consumers
+            // never hang on a dead session.
+            eventsIn.finish()
         }
 
         pumpTask = Task {
@@ -107,8 +132,17 @@ actor TranscriberSession {
             inputBuilder.finish()
         }
 
-        try await analyzer.start(inputSequence: inputStream)
         eventsIn.yield(.ready)
+    }
+
+    deinit {
+        // Safety net for sessions dropped without finish(). The worker tasks
+        // capture only locals/continuations (never self), so deinit does run
+        // while they are still alive.
+        pumpTask?.cancel()
+        resultsTask?.cancel()
+        feedIn.finish()
+        eventsIn.finish()
     }
 
     /// Thread-safe, ordered, non-blocking; safe to call from any context.
@@ -117,12 +151,42 @@ actor TranscriberSession {
     }
 
     /// Ends input, finalizes remaining audio, and completes `events` after the
-    /// final transcript has been delivered.
+    /// final transcript has been delivered. Bounded: if the analyzer fails to
+    /// finalize within 10 s, the streams are force-finished so consumers never
+    /// hang (logged to stderr).
     func finish() async {
         feedIn.finish()
+        // The pump always terminates once the feed stream ends (each iteration
+        // is a bounded synchronous conversion), so this await is safe.
         _ = await pumpTask?.value
-        try? await analyzer.finalizeAndFinishThroughEndOfInput()
-        _ = await resultsTask?.value
+
+        // Finalize + drain results under a watchdog. The shutdown work runs in
+        // a detached task signalling a stream, because directly awaiting its
+        // .value in a task group is not cancellable and would defeat the race.
+        let analyzer = self.analyzer
+        let resultsTask = self.resultsTask
+        let (done, doneIn) = AsyncStream<Void>.makeStream()
+        let shutdown = Task.detached {
+            try? await analyzer.finalizeAndFinishThroughEndOfInput()
+            _ = await resultsTask?.value
+            doneIn.finish()
+        }
+        let timedOut = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { for await _ in done {}; return false }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: TranscriberSession.finishTimeout)
+                return true
+            }
+            let first = await group.next() ?? true
+            group.cancelAll()
+            return first
+        }
+        if timedOut {
+            FileHandle.standardError.write(
+                Data("transcriber: finalize timed out after 10s; forcing shutdown\n".utf8))
+            shutdown.cancel()
+            resultsTask?.cancel()
+        }
         eventsIn.finish()
     }
 }

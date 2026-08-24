@@ -24,9 +24,26 @@ final class AppModel: ObservableObject {
     @Published var path: [Route] = []
     /// True while a session is capturing, which takes over the whole screen.
     @Published private(set) var capturing = false
-    /// True when the session on screen is live-only. Drives the captions
-    /// screen's indicator, and keeps the session out of the resume offer.
+    /// True when the session on screen is not resumable — live-only, or
+    /// on-device (whose kept transcript the relay never names to the watch,
+    /// so there is nothing to offer resuming either). Drives the relay
+    /// sessions' indicator, and keeps the session out of the resume offer.
     @Published private(set) var live = false
+
+    // MARK: - Home-screen toggles
+
+    /// The home screen's "On device" toggle: compute captions on the watch
+    /// itself instead of streaming audio to the relay. Persisted, like
+    /// `lastSession`, so the choice survives launches.
+    @Published var onDeviceEnabled: Bool {
+        didSet { defaults.set(onDeviceEnabled, forKey: Keys.onDeviceEnabled) }
+    }
+    /// The home screen's "Keep transcripts" toggle: whether a session leaves
+    /// a transcript. Defaults to on — the app's original promise — until the
+    /// user says otherwise; persisted the same way.
+    @Published var keepTranscripts: Bool {
+        didSet { defaults.set(keepTranscripts, forKey: Keys.keepTranscripts) }
+    }
     let store = CaptionStore()
     let history: HistoryStore
 
@@ -55,6 +72,10 @@ final class AppModel: ObservableObject {
     /// The on-device session. Its own controller and engine — Moonshine on
     /// Core ML instead of the relay — but the same store and the same mic.
     private let onDeviceController: SessionController
+    /// The on-device engine behind `onDeviceController`: Moonshine, plus a
+    /// per-session caption uploader when the session is kept. Held here so a
+    /// start can set `keep` before connecting, the way `relay.mode` is set.
+    private let onDeviceEngine: SavedOnDeviceEngine
     /// Restores a resumed session's scrollback behind `controller`. Kept off
     /// `SessionController` itself so a fetch that outlives its session has
     /// somewhere to be guarded without the controller knowing history exists.
@@ -69,14 +90,28 @@ final class AppModel: ObservableObject {
     /// works unchanged when it cannot be reached.
     @Published private(set) var settings: Settings = .defaults
     /// True while the running mic session is the on-device one, so Stop,
-    /// retry and the indicator address the right controller. Live-only by
-    /// construction: nothing reaches the relay.
+    /// retry and the indicator address the right controller.
     @Published private(set) var onDevice = false
+    /// True once an on-device session's lines are known to be reaching the
+    /// relay — the uploader's first acknowledged send flips it, and a later
+    /// socket failure flips it back. The captions screen shows the not-saved
+    /// indicator until this is true, so it never claims persistence it does
+    /// not have; the cost is a beat of "not saved" at the start of a kept
+    /// session while the socket connects.
+    @Published private(set) var onDeviceKept = false
+    /// Whether the running on-device session asked to be kept, so `retry()`
+    /// restarts the same kind of session that failed.
+    private var onDeviceKeep = false
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        onDeviceEnabled = defaults.bool(forKey: Keys.onDeviceEnabled)
+        // Absent means on: saving is the default the app has always had, and
+        // `bool(forKey:)` alone would silently read absence as off.
+        keepTranscripts = defaults.object(forKey: Keys.keepTranscripts) == nil
+            ? true : defaults.bool(forKey: Keys.keepTranscripts)
         let base = RelayOrigin.http(from: Secrets.relayURL)
         // A provider, not a resolved `String`: `init` is synchronous and
         // constructs every relay client eagerly, but the token comes from
@@ -95,9 +130,12 @@ final class AppModel: ObservableObject {
             audio: AudioCapture(),
             permission: micPermission
         )
+        onDeviceEngine = SavedOnDeviceEngine(
+            engine: MoonshineEngine(),
+            makeUploader: { CaptionUploader(token: token) })
         onDeviceController = SessionController(
             store: store,
-            relay: MoonshineEngine(),
+            relay: onDeviceEngine,
             audio: AudioCapture(),
             permission: micPermission)
         // Resuming a session restores its transcript; this reads it. Kept off
@@ -111,6 +149,7 @@ final class AppModel: ObservableObject {
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
+        onDeviceEngine.onKept = { [weak self] kept in self?.onDeviceKept = kept }
     }
 
     // MARK: - Launching
@@ -149,22 +188,37 @@ final class AppModel: ObservableObject {
     // MARK: - Sessions
 
     /// True when tapping Start should ask about the previous session first:
-    /// it ended less than ten minutes ago — the window the relay holds a
-    /// transcript open, the same 600 s caption-core's `launchAction` reasons
-    /// about — and it was not explicitly stopped. Stop is a decision, so a
-    /// stopped session is never offered.
+    /// the toggles are set to the kept-relay mode — the only one that can
+    /// continue a saved transcript; an on-device or unkept Start just starts
+    /// — and the previous session ended less than ten minutes ago (the window
+    /// the relay holds a transcript open, the same 600 s caption-core's
+    /// `launchAction` reasons about) without being explicitly stopped. Stop
+    /// is a decision, so a stopped session is never offered.
     var shouldOfferResume: Bool {
+        guard !onDeviceEnabled, keepTranscripts else { return false }
         guard !stoppedExplicitly, let last = lastSession else { return false }
         return Date().timeIntervalSince(last.endedAt) < Self.resumeWindow
+    }
+
+    /// Start a session the way the two home-screen toggles ask. The four
+    /// combinations map onto the four kinds of session the app already knew,
+    /// plus the one new one: kept and on-device.
+    func start() async {
+        switch (onDeviceEnabled, keepTranscripts) {
+        case (false, true): await startNew()
+        case (false, false): await startLive()
+        case (true, false): await startOnDevice()
+        case (true, true): await startSavedOnDevice()
+        }
     }
 
     /// How long a just-ended session stays offerable, matching the relay's
     /// resume window.
     private static let resumeWindow: TimeInterval = 600
 
-    /// Start a mic session in whichever mode the settings ask for. With
-    /// transcripts off, Start keeps nothing — the same promise the
-    /// off-the-record row makes, applied to the default.
+    /// Start a relay session in whichever mode the phone's settings ask for.
+    /// With transcripts off there, Start keeps nothing — the same promise the
+    /// "Keep transcripts" toggle makes, applied from the other end.
     func startNew() async {
         currentTranscript = nil
         await startCaptions(mode: settings.saveTranscripts ? .saved(resuming: nil) : .live)
@@ -177,13 +231,32 @@ final class AppModel: ObservableObject {
         await startCaptions(mode: .live)
     }
 
-    /// Caption on the watch itself. Live-only: there is no transcript to
-    /// resume or browse afterwards.
+    /// Caption on the watch itself, keeping nothing: no relay, no transcript.
     func startOnDevice() async {
+        await startOnDeviceSession(keep: false)
+    }
+
+    /// Caption on the watch itself, forwarding each final line to the relay
+    /// so the transcript is stored — and summarized and exported — like any
+    /// saved session. If the relay cannot be reached the session degrades to
+    /// unkept rather than failing: captions continue locally and the screen
+    /// keeps the not-saved indicator (see `onDeviceKept`).
+    func startSavedOnDevice() async {
+        await startOnDeviceSession(keep: true)
+    }
+
+    private func startOnDeviceSession(keep: Bool) async {
         stoppedExplicitly = false
         currentTranscript = nil
+        // A kept on-device session does leave a relay transcript, but the
+        // `/stream` path never tells the watch its name, so like a live
+        // session it is not resumable — and `rememberCurrentSession` should
+        // treat it the same way.
         live = true
         onDevice = true
+        onDeviceKeep = keep
+        onDeviceKept = false
+        onDeviceEngine.keep = keep
         path = [.captions]
         capturing = true
         await onDeviceController.start()
@@ -202,7 +275,7 @@ final class AppModel: ObservableObject {
     /// live session must not quietly start recording one.
     func retry() async {
         if onDevice {
-            await startOnDevice()
+            await startOnDeviceSession(keep: onDeviceKeep)
         } else if live {
             await startLive()
         } else {
@@ -259,6 +332,7 @@ final class AppModel: ObservableObject {
         capturing = false
         live = false
         onDevice = false
+        onDeviceKept = false
     }
 
     /// Stops capture and records the session: a saved session as resumable —
@@ -274,10 +348,12 @@ final class AppModel: ObservableObject {
     }
 
     private func rememberCurrentSession() {
-        // A live session leaves no transcript, so there is nothing to offer
-        // on Start — and marking it as deliberately stopped keeps the next
-        // Start from offering whichever saved session preceded it, which would
-        // read as the app ignoring the choice you just made.
+        // A live session leaves nothing this watch could resume — no
+        // transcript at all, or (kept on-device) one whose name the relay
+        // never shares — so there is nothing to offer on Start; and marking
+        // it as deliberately stopped keeps the next Start from offering
+        // whichever saved session preceded it, which would read as the app
+        // ignoring the choice you just made.
         if live {
             stoppedExplicitly = true
             return
@@ -387,6 +463,8 @@ final class AppModel: ObservableObject {
         static let transcriptName = "lastTranscriptName"
         static let endedAt = "lastSessionEndedAt"
         static let stoppedExplicitly = "stoppedExplicitly"
+        static let onDeviceEnabled = "onDeviceEnabled"
+        static let keepTranscripts = "keepTranscripts"
     }
 
     private static func loadLastSession(from defaults: UserDefaults) -> LastSession? {

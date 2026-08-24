@@ -9,12 +9,16 @@ enum CaptionIndicator {
     case liveOnly
     /// A mic session captioned on the watch itself; nothing is saved.
     case onDevice
+    /// Captioned on the watch, with each line forwarded to the relay's
+    /// transcript — on-device compute, saved all the same.
+    case onDeviceSaved
 
     var label: String {
         switch self {
         case .recording: return "Recording"
         case .liveOnly: return "Live only, not saved"
         case .onDevice: return "On device, not saved"
+        case .onDeviceSaved: return "On device"
         }
     }
 }
@@ -55,11 +59,9 @@ struct CaptionView: View {
         .overlay(alignment: .topTrailing) {
             Group {
                 switch indicator {
-                case .recording:
+                case .recording, .onDeviceSaved:
                     Circle().fill(.green)
-                case .liveOnly:
-                    Circle().strokeBorder(.green, lineWidth: 1.5)
-                case .onDevice:
+                case .liveOnly, .onDevice:
                     Circle().strokeBorder(.green, lineWidth: 1.5)
                 }
             }

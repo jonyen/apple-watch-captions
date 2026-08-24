@@ -46,10 +46,10 @@ private struct RootView: View {
         NavigationStack(path: $model.path) {
                 HomeView(
                     shouldOfferResume: { model.shouldOfferResume },
-                    onStartNew: { Task { await model.startNew() } },
+                    onStart: { Task { await model.start() } },
                     onResume: { Task { await model.continueLast() } },
-                    onLive: { Task { await model.startLive() } },
-                    onOnDevice: { Task { await model.startOnDevice() } },
+                    onDevice: $model.onDeviceEnabled,
+                    keepTranscripts: $model.keepTranscripts,
                     onMore: { model.showMore() })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
@@ -87,7 +87,12 @@ private struct RootView: View {
         case .listening:
             CaptionView(
                 store: store,
-                indicator: model.onDevice ? .onDevice : (model.live ? .liveOnly : .recording),
+                // On-device shows "not saved" until the uploader's first line
+                // lands on the relay — honest about a keep the relay may
+                // never see — and relay sessions keep their old pair.
+                indicator: model.onDevice
+                    ? (model.onDeviceKept ? .onDeviceSaved : .onDevice)
+                    : (model.live ? .liveOnly : .recording),
                 textSize: model.settings.captionTextSize,
                 onStop: { model.stop() })
         case .error(let message):

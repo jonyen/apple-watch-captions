@@ -11,7 +11,7 @@ packages:
     path: ../CaptionRelay
   MoonshineKit:
     url: https://github.com/jonyen/moonshine-coreml
-    from: 0.2.0
+    from: 0.3.0
 targets:
   WatchCaptions:
     type: application
@@ -21,7 +21,7 @@ targets:
         excludes:
           - Secrets.example.swift
           - Icon
-      - path: Models/Moonshine
+      - path: Models/Parakeet
         type: folder
         buildPhase: resources
     dependencies:
@@ -30,6 +30,8 @@ targets:
       - package: CaptionRelay
         product: CaptionRelayLive
       - package: MoonshineKit
+      - package: MoonshineKit
+        product: ParakeetKit
     postCompileScripts:
       # Stamps GitCommit into the built Info.plist for the home screen's build
       # line. After the plist is processed, before signing, and every build —

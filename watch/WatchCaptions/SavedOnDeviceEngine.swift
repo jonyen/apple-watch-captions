@@ -1,13 +1,13 @@
 import Foundation
 import CaptionCore
 
-/// The on-device engine, with the transcript kept: a `MoonshineEngine` does
+/// The on-device engine, with the transcript kept: a `OnDeviceEngine` does
 /// the captioning exactly as in an unkept session, and every final line it
 /// produces is also posted to the relay through a `CaptionUploader`, so the
 /// session ends up stored — and summarized and exported — like any saved
 /// relay session.
 ///
-/// Composition, not a mode inside `MoonshineEngine`: this type owns the
+/// Composition, not a mode inside `OnDeviceEngine`: this type owns the
 /// engine plus, per kept session, an uploader, and adds nothing beyond the
 /// forwarding. `keep` follows `HTTPRelayClient.mode`'s lifecycle — set before
 /// `start()`, read once per connect — so one instance (and one loaded model)
@@ -37,14 +37,14 @@ final class SavedOnDeviceEngine: CaptionEngine {
     /// read once per connect, like `HTTPRelayClient.mode`.
     var keep = false
 
-    private let engine: MoonshineEngine
+    private let engine: OnDeviceEngine
     /// A fresh uploader per kept session — a relay session is a per-session
     /// thing — injected as a factory so this type never learns URLs or tokens.
     private let makeUploader: () -> CaptionUploader
     /// The current session's uploader; nil while `keep` was false at `start()`.
     private var uploader: CaptionUploader?
 
-    init(engine: MoonshineEngine, makeUploader: @escaping () -> CaptionUploader) {
+    init(engine: OnDeviceEngine, makeUploader: @escaping () -> CaptionUploader) {
         self.engine = engine
         self.makeUploader = makeUploader
         engine.onClose = { [weak self] in self?.onClose?() }

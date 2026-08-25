@@ -129,7 +129,7 @@ final class AppModel: ObservableObject {
             permission: micPermission
         )
         onDeviceEngine = SavedOnDeviceEngine(
-            engine: MoonshineEngine(),
+            engine: OnDeviceEngine(),
             makeUploader: { CaptionUploader(token: token) })
         onDeviceController = SessionController(
             store: store,

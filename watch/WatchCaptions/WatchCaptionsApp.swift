@@ -7,6 +7,7 @@ struct WatchCaptionsApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = AppModel()
 
+
     var body: some Scene {
         WindowGroup {
             RootView(model: model)

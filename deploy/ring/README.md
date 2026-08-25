@@ -279,7 +279,7 @@ ssh ring 'launchctl bootout gui/501/com.jonyen.caption-transcriber 2>/dev/null; 
 The relay (`ring:8080`) is now also reachable from the public internet at:
 
 ```
-https://ring.tailb6f6c9.ts.net:10000/
+https://imac.tailb6f6c9.ts.net:10000/
 ```
 
 **Coexistence with doorlog.** `ring` already runs doorlog behind `tailscale
@@ -288,20 +288,20 @@ and its exact output recorded:
 
 ```
 # Funnel on:
-#     - https://ring.tailb6f6c9.ts.net
+#     - https://imac.tailb6f6c9.ts.net
 
-https://ring.tailb6f6c9.ts.net (Funnel on)
+https://imac.tailb6f6c9.ts.net (Funnel on)
 |-- /                    proxy http://127.0.0.1:8787
 |-- /ring/token-exchange proxy http://127.0.0.1:8096
 
 http://ring (tailnet only)
-http://ring.tailb6f6c9.ts.net (tailnet only)
+http://imac.tailb6f6c9.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8099
 
-https://ring.tailb6f6c9.ts.net:8443 (tailnet only)
+https://imac.tailb6f6c9.ts.net:8443 (tailnet only)
 |-- / proxy http://127.0.0.1:8100
 
-https://ring.tailb6f6c9.ts.net:9443 (tailnet only)
+https://imac.tailb6f6c9.ts.net:9443 (tailnet only)
 |-- / proxy http://127.0.0.1:8110
 ```
 
@@ -327,7 +327,7 @@ Output:
 ```
 Available on the internet:
 
-https://ring.tailb6f6c9.ts.net:10000/
+https://imac.tailb6f6c9.ts.net:10000/
 |-- proxy http://127.0.0.1:8080
 
 Funnel started and running in the background.
@@ -340,24 +340,24 @@ were untouched — only a new `:10000 (Funnel on)` entry was added:
 
 ```
 # Funnel on:
-#     - https://ring.tailb6f6c9.ts.net:10000
-#     - https://ring.tailb6f6c9.ts.net
+#     - https://imac.tailb6f6c9.ts.net:10000
+#     - https://imac.tailb6f6c9.ts.net
 
-https://ring.tailb6f6c9.ts.net:10000 (Funnel on)
+https://imac.tailb6f6c9.ts.net:10000 (Funnel on)
 |-- / proxy http://127.0.0.1:8080
 
-https://ring.tailb6f6c9.ts.net (Funnel on)
+https://imac.tailb6f6c9.ts.net (Funnel on)
 |-- /                    proxy http://127.0.0.1:8787
 |-- /ring/token-exchange proxy http://127.0.0.1:8096
 
 http://ring (tailnet only)
-http://ring.tailb6f6c9.ts.net (tailnet only)
+http://imac.tailb6f6c9.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8099
 
-https://ring.tailb6f6c9.ts.net:8443 (tailnet only)
+https://imac.tailb6f6c9.ts.net:8443 (tailnet only)
 |-- / proxy http://127.0.0.1:8100
 
-https://ring.tailb6f6c9.ts.net:9443 (tailnet only)
+https://imac.tailb6f6c9.ts.net:9443 (tailnet only)
 |-- / proxy http://127.0.0.1:8110
 ```
 
@@ -365,7 +365,7 @@ https://ring.tailb6f6c9.ts.net:9443 (tailnet only)
 
 **Healthz over the funnel:**
 ```
-curl -sS -i https://ring.tailb6f6c9.ts.net:10000/healthz
+curl -sS -i https://imac.tailb6f6c9.ts.net:10000/healthz
 # HTTP/2 200
 # ok
 ```
@@ -388,9 +388,9 @@ non-upgrade route).
 
 **End-to-end WS stream proof**, over the public funnel URL, using a
 throwaway token minted via the funnel itself
-(`POST https://ring.tailb6f6c9.ts.net:10000/v1/devices`) and `hello.wav`
+(`POST https://imac.tailb6f6c9.ts.net:10000/v1/devices`) and `hello.wav`
 (the same asset Task 5 used), streamed as raw PCM16 mono 16 kHz to
-`wss://ring.tailb6f6c9.ts.net:10000/stream?token=<token>` (same protocol as
+`wss://imac.tailb6f6c9.ts.net:10000/stream?token=<token>` (same protocol as
 Task 5's on-tailnet proof: binary PCM chunks, then `{"finish":true}`):
 
 ```
@@ -413,7 +413,7 @@ SpeechAnalyzer → back out) works end to end, off-tailnet.
 ### Notes / concerns for Task 7
 
 - The relay is now reachable from the open internet at
-  `https://ring.tailb6f6c9.ts.net:10000/`. Auth is enforced solely by the
+  `https://imac.tailb6f6c9.ts.net:10000/`. Auth is enforced solely by the
   per-device token on `/stream` (and presumably other data-bearing routes —
   not independently re-audited here beyond `/stream` and `/v1/devices`);
   worth a broader auth audit of every route before relying on this for

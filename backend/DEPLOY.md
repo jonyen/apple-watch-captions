@@ -7,7 +7,7 @@ The relay now runs on the user's iMac, `ring`, reachable over Tailscale —
 port 8080) alongside a local Apple-transcription sidecar
 (`com.jonyen.caption-transcriber`, port 8790, wraps `SpeechAnalyzer`), and is
 exposed to the public internet via Tailscale Funnel at
-`https://ring.tailb6f6c9.ts.net:10000/`. `TRANSCRIPTION_PROVIDER=apple` points
+`https://imac.tailb6f6c9.ts.net:10000/`. `TRANSCRIPTION_PROVIDER=apple` points
 the relay at the sidecar (and is the code default anyway); there is no
 Deepgram key configured on ring — in fact Deepgram support, and the Twilio
 phone-call captioning that rode on it, were removed from the backend entirely

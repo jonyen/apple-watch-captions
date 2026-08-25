@@ -8,8 +8,10 @@ port 8080) alongside a local Apple-transcription sidecar
 (`com.jonyen.caption-transcriber`, port 8790, wraps `SpeechAnalyzer`), and is
 exposed to the public internet via Tailscale Funnel at
 `https://ring.tailb6f6c9.ts.net:10000/`. `TRANSCRIPTION_PROVIDER=apple` points
-the relay at the sidecar instead of Deepgram; there is no Deepgram key
-configured on ring. See [`deploy/ring/README.md`](../deploy/ring/README.md)
+the relay at the sidecar (and is the code default anyway); there is no
+Deepgram key configured on ring — in fact Deepgram support, and the Twilio
+phone-call captioning that rode on it, were removed from the backend entirely
+(2026-08). See [`deploy/ring/README.md`](../deploy/ring/README.md)
 for the full deployment (directory layout, launchd plists, the env file, and
 how to redeploy after a code change).
 
@@ -23,12 +25,15 @@ its Deepgram key revoked — see the retirement checklist in
 
 The rest of this document describes the **original Fly.io deployment**,
 retained for reference and as a rollback path until the ring deployment has
-soaked.
+soaked. Note the rollback path is the *already-deployed* Fly image: current
+code has no Deepgram provider anymore, so redeploying it to Fly would caption
+nothing without a reachable Apple sidecar (or an OpenAI/AssemblyAI key). The
+Deepgram-specific steps below are historical.
 
 ---
 
 The service runs via `tsx` (see README). Fly builds the `Dockerfile` and runs it.
-Config lives in `fly.toml`. Secrets — `DEEPGRAM_API_KEY` and (optionally)
+Config lives in `fly.toml`. Secrets — e.g. (optionally)
 `ADMIN_TOKEN` — are NOT in git; they are set with `fly secrets`. There is no
 `AUTH_TOKEN`: devices authenticate by self-registering with `POST /v1/devices`
 and getting their own bearer token back — see backend/README.md
@@ -64,8 +69,10 @@ exact IDs and cleanup command).
 ## Prerequisites
 
 1. A Fly.io account and `flyctl` installed (`brew install flyctl`).
-2. A Deepgram API key — sign up at https://console.deepgram.com and create a key
-   (the free credit covers this usage).
+2. Credentials for a transcription backend, unless an Apple sidecar is
+   reachable from the deploy: `OPENAI_API_KEY` or `ASSEMBLYAI_API_KEY`, with
+   `TRANSCRIPTION_PROVIDER` set to match. (This step used to be "a Deepgram
+   API key"; that provider is gone.)
 
 ## One-time setup
 
@@ -92,9 +99,10 @@ fly auth login
 #    and is fine to ignore.
 fly apps create watch-captions-relay
 
-# 3. Set the Deepgram key. There is no relay-wide auth secret to generate —
-#    devices self-register at runtime and get their own token.
-fly secrets set DEEPGRAM_API_KEY="<your-deepgram-key>"
+# 3. Set the transcription backend and its key (see Prerequisites). There is
+#    no relay-wide auth secret to generate — devices self-register at runtime
+#    and get their own token.
+fly secrets set TRANSCRIPTION_PROVIDER="openai" OPENAI_API_KEY="<your-key>"
 
 # 3a. (Optional) Set an admin token that gates GET /v1/usage — the
 #     operator-only cost/usage endpoint. Without it, /v1/usage stays closed.
@@ -221,8 +229,8 @@ node scripts/smoke-test.mjs wss://<app-name>.fly.dev/stream "<device-token>" sam
   this relay anywhere the port is reachable directly, unset it: the header is
   caller-supplied there, and trusting it removes the limit entirely. See
   backend/README.md "Rate limiting".
-- Weekly cost/usage monitoring (Deepgram + Fly, posted as a GitHub issue every
-  Monday) is set up in [MONITORING.md](./MONITORING.md).
+- Cost/usage monitoring (Fly machine status via `GET /v1/usage`) is set up in
+  [MONITORING.md](./MONITORING.md).
 - To view logs: `fly logs`. To update after code changes: `fly deploy` again.
 - Rotate the admin token any time with `fly secrets set ADMIN_TOKEN=<new>`. Per-device
   tokens have no rotation command — re-registering (`POST /v1/devices`) mints a new one

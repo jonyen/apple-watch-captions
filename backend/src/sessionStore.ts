@@ -44,7 +44,7 @@ interface Session {
 }
 
 export interface SessionStoreOptions {
-  /** Factory for a fresh provider per session (Deepgram in prod, fake in tests). */
+  /** Factory for a fresh provider per session (the configured backend in prod, fake in tests). */
   createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Close sessions with no activity for this long. Defaults to 15s. */
   /**
@@ -205,7 +205,7 @@ export class SessionStore {
 /**
  * Stands in for the transcription provider on a session whose captions the
  * client computes itself (`injectCaptions`): there is no audio to transcribe,
- * so nothing should be opened against Deepgram or the Apple sidecar only to
+ * so nothing should be opened against the Apple sidecar (or any backend) only to
  * idle for the session's whole lifetime. Like `ephemeral`, being caption-only
  * is fixed at creation — audio that later arrives for such a session lands
  * here and is dropped rather than transcribed.

@@ -9,9 +9,7 @@ import { IdentityStore, DeviceKind, Principal } from "./identityStore";
 import { CaptionSession, OutboundMessage } from "./captionSession";
 import { Transcript, TranscriptionProvider } from "./transcriptionProvider";
 import { SessionStore } from "./sessionStore";
-import { CurrentCall } from "./currentCall";
 import { ReaderPresence } from "./readerPresence";
-import { handleTwilioStream, TwilioSocketLike } from "./twilioStreamHandler";
 import {
   TranscriptStore,
   listTranscripts,
@@ -25,7 +23,6 @@ import { VIEWER_HTML } from "./viewerPage";
 import { EXPORTS_HTML } from "./exportsPage";
 import type { ReportData } from "./usageReport";
 import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
-import { voiceResponse } from "./twiml";
 import { ExportDestinationStore } from "./exportDestinations";
 import { OAuthStateStore, authorizeUrl, NotionOAuthConfig, ExchangeCode } from "./notionOAuth";
 import { EmailVerificationStore } from "./emailVerification";
@@ -38,9 +35,9 @@ export interface StartServerOptions {
   /** Users, devices, and pairing codes. Every authenticated route resolves its principal through this. */
   identity: IdentityStore;
   /**
-   * Operator-only token for `/v1/usage`. It reports the operator's Deepgram
-   * and Fly bill, not a per-user figure, so a device token must never reach
-   * it — and with no admin token configured the endpoint stays closed.
+   * Operator-only token for `/v1/usage`. It reports the operator's hosting
+   * bill, not a per-user figure, so a device token must never reach it —
+   * and with no admin token configured the endpoint stays closed.
    */
   adminToken?: string;
   /**
@@ -53,7 +50,7 @@ export interface StartServerOptions {
    * entirely.
    */
   trustProxyHeaders?: boolean;
-  /** Factory for a fresh provider per connection/session (Deepgram in prod, fake in tests). */
+  /** Factory for a fresh provider per connection/session (the configured backend in prod, fake in tests). */
   createProvider: (opts?: ProviderOptions) => TranscriptionProvider;
   /** Optional transcript persistence; also enables the /v1/transcripts endpoints. */
   transcripts?: TranscriptStore;
@@ -61,8 +58,6 @@ export interface StartServerOptions {
   transcriptsRoot?: string;
   /** Optional usage data source; enables GET /v1/usage. */
   usage?: { getUsage(): Promise<ReportData> };
-  /** Optional; the number an inbound captioned call is bridged to. Enables /twilio/voice. */
-  callForwardTo?: string;
   /** Optional; where each user's export destinations live. Enables /v1/exports*. */
   destinations?: ExportDestinationStore;
   /** Optional; single-use CSRF state for the Notion OAuth flow. Required alongside `notionOAuth` to enable connecting. */
@@ -274,7 +269,6 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     createProvider: opts.createProvider,
     transcripts: opts.transcripts,
   });
-  const currentCall = new CurrentCall();
   const readers = new ReaderPresence();
   const limiter = new RegistrationLimiter();
   const claimLimiter = new RegistrationLimiter(
@@ -301,7 +295,6 @@ export function startServer(opts: StartServerOptions): CaptionServer {
       res,
       opts,
       store,
-      currentCall,
       readers,
       limiter,
       claimLimiter,
@@ -322,31 +315,6 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   http.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "", "http://localhost");
     const token = url.searchParams.get("token") ?? undefined;
-
-    // Twilio's media-stream client drops the query string: the upgrade arrives
-    // as a bare `/twilio/stream`, with no `?token=`. Verified against a live
-    // call — the relay saw `rawUrl=/twilio/stream gotLen=0`. So the token
-    // travels in the path, which Twilio does preserve. The query form is still
-    // accepted so the endpoint can be exercised directly with a normal client.
-    if (url.pathname === "/twilio/stream" || url.pathname.startsWith(TWILIO_STREAM_PREFIX)) {
-      const fromPath = url.pathname.startsWith(TWILIO_STREAM_PREFIX)
-        ? safeDecode(url.pathname.slice(TWILIO_STREAM_PREFIX.length))
-        : undefined;
-      const principal = resolveToken(opts.identity, fromPath ?? token);
-      if (!principal) {
-        console.log("twilio upgrade rejected: token missing or wrong");
-        wss.handleUpgrade(req, socket, head, (ws) => ws.close(4001, "unauthorized"));
-        return;
-      }
-      wss.handleUpgrade(req, socket, head, (ws) =>
-        handleTwilioStream(
-          ws as unknown as TwilioSocketLike,
-          store,
-          currentCall,
-          principal.userId,
-        ));
-      return;
-    }
 
     if (url.pathname !== "/stream") {
       socket.destroy();
@@ -391,7 +359,6 @@ async function handleRequest(
   res: ServerResponse,
   opts: StartServerOptions,
   store: SessionStore,
-  calls: CurrentCall,
   readers: ReaderPresence,
   limiter: RegistrationLimiter,
   claimLimiter: RegistrationLimiter,
@@ -532,104 +499,6 @@ async function handleRequest(
     return;
   }
 
-  // Twilio asks what to do with an inbound call. Answer: fork the caller's
-  // audio to this relay, then bridge the call onward.
-  if (req.method === "POST" && url.pathname === "/twilio/voice") {
-    const principal = principalFor(req, url, opts);
-    if (!principal) {
-      sendJSON(res, 401, { error: "unauthorized" });
-      return;
-    }
-    if (!opts.callForwardTo) {
-      sendJSON(res, 503, { error: "call captioning not configured" });
-      return;
-    }
-    // The host Twilio reached us on is the host it should stream back to, so
-    // there is no public-URL setting to keep in sync with the deployment.
-    // Token in the path, not the query — Twilio's stream client discards the
-    // query string. See the upgrade handler. Re-extracted rather than kept
-    // from principalFor because it is the raw token that must travel in the
-    // outgoing URLs, not the principal it resolved to.
-    const token = bearerToken(req.headers.authorization) ?? url.searchParams.get("token") ?? "";
-    const streamUrl =
-      `wss://${req.headers.host ?? ""}${TWILIO_STREAM_PREFIX}` +
-      `${encodeURIComponent(token)}`;
-    const streamStatusUrl =
-      `https://${req.headers.host ?? ""}/twilio/stream-status` +
-      `?token=${encodeURIComponent(token)}`;
-    res.writeHead(200, { "content-type": "text/xml" });
-    res.end(voiceResponse({ streamUrl, dialTo: opts.callForwardTo, streamStatusUrl }));
-    return;
-  }
-
-  // Twilio's own account of what the media stream did. The relay cannot see a
-  // stream that never connects — this is the only channel that reports one,
-  // and `StreamError` carries the reason the alert log omits.
-  if (req.method === "POST" && url.pathname === "/twilio/stream-status") {
-    const principal = principalFor(req, url, opts);
-    if (!principal) {
-      sendJSON(res, 401, { error: "unauthorized" });
-      return;
-    }
-    let body: Buffer = Buffer.from("");
-    try {
-      body = await readBody(req, MAX_AUDIO_BYTES);
-    } catch {
-      // A body we could not read is still worth acknowledging; Twilio retries
-      // otherwise, and the event is diagnostic rather than load-bearing.
-    }
-    const fields = new URLSearchParams(body.toString("utf8"));
-    const detail = ["StreamEvent", "StreamError", "StreamSid", "CallSid"]
-      .map((key) => `${key}=${fields.get(key) ?? "-"}`)
-      .join(" ");
-    console.log(`twilio stream status: ${detail}`);
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  // Presence and captions in one request: the watch uses this both to notice a
-  // call is live and to read it. Read-only — unlike /v1/audio it never creates
-  // a session, so polling when no call exists costs nothing upstream.
-  if (req.method === "GET" && url.pathname === "/v1/call") {
-    const principal = principalFor(req, url, opts);
-    if (!principal) {
-      sendJSON(res, 401, { error: "unauthorized" });
-      return;
-    }
-    const since = Number(url.searchParams.get("since") ?? "0") || 0;
-    // Scoped to the poller: `CurrentCall` holds one call per user, so a call
-    // this poller does not own is not merely filtered out here — it is never
-    // returned in the first place. That also guarantees the session lookups
-    // below only ever run with the caller's own id, which is what `store.has`
-    // and `store.drain` require.
-    const active = calls.current(principal.userId);
-    // reapIdle (or a direct /v1/stop) can drop a call's session without
-    // telling CurrentCall. Left unguarded, this would report `active: true`
-    // forever with no captions ever arriving — a screen that hangs rather
-    // than ever saying the call ended. The call itself may still be live —
-    // only its captions died — so this is `stream_lost`, not `ended`:
-    // reporting "ended" here would tell the watch the call is over while you
-    // may still be talking.
-    if (active && !store.has(principal.userId, active.sessionId)) {
-      sendJSON(res, 200, { active: false, reason: "stream_lost", events: [], seq: since });
-      return;
-    }
-    if (!active) {
-      const reason = calls.lastReason(principal.userId);
-      sendJSON(res, 200, {
-        active: false,
-        ...(reason ? { reason } : {}),
-        events: [],
-        seq: since,
-      });
-      return;
-    }
-    const { events, seq } = store.drain(principal.userId, active.sessionId, since);
-    sendJSON(res, 200, { active: true, events: flatten(events), seq });
-    return;
-  }
-
   // Is anything reading this session? The phone asks before it streams, so
   // audio nobody is watching never leaves the device — which is what keeps an
   // always-running capture from costing battery, data and transcription around
@@ -728,15 +597,14 @@ async function handleRequest(
       sendJSON(res, 404, { error: "usage not enabled" });
       return;
     }
-    // This reports the operator's Deepgram and Fly bill, not a per-user
-    // figure, so a device token must not reach it.
+    // This reports the operator's hosting bill, not a per-user figure, so a
+    // device token must not reach it.
     //
     // Header only — no `?token=` fallback, unlike every other route here. The
     // admin token is the one shared secret left in the system, and a query
     // string is written to access logs, proxy logs and browser history all
-    // the way along. The fallback exists elsewhere for callers that cannot
-    // set a header (Twilio's webhooks); nothing calls this one but tools that
-    // can.
+    // the way along. The fallback exists elsewhere for clients that cannot
+    // set a header; nothing calls this one but tools that can.
     const token = bearerToken(req.headers.authorization);
     if (!opts.adminToken || !token || !constantTimeEquals(token, opts.adminToken)) {
       sendJSON(res, 401, { error: "unauthorized" });
@@ -1125,18 +993,6 @@ async function handleRequest(
   res.end();
 }
 
-/** Where the media-stream token lives, since Twilio drops the query string. */
-const TWILIO_STREAM_PREFIX = "/twilio/stream/";
-
-/** A malformed percent-escape is a bad token, not a crash. */
-function safeDecode(value: string): string | undefined {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return undefined;
-  }
-}
-
 function flatten(events: { seq: number; payload: OutboundMessage }[]) {
   return events.map((e) => ({ seq: e.seq, ...e.payload }));
 }
@@ -1151,10 +1007,9 @@ function isCaptionLine(value: unknown): value is { text: string; isFinal: boolea
 /**
  * The principal behind a request.
  *
- * The header is the real channel. The query string is still read for the two
- * cases that cannot send a header: Twilio's media-stream client, which drops
- * the query string and gets its token from the path instead, and its webhooks,
- * which we do not control.
+ * The header is the real channel. The query string is still read for clients
+ * that cannot set one — historically Twilio's webhooks; today it keeps plain
+ * browser links (and the existing apps' request shapes) working.
  */
 function principalFor(
   req: IncomingMessage,
@@ -1368,8 +1223,8 @@ function handleConnection(
     // A text control frame. Recognized shapes:
     //   - `{"finish":true}` starts the provider's graceful-finish handshake
     //     (needed by the Apple provider, which only emits its true final
-    //     result after one — Deepgram finalizes on VAD pauses during the
-    //     stream and doesn't need this) while the socket stays open, so the
+    //     result after one — cloud providers that finalize on VAD pauses
+    //     during the stream don't need it) while the socket stays open, so the
     //     eventual final caption still has somewhere to go. The client is
     //     expected to close once it has that final; the ordinary `close`
     //     handler below finalizes the transcript then, same as ever.

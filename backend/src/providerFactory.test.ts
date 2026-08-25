@@ -2,34 +2,9 @@ import { describe, it, expect } from "vitest";
 import { EventEmitter } from "events";
 import { buildProviderFactory } from "./providerFactory";
 import { Config } from "./config";
-import { DeepgramLike, LiveConnectionLike } from "./deepgramProvider";
 import { WebSocketLike } from "./appleProvider";
 import { ChannelSplitProvider } from "./channelSplitProvider";
 import { UnavailableProvider } from "./unavailableProvider";
-
-/** Minimal stand-in for a Deepgram live connection, just enough to see it was used. */
-class FakeLiveConnection extends EventEmitter implements LiveConnectionLike {
-  send() {}
-  requestClose() {}
-  on(event: string, cb: (...args: any[]) => void) {
-    super.on(event, cb);
-    return this;
-  }
-}
-
-function fakeDeepgram(): { client: DeepgramLike; conns: FakeLiveConnection[] } {
-  const conns: FakeLiveConnection[] = [];
-  const client: DeepgramLike = {
-    listen: {
-      live: () => {
-        const conn = new FakeLiveConnection();
-        conns.push(conn);
-        return conn;
-      },
-    },
-  };
-  return { client, conns };
-}
 
 /** Minimal stand-in for the apple sidecar's WebSocket connection. */
 class FakeSocket extends EventEmitter implements WebSocketLike {
@@ -51,37 +26,33 @@ class FakeSocket extends EventEmitter implements WebSocketLike {
 function fakeConfig(overrides: Partial<Config> = {}): Config {
   return {
     port: 8080,
-    deepgramApiKey: "dg-key",
     transcriptsDir: "./data/transcripts",
     dbPath: "./data/transcripts/identity.db",
-    deepgramPhoneModel: "phonecall",
     trustProxyHeaders: false,
+    transcriptionProvider: "apple",
     appleTranscriberUrl: "ws://127.0.0.1:8790",
     ...overrides,
   };
 }
 
-describe("buildProviderFactory", () => {
-  it("defaults to Deepgram when nothing requests a provider", () => {
-    const { client, conns } = fakeDeepgram();
-    const createProvider = buildProviderFactory(fakeConfig(), { deepgram: client });
-    createProvider();
-    expect(conns).toHaveLength(1);
-  });
+function fakeAppleWs() {
+  const urls: string[] = [];
+  const sockets: FakeSocket[] = [];
+  const appleWsFactory = (url: string): WebSocketLike => {
+    urls.push(url);
+    const s = new FakeSocket();
+    sockets.push(s);
+    return s;
+  };
+  return { urls, sockets, appleWsFactory };
+}
 
-  it("builds an Apple provider against the configured sidecar URL with pcm16k by default", () => {
-    const { client } = fakeDeepgram();
-    const urls: string[] = [];
-    const sockets: FakeSocket[] = [];
-    const appleWsFactory = (url: string): WebSocketLike => {
-      urls.push(url);
-      const s = new FakeSocket();
-      sockets.push(s);
-      return s;
-    };
+describe("buildProviderFactory", () => {
+  it("builds an Apple provider against the configured sidecar URL with pcm16k", () => {
+    const { urls, sockets, appleWsFactory } = fakeAppleWs();
     const createProvider = buildProviderFactory(
       fakeConfig({ appleTranscriberUrl: "ws://127.0.0.1:9999" }),
-      { deepgram: client, appleWsFactory },
+      { appleWsFactory },
     );
     createProvider({ provider: "apple" });
     expect(urls).toEqual(["ws://127.0.0.1:9999"]);
@@ -89,79 +60,45 @@ describe("buildProviderFactory", () => {
     expect(sockets[0].sentText()).toEqual([{ config: { format: "pcm16k" } }]);
   });
 
-  it("uses mulaw8k for a telephony Apple session", () => {
-    const { client } = fakeDeepgram();
-    const sockets: FakeSocket[] = [];
-    const appleWsFactory = (): WebSocketLike => {
-      const s = new FakeSocket();
-      sockets.push(s);
-      return s;
-    };
-    const createProvider = buildProviderFactory(fakeConfig(), {
-      deepgram: client,
-      appleWsFactory,
-    });
-    createProvider({ provider: "apple", telephony: true });
-    sockets[0].emit("open");
-    expect(sockets[0].sentText()).toEqual([{ config: { format: "mulaw8k" } }]);
-  });
-
   it("wraps dual-channel Apple sessions in a ChannelSplitProvider running two sidecars", () => {
-    const { client } = fakeDeepgram();
-    const sockets: FakeSocket[] = [];
-    const appleWsFactory = (): WebSocketLike => {
-      const s = new FakeSocket();
-      sockets.push(s);
-      return s;
-    };
-    const createProvider = buildProviderFactory(fakeConfig(), {
-      deepgram: client,
-      appleWsFactory,
-    });
+    const { sockets, appleWsFactory } = fakeAppleWs();
+    const createProvider = buildProviderFactory(fakeConfig(), { appleWsFactory });
     const provider = createProvider({ provider: "apple", channels: 2 });
     expect(provider).toBeInstanceOf(ChannelSplitProvider);
     expect(sockets).toHaveLength(2);
   });
 
-  it("honors TRANSCRIPTION_PROVIDER=apple as the relay's default when a session requests none", () => {
-    const { client } = fakeDeepgram();
-    const sockets: FakeSocket[] = [];
-    const appleWsFactory = (): WebSocketLike => {
-      const s = new FakeSocket();
-      sockets.push(s);
-      return s;
-    };
+  it("honors the configured default provider when a session requests none", () => {
+    const { sockets, appleWsFactory } = fakeAppleWs();
     const createProvider = buildProviderFactory(fakeConfig({ transcriptionProvider: "apple" }), {
-      deepgram: client,
       appleWsFactory,
     });
     createProvider();
     expect(sockets).toHaveLength(1);
   });
 
-  it("lets a session's explicit provider override the relay's TRANSCRIPTION_PROVIDER default", () => {
-    const { client, conns } = fakeDeepgram();
-    const createProvider = buildProviderFactory(fakeConfig({ transcriptionProvider: "apple" }), {
-      deepgram: client,
+  it("lets a session's explicit provider override the relay's configured default", () => {
+    const { sockets, appleWsFactory } = fakeAppleWs();
+    const createProvider = buildProviderFactory(fakeConfig({ transcriptionProvider: "openai" }), {
+      appleWsFactory,
     });
-    createProvider({ provider: "deepgram" });
-    expect(conns).toHaveLength(1);
+    createProvider({ provider: "apple" });
+    expect(sockets).toHaveLength(1);
   });
 
-  it("reports Deepgram unavailable when no key is configured (e.g. an apple-only deployment)", () => {
-    const { client, conns } = fakeDeepgram();
-    const createProvider = buildProviderFactory(
-      fakeConfig({ deepgramApiKey: undefined, transcriptionProvider: "apple" }),
-      { deepgram: client },
-    );
+  // Deepgram is retired (2026-08): the name is still recognized so a session
+  // asking for it gets the same clear session error any unconfigured backend
+  // gets, rather than a silent fallback — but no key can ever configure it.
+  it("always reports deepgram unavailable", () => {
+    const { sockets, appleWsFactory } = fakeAppleWs();
+    const createProvider = buildProviderFactory(fakeConfig(), { appleWsFactory });
     const provider = createProvider({ provider: "deepgram" });
     expect(provider).toBeInstanceOf(UnavailableProvider);
-    expect(conns).toHaveLength(0);
+    expect(sockets).toHaveLength(0);
   });
 
   it("reports OpenAI unavailable when no key is configured", () => {
-    const { client } = fakeDeepgram();
-    const createProvider = buildProviderFactory(fakeConfig(), { deepgram: client });
+    const createProvider = buildProviderFactory(fakeConfig());
     const provider = createProvider({ provider: "openai" });
     expect(provider).toBeInstanceOf(UnavailableProvider);
   });

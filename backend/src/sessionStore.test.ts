@@ -278,9 +278,9 @@ describe("provider options", () => {
       },
     });
 
-    store.feed("u1", "s1", Buffer.alloc(0), true, { telephony: true });
+    store.feed("u1", "s1", Buffer.alloc(0), true, { provider: "apple" });
 
-    expect(seen).toEqual([{ telephony: true }]);
+    expect(seen).toEqual([{ provider: "apple" }]);
   });
 
   // The provider is built once, at creation. A later post cannot change what
@@ -294,8 +294,8 @@ describe("provider options", () => {
       },
     });
 
-    store.feed("u1", "s1", Buffer.alloc(0), true, { telephony: true });
-    store.feed("u1", "s1", Buffer.alloc(0), true, { telephony: false });
+    store.feed("u1", "s1", Buffer.alloc(0), true, { provider: "apple" });
+    store.feed("u1", "s1", Buffer.alloc(0), true, { provider: "openai" });
 
     expect(seen).toHaveLength(1);
   });

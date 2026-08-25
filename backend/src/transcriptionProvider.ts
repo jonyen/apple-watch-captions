@@ -8,7 +8,7 @@ export interface Transcript {
 
 /**
  * Abstraction over a streaming speech-to-text backend.
- * Implementations: DeepgramTranscriptionProvider (prod), FakeTranscriptionProvider (tests).
+ * Implementations: AppleTranscriptionProvider (prod), FakeTranscriptionProvider (tests).
  */
 export interface TranscriptionProvider {
   /** Register a handler called for each transcript the provider emits. */

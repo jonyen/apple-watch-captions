@@ -15,8 +15,12 @@ export const APPLE_DEFAULT_URL = "ws://127.0.0.1:8790";
 export const FINISH_TIMEOUT_MS = 12_000;
 
 export interface AppleProviderOptions {
-  /** Wire format of the audio this session will send. Defaults to "pcm16k". */
-  format?: "pcm16k" | "mulaw8k";
+  /**
+   * Wire format of the audio this session will send. The relay only ever
+   * sends 16 kHz PCM now (the μ-law telephony path went with Twilio call
+   * captioning); the sidecar itself still understands other formats.
+   */
+  format?: "pcm16k";
   /** BCP-47 locale for the session. Sidecar defaults to "en-US" when omitted. */
   locale?: string;
   /** Injectable for tests; defaults to a real `ws` connection. */
@@ -28,7 +32,7 @@ export interface AppleProviderOptions {
 /**
  * Provider backed by the caption-transcriber sidecar (Apple SpeechTranscriber
  * running locally). The sidecar is local and does not drop connections the
- * way Deepgram's cloud sockets do, so there is no reconnect machinery: an
+ * way cloud STT sockets do, so there is no reconnect machinery: an
  * unexpected close is a real failure and is surfaced as one.
  *
  * Protocol (docs/superpowers/specs/2026-08-24-imac-relay-local-stt-design.md,

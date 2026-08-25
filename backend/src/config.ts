@@ -5,8 +5,6 @@ import { APPLE_DEFAULT_URL } from "./appleProvider";
 
 export interface Config {
   port: number;
-  /** Optional; required only when a session actually selects the `deepgram` provider. */
-  deepgramApiKey?: string;
   /** Where session transcripts are persisted (a Fly volume in prod). */
   transcriptsDir: string;
   /** Operator-only token for /v1/usage. */
@@ -40,10 +38,6 @@ export interface Config {
    * depend on this being configured.
    */
   encryptionKey?: string;
-  /** Deepgram model for phone audio. Overridable — the right one is an open question. */
-  deepgramPhoneModel: string;
-  /** Optional; the number Twilio bridges an inbound captioned call to. */
-  twilioForwardTo?: string;
   /**
    * Trust `Fly-Client-IP` as the caller's address when rate-limiting
    * registrations, instead of the raw socket address. Must only be on when
@@ -60,11 +54,13 @@ export interface Config {
   /** Optional; the From address transcript and verification emails are sent from. */
   emailFrom?: string;
   /**
-   * Optional; the relay-wide default transcription backend when a session
-   * doesn't request one explicitly (`ProviderOptions.provider` always wins).
-   * Unset means the existing default, deepgram.
+   * The relay-wide default transcription backend when a session doesn't
+   * request one explicitly (`ProviderOptions.provider` always wins).
+   * TRANSCRIPTION_PROVIDER unset means `apple` — the deployed reality since
+   * the relay moved onto ring with its local SpeechTranscriber sidecar
+   * (deepgram, the old implicit default, was retired 2026-08).
    */
-  transcriptionProvider?: ProviderName;
+  transcriptionProvider: ProviderName;
   /** Base URL of the local caption-transcriber sidecar (Task 3's Apple provider). */
   appleTranscriberUrl: string;
 }
@@ -79,13 +75,6 @@ export interface NotionConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  // Required only when this relay's default backend is (or falls back to)
-  // deepgram — a deployment that only ever uses the `apple` provider (ring)
-  // has no deepgram credentials at all.
-  const deepgramApiKey = env.DEEPGRAM_API_KEY || undefined;
-  if (!deepgramApiKey && env.TRANSCRIPTION_PROVIDER !== "apple") {
-    throw new Error("DEEPGRAM_API_KEY is required");
-  }
   const port = env.PORT ? Number(env.PORT) : 8080;
   const transcriptsDir = env.TRANSCRIPTS_DIR || "./data/transcripts";
   const publicBaseUrl = env.PUBLIC_BASE_URL || undefined;
@@ -93,7 +82,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
   return {
     port,
-    deepgramApiKey,
     transcriptsDir,
     adminToken: env.ADMIN_TOKEN || undefined,
     dbPath: env.DB_PATH || join(transcriptsDir, "identity.db"),
@@ -104,12 +92,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     assemblyaiApiKey: env.ASSEMBLYAI_API_KEY || undefined,
     notion: loadNotion(env),
     encryptionKey: env.ENCRYPTION_KEY || undefined,
-    // "phonecall" is the safe baseline: @deepgram/sdk@3.13.0 only exposes
-    // listen.live() against the v1 `:version/listen` endpoint, and Flux
-    // models are served by a separate v2 streaming API this relay does not
-    // use. Defaulting to a Flux model would fail the first real call.
-    deepgramPhoneModel: env.DEEPGRAM_PHONE_MODEL || "phonecall",
-    twilioForwardTo: env.TWILIO_FORWARD_TO || undefined,
     trustProxyHeaders: loadTrustProxyHeaders(env),
     notionOAuth: loadNotionOAuth(env, publicBaseUrl),
     publicBaseUrl,
@@ -120,15 +102,20 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   };
 }
 
-/** Only the backends we actually implement; anything else is a typo. */
-function loadTranscriptionProvider(env: NodeJS.ProcessEnv): ProviderName | undefined {
+/**
+ * Only names the relay recognizes; anything else is a typo and falls back to
+ * the default, `apple`. Note "deepgram" is recognized but retired — honoring
+ * an explicit TRANSCRIPTION_PROVIDER=deepgram yields a relay whose every
+ * session errors with "deepgram is not configured" (see providerFactory.ts).
+ */
+function loadTranscriptionProvider(env: NodeJS.ProcessEnv): ProviderName {
   const value = env.TRANSCRIPTION_PROVIDER;
-  if (!value) return undefined;
+  if (!value) return "apple";
   if ((PROVIDER_NAMES as readonly string[]).includes(value)) return value as ProviderName;
   console.warn(
     `Ignoring TRANSCRIPTION_PROVIDER="${value}" — expected one of ${PROVIDER_NAMES.join(", ")}`,
   );
-  return undefined;
+  return "apple";
 }
 
 /**

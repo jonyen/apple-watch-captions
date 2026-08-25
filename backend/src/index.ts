@@ -1,11 +1,9 @@
 import { join, dirname } from "path";
 import { mkdirSync, readdirSync, statSync, existsSync } from "fs";
-import { createClient } from "@deepgram/sdk";
 import { loadConfig } from "./config";
 import { startServer } from "./server";
 import { openDb } from "./db";
 import { IdentityStore } from "./identityStore";
-import { DeepgramLike } from "./deepgramProvider";
 import { buildProviderFactory } from "./providerFactory";
 import { Summarize, createClaudeSummarizer } from "./summarizer";
 import { createGeminiSummarizer } from "./geminiSummarizer";
@@ -17,10 +15,6 @@ import { adoptLegacyNotionAtBoot } from "./exportDestinations";
 import { buildServerOptions, buildResolveExporters } from "./serverOptions";
 
 const config = loadConfig(process.env);
-// A placeholder key when unset (e.g. this relay only runs the `apple`
-// provider) — the SDK client is constructed lazily and unused unless a
-// session actually selects `deepgram`, which providerFactory guards against.
-const deepgram = createClient(config.deepgramApiKey ?? "unset") as unknown as DeepgramLike;
 
 /**
  * Pick the summarizer backend: an explicit SUMMARY_PROVIDER wins, otherwise
@@ -65,10 +59,9 @@ const identity = new IdentityStore(db);
 
 // `buildProviderFactory` is the actual provider-selection logic (see
 // providerFactory.ts for why it lives there rather than inline here, mirroring
-// buildServerOptions): it can be unit-tested against a fake config and a fake
-// Deepgram client, which a switch statement embedded at module scope in this
-// file cannot be.
-const createProvider = buildProviderFactory(config, { deepgram });
+// buildServerOptions): it can be unit-tested against a fake config, which a
+// switch statement embedded at module scope in this file cannot be.
+const createProvider = buildProviderFactory(config);
 
 // `buildServerOptions` is the actual gating logic (see serverOptions.ts for
 // why it lives there rather than inline here): every optional piece is

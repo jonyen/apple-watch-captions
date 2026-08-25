@@ -114,14 +114,13 @@ describe("deployment wiring", () => {
 
   // Provider selection (Task 4, apple provider) went through the same
   // extraction as trustProxyHeaders above: buildProviderFactory is unit
-  // tested directly (providerFactory.test.ts) against a fake config and a
-  // fake Deepgram client, but nothing boots index.ts, so what's left to
-  // check here is only that the entrypoint actually wires the real config
-  // and deepgram client into it, rather than building providers some other
-  // way.
+  // tested directly (providerFactory.test.ts) against a fake config, but
+  // nothing boots index.ts, so what's left to check here is only that the
+  // entrypoint actually wires the real config into it, rather than building
+  // providers some other way.
   it("builds session providers from the loaded config via buildProviderFactory", () => {
     expect(read("src/index.ts")).toMatch(
-      /const createProvider = buildProviderFactory\(config, \{ deepgram \}\);/,
+      /const createProvider = buildProviderFactory\(config\);/,
     );
   });
 

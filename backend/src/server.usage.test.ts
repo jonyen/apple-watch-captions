@@ -9,8 +9,6 @@ import type { ReportData } from "./usageReport";
 const REPORT: ReportData = {
   rangeStart: "2026-06-29",
   rangeEnd: "2026-07-06",
-  deepgram: { hours: 1, requests: 4 },
-  deepgramRatePerMin: 0.0077,
   fly: { appName: "watch-captions-relay", machines: [], monthlyCostUsd: 1.94 },
 };
 
@@ -47,8 +45,8 @@ describe("GET /v1/usage", () => {
 
   // The admin token is the system's only shared secret, and a query string
   // lands in every access log, proxy log and browser history between here and
-  // the caller. Nothing on this route needs the query form — unlike the
-  // Twilio webhooks, this one is called by tools that can set a header.
+  // the caller. Nothing on this route needs the query form — it is called by
+  // tools that can set a header.
   it("refuses the admin token in the query string", async () => {
     const base = start({ getUsage: async () => REPORT });
     const res = await fetch(`${base}/v1/usage?token=admin-secret`);

@@ -63,9 +63,9 @@ describe("AppleTranscriptionProvider", () => {
   });
 
   it("sends locale and format in the config frame when provided", () => {
-    const { socket } = fakeApple({ locale: "en-US", format: "mulaw8k" });
+    const { socket } = fakeApple({ locale: "en-US", format: "pcm16k" });
     socket.emit("open");
-    expect(socket.sentText()).toEqual([{ config: { locale: "en-US", format: "mulaw8k" } }]);
+    expect(socket.sentText()).toEqual([{ config: { locale: "en-US", format: "pcm16k" } }]);
   });
 
   it("forwards audio directly once open", () => {

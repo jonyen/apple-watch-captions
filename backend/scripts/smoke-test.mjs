@@ -11,7 +11,7 @@ const pcm = readFileSync(pcmPath);
 const ws = new WebSocket(`${urlBase}?token=${token}`);
 
 function startStreaming() {
-  // Send in ~100ms chunks; Deepgram tolerates faster-than-realtime.
+  // Send in ~100ms chunks; providers tolerate faster-than-realtime.
   const CHUNK = 3200; // 100ms of 16kHz 16-bit mono
   let offset = 0;
   const timer = setInterval(() => {

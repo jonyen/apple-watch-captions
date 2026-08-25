@@ -5,17 +5,15 @@ describe("loadConfig", () => {
   it("reads values from the environment", () => {
     const cfg = loadConfig({
       PORT: "8080",
-      DEEPGRAM_API_KEY: "dg-key",
     });
     expect(cfg).toEqual({
       port: 8080,
-      deepgramApiKey: "dg-key",
       transcriptsDir: "./data/transcripts",
       adminToken: undefined,
       dbPath: "data/transcripts/identity.db",
       anthropicApiKey: undefined,
-      deepgramPhoneModel: "phonecall",
       trustProxyHeaders: false,
+      transcriptionProvider: "apple",
       appleTranscriberUrl: "ws://127.0.0.1:8790",
     });
   });
@@ -24,11 +22,11 @@ describe("loadConfig", () => {
   // forgeable `Fly-Client-IP` would let any caller evade the registration
   // rate limit entirely.
   it("leaves proxy headers untrusted unless asked", () => {
-    expect(loadConfig({ DEEPGRAM_API_KEY: "dg-key" }).trustProxyHeaders).toBe(false);
+    expect(loadConfig({}).trustProxyHeaders).toBe(false);
   });
 
   it("trusts proxy headers when TRUST_PROXY_HEADERS is set", () => {
-    const base = { DEEPGRAM_API_KEY: "dg-key" };
+    const base = {};
     expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "true" }).trustProxyHeaders).toBe(true);
     expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "1" }).trustProxyHeaders).toBe(true);
     expect(loadConfig({ ...base, TRUST_PROXY_HEADERS: "false" }).trustProxyHeaders).toBe(false);
@@ -40,21 +38,20 @@ describe("loadConfig", () => {
   // Fail closed and say so.
   it("warns and stays off for a TRUST_PROXY_HEADERS value it does not recognize", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRUST_PROXY_HEADERS: "yes please" });
+    const cfg = loadConfig({ TRUST_PROXY_HEADERS: "yes please" });
     expect(cfg.trustProxyHeaders).toBe(false);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 
   it("defaults dbPath beside the transcripts dir and leaves adminToken unset", () => {
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", TRANSCRIPTS_DIR: "/data/transcripts" });
+    const cfg = loadConfig({ TRANSCRIPTS_DIR: "/data/transcripts" });
     expect(cfg.dbPath).toBe("/data/transcripts/identity.db");
     expect(cfg.adminToken).toBeUndefined();
   });
 
   it("reads DB_PATH and ADMIN_TOKEN when set", () => {
     const cfg = loadConfig({
-      DEEPGRAM_API_KEY: "dg-key",
       DB_PATH: "/data/identity.db",
       ADMIN_TOKEN: "admin-secret",
     });
@@ -64,7 +61,6 @@ describe("loadConfig", () => {
 
   it("reads transcript dir and anthropic key when set", () => {
     const cfg = loadConfig({
-      DEEPGRAM_API_KEY: "dg-key",
       TRANSCRIPTS_DIR: "/data/transcripts",
       ANTHROPIC_API_KEY: "sk-ant-xxx",
     });
@@ -74,7 +70,6 @@ describe("loadConfig", () => {
 
   it("reads the Gemini key and summary provider", () => {
     const cfg = loadConfig({
-      DEEPGRAM_API_KEY: "dg-key",
       GEMINI_API_KEY: "gk-xxx",
       SUMMARY_PROVIDER: "gemini",
     });
@@ -83,7 +78,7 @@ describe("loadConfig", () => {
   });
 
   it("leaves the summary provider unset when not configured", () => {
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({});
     expect(cfg.summaryProvider).toBeUndefined();
     expect(cfg.geminiApiKey).toBeUndefined();
   });
@@ -91,7 +86,6 @@ describe("loadConfig", () => {
   it("ignores an unrecognized summary provider rather than failing to boot", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({
-      DEEPGRAM_API_KEY: "dg-key",
       SUMMARY_PROVIDER: "llama",
     });
     expect(cfg.summaryProvider).toBeUndefined();
@@ -101,7 +95,6 @@ describe("loadConfig", () => {
 
   it("reads the Notion integration when both token and database are set", () => {
     const cfg = loadConfig({
-      DEEPGRAM_API_KEY: "dg-key",
       NOTION_TOKEN: "ntn_xxx",
       NOTION_DATABASE_ID: "db-123",
     });
@@ -109,14 +102,13 @@ describe("loadConfig", () => {
   });
 
   it("leaves Notion off when it is not configured", () => {
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({});
     expect(cfg.notion).toBeUndefined();
   });
 
   it("ignores a half-configured Notion integration rather than failing to boot", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({
-      DEEPGRAM_API_KEY: "dg-key",
       NOTION_TOKEN: "ntn_xxx",
     });
     expect(cfg.notion).toBeUndefined();
@@ -125,28 +117,24 @@ describe("loadConfig", () => {
   });
 
   it("leaves the encryption key unset when ENCRYPTION_KEY is not configured", () => {
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({});
     expect(cfg.encryptionKey).toBeUndefined();
   });
 
   it("reads ENCRYPTION_KEY when set", () => {
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key", ENCRYPTION_KEY: "base64-key-value" });
+    const cfg = loadConfig({ ENCRYPTION_KEY: "base64-key-value" });
     expect(cfg.encryptionKey).toBe("base64-key-value");
   });
 
   it("defaults the port to 8080 when unset", () => {
-    const cfg = loadConfig({ DEEPGRAM_API_KEY: "dg-key" });
+    const cfg = loadConfig({});
     expect(cfg.port).toBe(8080);
   });
 
-  it("throws when DEEPGRAM_API_KEY is missing", () => {
-    expect(() => loadConfig({})).toThrow(/DEEPGRAM_API_KEY/);
-  });
-
-  it("boots without DEEPGRAM_API_KEY when TRANSCRIPTION_PROVIDER=apple", () => {
-    const cfg = loadConfig({ TRANSCRIPTION_PROVIDER: "apple" });
-    expect(cfg.deepgramApiKey).toBeUndefined();
-    expect(cfg.transcriptionProvider).toBe("apple");
+  // The old DEEPGRAM_API_KEY requirement is gone with the provider (retired
+  // 2026-08): an empty environment boots, and no key of any kind is required.
+  it("boots with no API keys at all", () => {
+    expect(() => loadConfig({})).not.toThrow();
   });
 });
 
@@ -159,7 +147,7 @@ describe("loadConfig", () => {
 // verification token (with the user's address) pointing at the same place.
 // Neither is usable there; both leak.
 describe("PUBLIC_BASE_URL sanity check", () => {
-  const base = { DEEPGRAM_API_KEY: "k" };
+  const base = {};
   const messages = (warn: ReturnType<typeof vi.spyOn>) =>
     warn.mock.calls.map((call) => call.join(" ")).join("\n");
 
@@ -213,27 +201,8 @@ describe("PUBLIC_BASE_URL sanity check", () => {
   });
 });
 
-describe("call captioning config", () => {
-  const base = { DEEPGRAM_API_KEY: "k" };
-
-  it("defaults the phone model to the safe telephony baseline", () => {
-    expect(loadConfig(base).deepgramPhoneModel).toBe("phonecall");
-  });
-
-  it("allows the phone model to be overridden", () => {
-    expect(loadConfig({ ...base, DEEPGRAM_PHONE_MODEL: "flux-general-en" }).deepgramPhoneModel)
-      .toBe("flux-general-en");
-  });
-
-  it("reads the number calls are forwarded to", () => {
-    expect(loadConfig(base).twilioForwardTo).toBeUndefined();
-    expect(loadConfig({ ...base, TWILIO_FORWARD_TO: "+15551234567" }).twilioForwardTo)
-      .toBe("+15551234567");
-  });
-});
-
 describe("apple provider config", () => {
-  const base = { DEEPGRAM_API_KEY: "k" };
+  const base = {};
 
   it("defaults the transcriber URL to the local sidecar", () => {
     expect(loadConfig(base).appleTranscriberUrl).toBe("ws://127.0.0.1:8790");
@@ -244,19 +213,21 @@ describe("apple provider config", () => {
       .toBe("ws://127.0.0.1:9999");
   });
 
-  it("leaves the default transcription provider unset by default", () => {
-    expect(loadConfig(base).transcriptionProvider).toBeUndefined();
+  // The deployed reality: the relay runs beside the sidecar on ring, and no
+  // other backend has credentials by default.
+  it("defaults the transcription provider to apple", () => {
+    expect(loadConfig(base).transcriptionProvider).toBe("apple");
   });
 
   it("reads TRANSCRIPTION_PROVIDER as the relay's default provider", () => {
-    expect(loadConfig({ ...base, TRANSCRIPTION_PROVIDER: "apple" }).transcriptionProvider)
-      .toBe("apple");
+    expect(loadConfig({ ...base, TRANSCRIPTION_PROVIDER: "openai" }).transcriptionProvider)
+      .toBe("openai");
   });
 
-  it("warns and ignores an unrecognized TRANSCRIPTION_PROVIDER", () => {
+  it("warns and falls back to apple for an unrecognized TRANSCRIPTION_PROVIDER", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig({ ...base, TRANSCRIPTION_PROVIDER: "bogus" });
-    expect(cfg.transcriptionProvider).toBeUndefined();
+    expect(cfg.transcriptionProvider).toBe("apple");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('TRANSCRIPTION_PROVIDER="bogus"'));
     warn.mockRestore();
   });

@@ -3,7 +3,10 @@ import { PROVIDER_NAMES, ProviderOptions } from "./providerOptions";
 import { PROVIDER_NAMES as VIA_SERVER } from "./server";
 
 describe("provider options", () => {
-  it("lists the providers the relay implements", () => {
+  // "deepgram" is retired but deliberately still *recognized* — see
+  // providerOptions.ts. It resolves to an UnavailableProvider, covered in
+  // providerFactory.test.ts.
+  it("lists the provider names the relay recognizes", () => {
     expect(PROVIDER_NAMES).toEqual(["deepgram", "openai", "assemblyai", "apple"]);
   });
 
@@ -12,8 +15,9 @@ describe("provider options", () => {
     expect(VIA_SERVER).toEqual(PROVIDER_NAMES);
   });
 
-  it("can describe a telephony session", () => {
-    const opts: ProviderOptions = { telephony: true };
-    expect(opts.telephony).toBe(true);
+  it("can request a specific provider and channel count", () => {
+    const opts: ProviderOptions = { provider: "apple", channels: 2 };
+    expect(opts.provider).toBe("apple");
+    expect(opts.channels).toBe(2);
   });
 });

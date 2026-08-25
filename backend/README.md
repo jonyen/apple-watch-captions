@@ -1,7 +1,11 @@
 # Watch Captions — Backend STT Relay
 
-WebSocket service that relays a live PCM audio stream to Deepgram and streams
-caption text back to the client.
+WebSocket service that relays a live PCM audio stream to a speech-to-text
+backend and streams caption text back to the client. The default (and
+deployed) backend is `apple` — Apple SpeechTranscriber via the local
+caption-transcriber sidecar; `openai` and `assemblyai` are available when
+their API keys are set. (Deepgram, the original backend, and Twilio phone-call
+captioning were both removed 2026-08.)
 
 ## Authentication
 
@@ -16,8 +20,8 @@ POST /v1/devices   {"kind":"watch"|"phone"|"mac"}
 The response's `token` is a bearer credential for that one device — keep it
 (the client apps persist it locally) and send it on every subsequent request,
 either as `Authorization: Bearer <token>` or `?token=<token>` (the query form
-exists for the handful of clients, like Twilio's media-stream, that cannot
-send a header). Registering multiple devices creates independent accounts;
+predates header support in every current client and is kept for
+compatibility). Registering multiple devices creates independent accounts;
 **pairing** (`POST /v1/pair/code` on one device, `POST /v1/pair/claim` on the
 other) merges a second device — and its transcripts — onto the first
 device's account, which is how the watch and phone end up sharing one
@@ -114,8 +118,15 @@ nothing.
 ```bash
 cd backend
 npm install
-DEEPGRAM_API_KEY=<your-key> PORT=8080 npm run dev
+PORT=8080 npm run dev
 ```
+
+The default transcription backend is `apple`, which expects the
+caption-transcriber sidecar at `ws://127.0.0.1:8790` (override with
+`APPLE_TRANSCRIBER_URL`, or pick another backend with
+`TRANSCRIPTION_PROVIDER=openai|assemblyai` plus its API key). Without a
+reachable backend the relay still boots and serves everything except live
+transcription — sessions report a provider error.
 
 Register a device to get a token for manual testing:
 
@@ -302,41 +313,18 @@ Behavior worth knowing:
 - The export never blocks captions or transcript storage — it runs after the
   session's transcript is safely on disk.
 
-## Call captioning (optional, prototype)
+## Call captioning (removed 2026-08)
 
-Reads a live phone call onto the watch: a caller dials a Twilio number, Twilio
-forks their audio to this relay for captioning and bridges the call to your real
-phone, and the watch polls `GET /v1/call` for what was said. See
-`docs/superpowers/specs/2026-08-05-twilio-call-captioning-design.md` for the full
-design and its reasoning.
+The Twilio phone-call captioning prototype (`/twilio/voice`,
+`/twilio/stream`, `/twilio/stream-status`, `GET /v1/call`, and the
+`TWILIO_FORWARD_TO` / `DEEPGRAM_PHONE_MODEL` settings) was removed along with
+the Deepgram provider — a product decision, not a technical one. The design
+that drove it is still in
+`docs/superpowers/specs/2026-08-05-twilio-call-captioning-design.md` for
+reference. If a Twilio number still points its Voice webhook at this relay,
+those requests now get a `404` — repoint or release the number.
 
-| Env | Required | Notes |
-|-----|----------|-------|
-| `TWILIO_FORWARD_TO` | Yes, to enable `/twilio/voice` | The number `<Dial>` rings — your real phone, in `+1…` form. Without it, `/twilio/voice` answers `503` rather than TwiML that dials nowhere. |
-| `DEEPGRAM_PHONE_MODEL` | No | Overrides the Deepgram model used for call audio. Defaults to `phonecall`, the safe telephony baseline — see the spec's "Model candidates" for why `flux-general-en` is not currently reachable through this relay's SDK version. |
-
-Setup (Twilio console; nothing else in this repo needs to change):
-
-1. Create a Twilio account and get off the trial — trial accounts restrict
-   outbound calls to verified numbers and play a notice on every call.
-2. Buy a phone number.
-3. Set its **Voice webhook** to `POST https://<your-relay-host>/twilio/voice?token=<device-token>`,
-   using the token for whichever account should receive the call's captions
-   (register one with `POST /v1/devices` if you don't already have one — see
-   "Authentication" above).
-4. Set its **fallback URL** to a static TwiML bin that only `<Dial>`s your real
-   phone. This is the entire mitigation for the relay being down when a call
-   arrives: with no fallback, Twilio gets no TwiML and the caller hears a
-   failure; with it, an outage degrades to a plain forwarded call instead of a
-   dropped one.
-5. `fly secrets set TWILIO_FORWARD_TO=+1…`
-
-Call sessions are ephemeral by design — no transcript file, no summary, no
-Notion export. Transcribing a call is recording it in most two-party-consent
-jurisdictions, and nothing here should quietly accumulate recordings of people
-who never agreed to one.
-
-## Manual smoke test (needs a real Deepgram key)
+## Manual smoke test (needs a running transcription backend)
 
 Streams a 16 kHz mono PCM file to the running server and prints captions.
 

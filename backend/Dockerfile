@@ -7,7 +7,7 @@ FROM node:24-slim
 
 WORKDIR /app
 
-# Install only runtime dependencies (ws, @deepgram/sdk, tsx).
+# Install only runtime dependencies (ws, tsx).
 # Dev deps (typescript, vitest, @types) are not needed to run.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
@@ -20,5 +20,5 @@ ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
 
-# DEEPGRAM_API_KEY and ADMIN_TOKEN are provided at runtime (fly secrets / -e).
+# Secrets like ADMIN_TOKEN are provided at runtime (fly secrets / -e).
 CMD ["npm", "start"]

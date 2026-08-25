@@ -148,6 +148,7 @@ final class HTTPRelayClient: CaptionEngine, @unchecked Sendable {
             do {
                 bearer = try await token()
             } catch {
+                DebugTrail.log("token() failed: \(String(describing: error))")
                 self.queue.async {
                     self.inFlight = false
                     guard !self.stopped else { return }
@@ -180,6 +181,15 @@ final class HTTPRelayClient: CaptionEngine, @unchecked Sendable {
                         guard !self.stopped else { return }
                         guard error == nil, let data,
                               let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                            let status = (response as? HTTPURLResponse).map { "\($0.statusCode)" } ?? "none"
+                            DebugTrail.log("audio POST failed: error=\(error.map { String(describing: $0) } ?? "nil") status=\(status) url=\(url)")
+                            // A 401 means the stored token references an
+                            // identity the relay no longer knows — retrying
+                            // with it can never succeed. Drop it so the next
+                            // session registers this device afresh.
+                            if (response as? HTTPURLResponse)?.statusCode == 401 {
+                                Task { await DeviceIdentity.shared.invalidate() }
+                            }
                             self.fail()
                             return
                         }

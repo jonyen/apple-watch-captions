@@ -2,9 +2,8 @@ import Foundation
 import os
 import CaptionCore
 import MoonshineKit
-import ParakeetKit
 
-/// On-device captions: Parakeet CTC 110M (int8) on Core ML, fed the same 16 kHz mono
+/// On-device captions: Moonshine Base on Core ML, fed the same 16 kHz mono
 /// Int16 PCM `AudioCapture` sends the relay. Models load once, on the first
 /// `start()`, and stay loaded for the life of the app — loading is the slow
 /// part, not inference.
@@ -13,7 +12,7 @@ final class OnDeviceEngine: CaptionEngine {
     var onClose: (@MainActor () -> Void)?
 
     /// Where `project.yml` puts the folder `Scripts/fetch-moonshine.sh` downloads.
-    static let bundledModels = Bundle.main.resourceURL!.appendingPathComponent("Parakeet")
+    static let bundledModels = Bundle.main.resourceURL!.appendingPathComponent("Moonshine")
 
     /// Inference errors in a row before the session is given up on; one bad
     /// segment is dropped silently and the next one gets its chance.
@@ -66,8 +65,8 @@ final class OnDeviceEngine: CaptionEngine {
                 // CPU only: on watch hardware the ANE accepts this model at
                 // load but fails every prediction (ANEProgramProcessRequestDirect
                 // status=0x1d), and Core ML does not fall back at that point.
-                let model = try ParakeetModel(directory: directory, computeUnits: .cpuOnly)
-                let live = LiveTranscriber(transcriber: ParakeetTranscriber(model: model))
+                let model = try MoonshineModel(directory: directory, computeUnits: .cpuOnly)
+                let live = LiveTranscriber(transcriber: Transcriber(model: model))
                 guard let self else { return }
                 live.onPartial = { [weak self] text in self?.report(text, isFinal: false) }
                 live.onFinal = { [weak self] text in self?.report(text, isFinal: true) }

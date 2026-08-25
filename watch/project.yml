@@ -21,7 +21,7 @@ targets:
         excludes:
           - Secrets.example.swift
           - Icon
-      - path: Models/Parakeet
+      - path: Models/Moonshine
         type: folder
         buildPhase: resources
     dependencies:
@@ -30,8 +30,6 @@ targets:
       - package: CaptionRelay
         product: CaptionRelayLive
       - package: MoonshineKit
-      - package: MoonshineKit
-        product: ParakeetKit
     postCompileScripts:
       # Stamps GitCommit into the built Info.plist for the home screen's build
       # line. After the plist is processed, before signing, and every build —

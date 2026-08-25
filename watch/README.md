@@ -32,7 +32,7 @@ anything on its own.
 
 ### On device
 
-**On device** — captions computed on the watch with Parakeet CTC 110M (watchOS 11+,
+**On device** — captions computed on the watch with Moonshine Base (watchOS 11+,
 best on S9 and later); nothing leaves the watch and nothing is saved.
 
 ## Layout
@@ -56,8 +56,8 @@ number.
 2. Edit `Secrets.swift`: set `relayURL` to `wss://watch-captions-relay.fly.dev/stream`. This
    file is gitignored. No auth token to fill in — the app registers itself with the relay
    on first launch and keeps the token it's issued in the Keychain (`DeviceIdentity`).
-3. `Scripts/fetch-moonshine.sh` — downloads the on-device Parakeet CTC 110M int8 models (~105 MB)
-   into `Models/Parakeet/`; the project references that folder, so generate after
+3. `Scripts/fetch-moonshine.sh` — downloads the on-device Moonshine Base models (~110 MB)
+   into `Models/Moonshine/`; the project references that folder, so generate after
    fetching.
 4. `cd watch && xcodegen generate && open WatchCaptions.xcodeproj`
 

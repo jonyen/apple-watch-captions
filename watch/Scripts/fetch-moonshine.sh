@@ -1,16 +1,15 @@
 #!/bin/bash
-# Downloads the compiled on-device model the "On device" session uses, from a
-# moonshine-coreml release, into watch/Models/Parakeet/. The Parakeet zip ships
-# an fp16 build at its root and an int8/ variant; the watch bundles int8.
-# Run before `xcodegen generate`. Usage: watch/Scripts/fetch-moonshine.sh [0.3.0]
+# Downloads the compiled Moonshine Base models the "On device" session uses,
+# from a moonshine-coreml release, into watch/Models/Moonshine/.
+# Run before `xcodegen generate`. Usage: watch/Scripts/fetch-moonshine.sh [0.2.0] [base|tiny]
 set -euo pipefail
-VERSION="${1:-0.3.0}"
-DEST="$(cd "$(dirname "$0")/.." && pwd)/Models/Parakeet"
-URL="https://github.com/jonyen/moonshine-coreml/releases/download/v$VERSION/parakeet-ctc-110m-coreml-v$VERSION.zip"
+VERSION="${1:-0.2.0}"
+MODEL="${2:-base}"
+DEST="$(cd "$(dirname "$0")/.." && pwd)/Models/Moonshine"
+URL="https://github.com/jonyen/moonshine-coreml/releases/download/v$VERSION/moonshine-$MODEL-coreml-v$VERSION.zip"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 curl -fL "$URL" -o "$TMP/models.zip"
-unzip -oq "$TMP/models.zip" -d "$TMP/unpacked"
 rm -rf "$DEST" && mkdir -p "$DEST"
-cp -R "$TMP/unpacked/int8/." "$DEST/"
-echo "Parakeet CTC 110M (int8) v$VERSION in $DEST:"; ls "$DEST"
+unzip -oq "$TMP/models.zip" -d "$DEST"
+echo "Moonshine $MODEL v$VERSION in $DEST:"; ls "$DEST"

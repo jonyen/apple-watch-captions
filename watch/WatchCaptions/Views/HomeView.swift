@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Where a launch lands: Start, the two toggles that shape what Start does,
-/// and everything else behind "More…".
+/// the transcript list, and the one-time pairing step.
 struct HomeView: View {
     /// Asked at tap time, so the answer reflects when Start is tapped rather
     /// than when the menu appeared: is the previous session fresh enough to
@@ -17,8 +17,11 @@ struct HomeView: View {
     @Binding var onDevice: Bool
     /// Keep a transcript of each session.
     @Binding var keepTranscripts: Bool
-    /// Transcripts, pairing: the rows used rarely enough to live one tap away.
-    let onMore: () -> Void
+    /// Browse the transcripts past sessions kept.
+    let onBrowse: () -> Void
+    /// Type in the code the iPhone is showing, to merge this watch into that
+    /// account.
+    let onPair: () -> Void
     /// Which build this is, so a bug report can name one. Injectable for previews.
     var versionLabel: String = AppBuild.versionLabel
 
@@ -50,8 +53,12 @@ struct HomeView: View {
                 Label("Keep transcripts", systemImage: "doc.text")
             }
             .accessibilityHint("Save a transcript of each session. Off means nothing is kept.")
-            Button(action: onMore) {
-                Label("More…", systemImage: "ellipsis")
+            Button(action: onBrowse) {
+                Label("Transcripts", systemImage: "list.bullet")
+            }
+            // A one-time setup step; it sits last for a reason.
+            Button(action: onPair) {
+                Label("Pair with iPhone", systemImage: "link")
             }
             // Sits under the actions as a caption, not another thing to tap.
             Text(versionLabel)

@@ -22,3 +22,5 @@ transcriber-mac/.swiftpm/
 ios/*.xcodeproj
 ios/Shared/Secrets.swift
 *.profraw
+watch/WatchCaptions/Secrets.swift.prod-backup
+ios/Shared/Secrets.swift.prod-backup

@@ -15,9 +15,6 @@ final class AppModel: ObservableObject {
         /// Typing in the code the iPhone is showing, to merge this watch's
         /// account into it.
         case pairing
-        /// The rarely-used rows that used to crowd the menu: transcripts and
-        /// pairing.
-        case more
     }
 
     /// Navigation stack above the menu.
@@ -450,10 +447,6 @@ final class AppModel: ObservableObject {
     private static let exportRefreshDelay: TimeInterval = 60
 
     // MARK: - Navigation
-
-    func showMore() {
-        path.append(.more)
-    }
 
     func showPairing() {
         path.append(.pairing)

@@ -50,7 +50,8 @@ private struct RootView: View {
                     onResume: { Task { await model.continueLast() } },
                     onDevice: $model.onDeviceEnabled,
                     keepTranscripts: $model.keepTranscripts,
-                    onMore: { model.showMore() })
+                    onBrowse: { Task { await model.showHistory() } },
+                    onPair: { model.showPairing() })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -70,10 +71,6 @@ private struct RootView: View {
                             // Pop back to the menu, the same "done" as Stop.
                             model.path = []
                         }
-                    case .more:
-                        MoreView(
-                            onBrowse: { Task { await model.showHistory() } },
-                            onPair: { model.showPairing() })
                     }
                 }
         }

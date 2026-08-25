@@ -4,7 +4,7 @@ import CaptionRelay
 
 /// `CaptionEngine` over plain HTTP. watchOS blocks WebSockets for normal apps
 /// (TN3135), but high-level `URLSession` requests are always allowed. Audio is
-/// batched and POSTed roughly once per second; new caption events come back in
+/// batched and POSTed four times a second; new caption events come back in
 /// each response.
 ///
 /// `@unchecked Sendable`: all mutable state is confined to `queue` (see the
@@ -55,7 +55,11 @@ final class HTTPRelayClient: CaptionEngine, @unchecked Sendable {
     private var stopped = false
     private var timer: DispatchSourceTimer?
 
-    private let flushInterval = 1.0
+    // 0.25 rather than 1.0: measured against the live relay, a 1 s batch put
+    // the first caption at 2.1 s; 0.25 s puts it at 1.4 s, and the remaining
+    // floor is session setup, not cadence. Steady-state update flow is
+    // unchanged (~0.17 s) — this buys latency, not throughput.
+    private let flushInterval = 0.25
 
     /// `base` is the relay origin (e.g. https://host); `token` authorizes requests.
     /// `fixedSessionID` joins an existing session instead of starting a new one.

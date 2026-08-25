@@ -268,6 +268,109 @@ describe("SessionStore caption injection", () => {
   });
 });
 
+describe("SessionStore training capture wiring", () => {
+  function fakeCapture() {
+    const audioCalls: [string, string, string, Buffer][] = [];
+    const discardCalls: [string, string][] = [];
+    return {
+      audioCalls,
+      discardCalls,
+      capture: {
+        audio: (userId: string, id: string, provider: string, chunk: Buffer) =>
+          audioCalls.push([userId, id, provider, chunk]),
+        discardIfPending: (userId: string, id: string) => discardCalls.push([userId, id]),
+        finalize: () => {},
+      } as any,
+    };
+  }
+
+  it("forwards audio chunks to the capture for a normal audio session", () => {
+    const { capture, audioCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+      defaultProviderName: "apple",
+    });
+    store.feed("u1", "s1", Buffer.from("pcm"));
+    expect(audioCalls).toEqual([["u1", "s1", "apple", Buffer.from("pcm")]]);
+  });
+
+  it("uses the session's requested provider, not the default, when one was requested", () => {
+    const { capture, audioCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+      defaultProviderName: "apple",
+    });
+    store.feed("u1", "s1", Buffer.from("pcm"), false, { provider: "openai" });
+    expect(audioCalls[0]![2]).toBe("openai");
+  });
+
+  it("never forwards audio for a caption-only session", () => {
+    const { capture, audioCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+    });
+    store.injectCaptions("u1", "s1", [{ text: "hi", isFinal: true }]);
+    expect(audioCalls).toEqual([]);
+  });
+
+  it("never forwards audio for an ephemeral session", () => {
+    const { capture, audioCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+    });
+    store.feed("u1", "s1", Buffer.from("pcm"), true);
+    expect(audioCalls).toEqual([]);
+  });
+
+  it("calls discardIfPending on stop for a saved session", () => {
+    const { capture, discardCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+    });
+    store.feed("u1", "s1", Buffer.from("pcm"));
+    store.stop("u1", "s1");
+    expect(discardCalls).toEqual([["u1", "s1"]]);
+  });
+
+  it("does not call discardIfPending on stop for an ephemeral session", () => {
+    const { capture, discardCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+    });
+    store.feed("u1", "s1", Buffer.from("pcm"), true);
+    store.stop("u1", "s1");
+    expect(discardCalls).toEqual([]);
+  });
+
+  it("calls discardIfPending on reapIdle and closeAll too", () => {
+    let t = 0;
+    const { capture, discardCalls } = fakeCapture();
+    const store = new SessionStore({
+      createProvider: () => new FakeTranscriptionProvider(),
+      trainingCapture: capture,
+      idleTimeoutMs: 100,
+      now: () => t,
+    });
+    store.feed("u1", "s1", Buffer.from("pcm"));
+    t = 1000;
+    store.reapIdle();
+    expect(discardCalls).toEqual([["u1", "s1"]]);
+
+    store.feed("u1", "s2", Buffer.from("pcm"));
+    store.closeAll();
+    expect(discardCalls).toEqual([
+      ["u1", "s1"],
+      ["u1", "s2"],
+    ]);
+  });
+});
+
 describe("provider options", () => {
   it("passes them to the factory when the session is created", () => {
     const seen: (ProviderOptions | undefined)[] = [];

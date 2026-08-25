@@ -13,6 +13,16 @@ export class CaptionSession {
   constructor(
     private provider: TranscriptionProvider,
     private send: (message: OutboundMessage) => void,
+    /**
+     * Optional training-data hook: called with every raw PCM chunk handed to
+     * `handleAudio`, alongside (not instead of) forwarding it to the
+     * provider. Only ever wired for a session that genuinely carries audio —
+     * `server.ts`/`sessionStore.ts` omit it for caption-only and ephemeral
+     * sessions. Any failure here must never come back to break captioning,
+     * so callers are expected to swallow their own errors (see
+     * `TrainingCapture.audio`) rather than relying on a try/catch here.
+     */
+    private onAudio?: (chunk: Buffer) => void,
   ) {
     this.provider.onReady(() => this.send({ type: "ready" }));
     this.provider.onTranscript((t) => this.injectTranscript(t));
@@ -21,6 +31,7 @@ export class CaptionSession {
 
   handleAudio(chunk: Buffer): void {
     this.provider.sendAudio(chunk);
+    this.onAudio?.(chunk);
   }
 
   /**

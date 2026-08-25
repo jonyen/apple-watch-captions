@@ -42,6 +42,7 @@ function baseConfig(overrides: Partial<Config> = {}): Config {
     trustProxyHeaders: false,
     transcriptionProvider: "apple",
     appleTranscriberUrl: "ws://127.0.0.1:8790",
+    trainingCaptureMaxBytes: 20 * 1024 * 1024 * 1024,
     ...overrides,
   };
 }

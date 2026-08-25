@@ -63,6 +63,19 @@ export interface Config {
   transcriptionProvider: ProviderName;
   /** Base URL of the local caption-transcriber sidecar (Task 3's Apple provider). */
   appleTranscriberUrl: string;
+  /**
+   * Optional; when set, every audio-bearing session's raw PCM and final
+   * transcript are saved beside each other under this directory, building a
+   * self-labeled dataset for later fine-tuning. Unset (the default) means no
+   * writes happen at all — captioning itself must not depend on this.
+   */
+  trainingCaptureDir?: string;
+  /**
+   * Storage cap for `trainingCaptureDir`, in bytes. On finalize, once the
+   * capture directory's total exceeds this, the oldest session directories
+   * are deleted until it no longer does. Defaults to 20 GB.
+   */
+  trainingCaptureMaxBytes: number;
 }
 
 export type SummaryProvider = "claude" | "gemini";
@@ -99,7 +112,30 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     emailFrom: env.EMAIL_FROM || undefined,
     transcriptionProvider: loadTranscriptionProvider(env),
     appleTranscriberUrl: env.APPLE_TRANSCRIBER_URL || APPLE_DEFAULT_URL,
+    trainingCaptureDir: env.TRAINING_CAPTURE_DIR || undefined,
+    trainingCaptureMaxBytes: loadTrainingCaptureMaxBytes(env),
   };
+}
+
+/** Default cap for `trainingCaptureDir`: 20 GB. */
+export const DEFAULT_TRAINING_CAPTURE_MAX_BYTES = 20 * 1024 * 1024 * 1024;
+
+/**
+ * A malformed value here would otherwise silently disable pruning (an
+ * unbounded capture directory) or prune far too aggressively (deleting
+ * training data as fast as it's written) — fail back to the documented
+ * default and say so, the same way the other numeric/enum env readers above
+ * do.
+ */
+function loadTrainingCaptureMaxBytes(env: NodeJS.ProcessEnv): number {
+  const value = env.TRAINING_CAPTURE_MAX_BYTES;
+  if (!value) return DEFAULT_TRAINING_CAPTURE_MAX_BYTES;
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  console.warn(
+    `Ignoring TRAINING_CAPTURE_MAX_BYTES="${value}" — expected a positive number of bytes`,
+  );
+  return DEFAULT_TRAINING_CAPTURE_MAX_BYTES;
 }
 
 /**

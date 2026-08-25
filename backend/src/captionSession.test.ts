@@ -44,6 +44,19 @@ describe("CaptionSession", () => {
     expect(sent).toEqual([{ type: "error", message: "boom" }]);
   });
 
+  it("forwards audio to an optional onAudio hook alongside the provider", () => {
+    const provider = new FakeTranscriptionProvider();
+    const seen: Buffer[] = [];
+    const session = new CaptionSession(
+      provider,
+      () => {},
+      (chunk) => seen.push(chunk),
+    );
+    session.handleAudio(Buffer.from("pcm"));
+    expect(Buffer.concat(provider.receivedAudio).toString()).toBe("pcm");
+    expect(Buffer.concat(seen).toString()).toBe("pcm");
+  });
+
   it("closes the provider when closed", () => {
     const { provider, session } = setup();
     session.close();

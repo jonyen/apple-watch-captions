@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { loadConfig } from "./config";
+import { loadConfig, DEFAULT_TRAINING_CAPTURE_MAX_BYTES } from "./config";
 
 describe("loadConfig", () => {
   it("reads values from the environment", () => {
@@ -15,6 +15,8 @@ describe("loadConfig", () => {
       trustProxyHeaders: false,
       transcriptionProvider: "apple",
       appleTranscriberUrl: "ws://127.0.0.1:8790",
+      trainingCaptureDir: undefined,
+      trainingCaptureMaxBytes: DEFAULT_TRAINING_CAPTURE_MAX_BYTES,
     });
   });
 
@@ -229,6 +231,39 @@ describe("apple provider config", () => {
     const cfg = loadConfig({ ...base, TRANSCRIPTION_PROVIDER: "bogus" });
     expect(cfg.transcriptionProvider).toBe("apple");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('TRANSCRIPTION_PROVIDER="bogus"'));
+    warn.mockRestore();
+  });
+});
+
+describe("training capture config", () => {
+  it("leaves training capture off by default", () => {
+    expect(loadConfig({}).trainingCaptureDir).toBeUndefined();
+    expect(loadConfig({}).trainingCaptureMaxBytes).toBe(DEFAULT_TRAINING_CAPTURE_MAX_BYTES);
+  });
+
+  it("reads TRAINING_CAPTURE_DIR when set", () => {
+    expect(loadConfig({ TRAINING_CAPTURE_DIR: "/data/training" }).trainingCaptureDir).toBe(
+      "/data/training",
+    );
+  });
+
+  it("reads TRAINING_CAPTURE_MAX_BYTES when set", () => {
+    expect(loadConfig({ TRAINING_CAPTURE_MAX_BYTES: "1000" }).trainingCaptureMaxBytes).toBe(1000);
+  });
+
+  it("warns and falls back to the default for an invalid TRAINING_CAPTURE_MAX_BYTES", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({ TRAINING_CAPTURE_MAX_BYTES: "not-a-number" });
+    expect(cfg.trainingCaptureMaxBytes).toBe(DEFAULT_TRAINING_CAPTURE_MAX_BYTES);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("warns and falls back to the default for a non-positive TRAINING_CAPTURE_MAX_BYTES", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = loadConfig({ TRAINING_CAPTURE_MAX_BYTES: "-5" });
+    expect(cfg.trainingCaptureMaxBytes).toBe(DEFAULT_TRAINING_CAPTURE_MAX_BYTES);
+    expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 });

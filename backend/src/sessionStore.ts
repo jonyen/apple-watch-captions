@@ -2,6 +2,7 @@ import { CaptionSession, OutboundMessage } from "./captionSession";
 import { ProviderOptions } from "./providerOptions";
 import { Transcript, TranscriptionProvider } from "./transcriptionProvider";
 import { TranscriptStore } from "./transcriptStore";
+import { TrainingCapture } from "./trainingCapture";
 
 export interface SeqEvent {
   seq: number;
@@ -57,6 +58,16 @@ export interface SessionStoreOptions {
   now?: () => number;
   /** Optional persistence for final captions. */
   transcripts?: TranscriptStore;
+  /**
+   * Optional; when set, every non-ephemeral, audio-bearing session's raw PCM
+   * is saved for later fine-tuning. Caption-only sessions (`injectCaptions`)
+   * never see this — there is no audio — and neither do ephemeral ones: they
+   * are the relay's "off the record" mode, and saving their audio to disk
+   * would defeat the point.
+   */
+  trainingCapture?: TrainingCapture;
+  /** The provider name recorded in a captured session's meta.json when a request doesn't pick one explicitly. */
+  defaultProviderName?: string;
 }
 
 /**
@@ -70,12 +81,29 @@ export class SessionStore {
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
   private readonly transcripts?: TranscriptStore;
+  private readonly trainingCapture?: TrainingCapture;
+  private readonly defaultProviderName: string;
 
   constructor(opts: SessionStoreOptions) {
     this.createProvider = opts.createProvider;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 10 * 60_000;
     this.now = opts.now ?? (() => Date.now());
     this.transcripts = opts.transcripts;
+    this.trainingCapture = opts.trainingCapture;
+    this.defaultProviderName = opts.defaultProviderName ?? "apple";
+  }
+
+  /**
+   * Finalizing a transcript only fires the training-capture write when the
+   * session had at least one final line (`TranscriptStore.finalize` skips
+   * its `onFinalize` hook otherwise) — so a session with captured audio but
+   * zero finals would otherwise leave its staged audio behind forever. This
+   * runs right after `transcripts.finalize` unconditionally to clean that up;
+   * it is a no-op once the hook above already claimed the session.
+   */
+  private finalizeTranscriptAndCapture(userId: string, id: string): void {
+    this.transcripts?.finalize(userId, id);
+    this.trainingCapture?.discardIfPending(userId, id);
   }
 
   /**
@@ -133,7 +161,7 @@ export class SessionStore {
     if (!session) return;
     session.caption.close();
     this.sessions.delete(key);
-    if (!session.ephemeral) this.transcripts?.finalize(session.userId, session.id);
+    if (!session.ephemeral) this.finalizeTranscriptAndCapture(session.userId, session.id);
   }
 
   /** Close sessions idle longer than the configured timeout. */
@@ -143,7 +171,7 @@ export class SessionStore {
       if (session.lastActivity < cutoff) {
         session.caption.close();
         this.sessions.delete(key);
-        if (!session.ephemeral) this.transcripts?.finalize(session.userId, session.id);
+        if (!session.ephemeral) this.finalizeTranscriptAndCapture(session.userId, session.id);
       }
     }
   }
@@ -152,7 +180,7 @@ export class SessionStore {
   closeAll(): void {
     for (const [, session] of this.sessions) {
       session.caption.close();
-      if (!session.ephemeral) this.transcripts?.finalize(session.userId, session.id);
+      if (!session.ephemeral) this.finalizeTranscriptAndCapture(session.userId, session.id);
     }
     this.sessions.clear();
   }
@@ -186,17 +214,32 @@ export class SessionStore {
       userId,
       id,
     };
+    // Caption-only and ephemeral sessions never capture audio for training:
+    // the former has none (there is nothing to save), and the latter is the
+    // relay's "off the record" mode, where saving raw audio to disk would
+    // defeat the point.
+    const onAudio =
+      this.trainingCapture && !captionOnly && !ephemeral
+        ? (chunk: Buffer) => {
+            const provider = providerOpts?.provider ?? this.defaultProviderName;
+            this.trainingCapture!.audio(userId, id, provider, chunk);
+          }
+        : undefined;
     // CaptionSession registers provider handlers in its constructor; its outbound
     // messages are buffered here with sequence numbers.
-    session.caption = new CaptionSession(provider, (payload: OutboundMessage) => {
-      session.seq += 1;
-      session.events.push({ seq: session.seq, payload });
-      // Skipping `append` is what keeps a live session off disk entirely:
-      // `append` is also what creates the file.
-      if (payload.type === "caption" && payload.isFinal && !session.ephemeral) {
-        this.transcripts?.append(userId, id, payload.text, payload.channel);
-      }
-    });
+    session.caption = new CaptionSession(
+      provider,
+      (payload: OutboundMessage) => {
+        session.seq += 1;
+        session.events.push({ seq: session.seq, payload });
+        // Skipping `append` is what keeps a live session off disk entirely:
+        // `append` is also what creates the file.
+        if (payload.type === "caption" && payload.isFinal && !session.ephemeral) {
+          this.transcripts?.append(userId, id, payload.text, payload.channel);
+        }
+      },
+      onAudio,
+    );
     this.sessions.set(key, session);
     return session;
   }

@@ -27,6 +27,7 @@ import { ExportDestinationStore } from "./exportDestinations";
 import { OAuthStateStore, authorizeUrl, NotionOAuthConfig, ExchangeCode } from "./notionOAuth";
 import { EmailVerificationStore } from "./emailVerification";
 import { SendEmail } from "./emailSender";
+import { TrainingCapture } from "./trainingCapture";
 
 export * from "./providerOptions";
 
@@ -83,6 +84,10 @@ export interface StartServerOptions {
   sendEmail?: SendEmail;
   /** Public origin the confirmation link points back to, e.g. https://relay.fly.dev. Required alongside the email options above. */
   publicBaseUrl?: string;
+  /** Optional; when set, every non-ephemeral, audio-bearing session's raw PCM and final transcript are saved for later fine-tuning. */
+  trainingCapture?: TrainingCapture;
+  /** The relay's configured default transcription backend, recorded in a captured session's meta.json when a request doesn't pick one explicitly. */
+  transcriptionProvider?: string;
 }
 
 export interface CaptionServer {
@@ -268,6 +273,8 @@ export function startServer(opts: StartServerOptions): CaptionServer {
   const store = new SessionStore({
     createProvider: opts.createProvider,
     transcripts: opts.transcripts,
+    trainingCapture: opts.trainingCapture,
+    defaultProviderName: opts.transcriptionProvider,
   });
   const readers = new ReaderPresence();
   const limiter = new RegistrationLimiter();
@@ -1205,7 +1212,17 @@ function handleConnection(
     }
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   };
-  const session = new CaptionSession(provider, send);
+  // The WS test transport always carries real audio — there is no
+  // caption-only or ephemeral concept here (see SessionStore, the HTTP
+  // transport's equivalent gating) — so training capture is wired
+  // unconditionally whenever it's configured at all.
+  const onAudio = opts.trainingCapture
+    ? (chunk: Buffer) => {
+        const provider = providerOpts?.provider ?? opts.transcriptionProvider ?? "apple";
+        opts.trainingCapture!.audio(userId, sessionId, provider, chunk);
+      }
+    : undefined;
+  const session = new CaptionSession(provider, send, onAudio);
 
   let closed = false;
   const closeOnce = () => {
@@ -1213,6 +1230,7 @@ function handleConnection(
     closed = true;
     session.close();
     opts.transcripts?.finalize(userId, sessionId);
+    opts.trainingCapture?.discardIfPending(userId, sessionId);
   };
 
   ws.on("message", (data: Buffer, isBinary: boolean) => {

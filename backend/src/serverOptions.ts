@@ -3,7 +3,8 @@ import { Db } from "./db";
 import { IdentityStore } from "./identityStore";
 import { TranscriptionProvider } from "./transcriptionProvider";
 import { ProviderOptions } from "./providerOptions";
-import { TranscriptStore } from "./transcriptStore";
+import { TranscriptStore, FinalizedTranscript } from "./transcriptStore";
+import { TrainingCapture } from "./trainingCapture";
 import { Summarize } from "./summarizer";
 import { createFinalizer, ResolveExporters } from "./finalizer";
 import {
@@ -146,20 +147,35 @@ export function buildServerOptions(config: Config, deps: ServerDeps): StartServe
 
   const resolveExporters = buildResolveExporters(destinations);
 
+  // Unset TRAINING_CAPTURE_DIR means this stays undefined and every training
+  // capture hook downstream (SessionStore, the WS /stream transport, and the
+  // onFinalize chain just below) is skipped entirely — no behavior change
+  // for a relay that hasn't opted in.
+  const trainingCapture = config.trainingCaptureDir
+    ? new TrainingCapture({ dir: config.trainingCaptureDir, maxBytes: config.trainingCaptureMaxBytes })
+    : undefined;
+
+  const finalizeHook = createFinalizer({
+    root: config.transcriptsDir,
+    summarize: deps.summarize,
+    resolve: resolveExporters,
+    // Only sends to an address the user has actually verified —
+    // `createTranscriptEmailSender` is the single choke point that
+    // enforces that, so it's reused here rather than duplicated inline.
+    sendTranscriptEmail:
+      destinations && sendEmail ? createTranscriptEmailSender(destinations, sendEmail) : undefined,
+  });
+
   const transcripts = new TranscriptStore({
     root: config.transcriptsDir,
-    onFinalize: createFinalizer({
-      root: config.transcriptsDir,
-      summarize: deps.summarize,
-      resolve: resolveExporters,
-      // Only sends to an address the user has actually verified —
-      // `createTranscriptEmailSender` is the single choke point that
-      // enforces that, so it's reused here rather than duplicated inline.
-      sendTranscriptEmail:
-        destinations && sendEmail
-          ? createTranscriptEmailSender(destinations, sendEmail)
-          : undefined,
-    }),
+    onFinalize: (t: FinalizedTranscript) => {
+      // Independent of (and ordered before, though order doesn't matter
+      // here) the summarize/export/email finalizer: a training-capture
+      // failure must never affect those, and vice versa — each already
+      // swallows its own errors.
+      trainingCapture?.finalize(t);
+      finalizeHook(t);
+    },
   });
 
   return {
@@ -179,5 +195,7 @@ export function buildServerOptions(config: Config, deps: ServerDeps): StartServe
     emailVerifications,
     sendEmail,
     publicBaseUrl: config.publicBaseUrl,
+    trainingCapture,
+    transcriptionProvider: config.transcriptionProvider,
   };
 }

@@ -13,7 +13,7 @@ const HOST = "imac.tailb6f6c9.ts.net";
 const SERVICES = [
   { name: "Caption relay", kind: "http", port: 8080, path: "/healthz", link: `https://${HOST}:10000/` },
   { name: "Transcriber sidecar (Apple STT)", kind: "tcp", port: 8790 },
-  { name: "Doorlog app", kind: "tcp", port: 8787, link: `https://${HOST}/` },
+  { name: "Monarch balances", kind: "tcp", port: 8787, link: `https://${HOST}/` },
   { name: "Doorlog web log", kind: "tcp", port: 8099, link: `https://${HOST}:4443/` },
   { name: "Ring token exchange", kind: "tcp", port: 8096, link: `https://${HOST}/ring/token-exchange` },
   { name: "Service on :8443", kind: "tcp", port: 8100, link: `https://${HOST}:8443/` },

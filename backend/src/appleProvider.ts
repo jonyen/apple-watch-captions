@@ -55,6 +55,8 @@ export class AppleTranscriptionProvider implements TranscriptionProvider {
   private expectServerClose = false;
   private pending: Buffer[] = [];
   private doneTimer?: ReturnType<typeof setTimeout>;
+  private closePromise?: Promise<void>;
+  private closeResolve?: () => void;
   private finishTimeoutMs: number = FINISH_TIMEOUT_MS;
   private transcriptHandler: (t: Transcript) => void = () => {};
   private readyHandler: () => void = () => {};
@@ -128,14 +130,22 @@ export class AppleTranscriptionProvider implements TranscriptionProvider {
    * (bounded by `finishTimeoutMs`) for `{"done":true}` before closing — the
    * final transcript often arrives in that window. Audio sent after this
    * call is dropped.
+   *
+   * Returns a promise that resolves only once that wait is over — either
+   * `done` arrived, or the bound elapsed — so a caller that awaits this
+   * before finalizing a transcript can never race the true final. A second
+   * call returns the same promise rather than resending `finish`.
    */
-  close(): void {
-    if (this.finishing || this.closed) return;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.finishing = true;
+    this.closePromise = new Promise<void>((resolve) => {
+      this.closeResolve = resolve;
+    });
     if (!this.opened) {
       // Never got a session going; nothing to finish gracefully.
       this.finalizeClose();
-      return;
+      return this.closePromise;
     }
     this.expectServerClose = true;
     this.ws.send(JSON.stringify({ finish: true }));
@@ -143,6 +153,7 @@ export class AppleTranscriptionProvider implements TranscriptionProvider {
       this.doneTimer = undefined;
       this.finalizeClose();
     }, this.finishTimeoutMs);
+    return this.closePromise;
   }
 
   private finishDone(): void {
@@ -162,5 +173,6 @@ export class AppleTranscriptionProvider implements TranscriptionProvider {
     } catch {
       // already closed
     }
+    this.closeResolve?.();
   }
 }

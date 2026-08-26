@@ -5,6 +5,7 @@ import { TranscriptionProvider } from "./transcriptionProvider";
 import { ProviderOptions } from "./providerOptions";
 import { TranscriptStore, FinalizedTranscript } from "./transcriptStore";
 import { TrainingCapture } from "./trainingCapture";
+import { createOfflineLabeler } from "./offlineLabeler";
 import { Summarize } from "./summarizer";
 import { createFinalizer, ResolveExporters } from "./finalizer";
 import {
@@ -148,11 +149,24 @@ export function buildServerOptions(config: Config, deps: ServerDeps): StartServe
   const resolveExporters = buildResolveExporters(destinations);
 
   // Unset TRAINING_CAPTURE_DIR means this stays undefined and every training
-  // capture hook downstream (SessionStore, the WS /stream transport, and the
-  // onFinalize chain just below) is skipped entirely — no behavior change
-  // for a relay that hasn't opted in.
+  // capture hook downstream (SessionStore, the WS /stream transport, the
+  // onFinalize chain just below, and /v1/audio-archive) is skipped entirely
+  // — no behavior change for a relay that hasn't opted in.
+  //
+  // Archived audio is always labeled against the Apple provider specifically
+  // — pinned here with `{ provider: "apple" }` regardless of what a live
+  // session might request — since offline labeling is meant to build a
+  // dataset for that one backend, not whichever one a request happened to
+  // ask for.
+  const transcribeOffline = config.trainingCaptureDir
+    ? createOfflineLabeler(() => deps.createProvider({ provider: "apple" }))
+    : undefined;
   const trainingCapture = config.trainingCaptureDir
-    ? new TrainingCapture({ dir: config.trainingCaptureDir, maxBytes: config.trainingCaptureMaxBytes })
+    ? new TrainingCapture({
+        dir: config.trainingCaptureDir,
+        maxBytes: config.trainingCaptureMaxBytes,
+        transcribeOffline,
+      })
     : undefined;
 
   const finalizeHook = createFinalizer({

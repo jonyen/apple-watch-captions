@@ -94,16 +94,32 @@ export class SessionStore {
   }
 
   /**
-   * Finalizing a transcript only fires the training-capture write when the
-   * session had at least one final line (`TranscriptStore.finalize` skips
-   * its `onFinalize` hook otherwise) — so a session with captured audio but
-   * zero finals would otherwise leave its staged audio behind forever. This
-   * runs right after `transcripts.finalize` unconditionally to clean that up;
-   * it is a no-op once the hook above already claimed the session.
+   * Tears down everything a session's end can trigger, in the order that
+   * makes the finalize race impossible: the caller has already awaited
+   * `session.caption.close()` — the provider's own bounded graceful
+   * shutdown — so every transcript the provider was ever going to emit has
+   * already landed via the `send` callback (and thus `transcripts.append`)
+   * before any of this runs.
+   *
+   * Ephemeral sessions skip the live transcript/training-capture path
+   * entirely (nothing was ever appended for them to finalize) but archived
+   * audio — `feedArchive`, an orthogonal capability wired regardless of a
+   * session's live-transcript mode — still gets a chance to finalize; it is
+   * a no-op when nothing was ever archived for this session.
    */
-  private finalizeTranscriptAndCapture(userId: string, id: string): void {
-    this.transcripts?.finalize(userId, id);
-    this.trainingCapture?.discardIfPending(userId, id);
+  private async finalizeSession(userId: string, id: string, session: Session): Promise<void> {
+    if (!session.ephemeral) {
+      // Finalizing a transcript only fires the training-capture write when
+      // the session had at least one final line (`TranscriptStore.finalize`
+      // skips its `onFinalize` hook otherwise) — so a session with captured
+      // audio but zero finals would otherwise leave its staged audio behind
+      // forever. `discardIfPending` runs right after unconditionally to
+      // clean that up; it is a no-op once the hook above already claimed
+      // the session.
+      this.transcripts?.finalize(userId, id);
+      this.trainingCapture?.discardIfPending(userId, id);
+    }
+    await this.trainingCapture?.archiveFinalize(userId, id);
   }
 
   /**
@@ -140,6 +156,27 @@ export class SessionStore {
   }
 
   /**
+   * Feed raw PCM into a session's audio-archive — the on-device-kept-session
+   * path (`POST /v1/audio-archive`), pure storage with no transcription
+   * provider ever opened for it. Orthogonal to `feed`/`injectCaptions`:
+   * whatever mode the session is already in (or, lazily creating it here,
+   * the caption-only no-op-provider mode — this call alone must never open
+   * a real transcription provider), the bytes go straight to
+   * `TrainingCapture.archiveAudio`, never through `CaptionSession` or any
+   * provider, and never into the visible transcript history. A no-op when
+   * training capture isn't configured, or once a session is known to be
+   * ephemeral (the relay's off-the-record mode — capturing its audio to
+   * disk, archived or not, would defeat the point).
+   */
+  feedArchive(userId: string, id: string, pcm: Buffer): void {
+    const session = this.getOrCreate(userId, id, false, undefined, true);
+    session.lastActivity = this.now();
+    if (pcm.length > 0 && !session.ephemeral) {
+      this.trainingCapture?.archiveAudio(userId, id, pcm);
+    }
+  }
+
+  /**
    * Events with `seq > since`, and the latest seq. Prunes events the client has
    * already acknowledged (`seq <= since`) so the buffer stays bounded.
    */
@@ -154,35 +191,53 @@ export class SessionStore {
     return this.sessions.has(sessionKey(userId, id));
   }
 
-  /** Close and remove a session. */
-  stop(userId: string, id: string): void {
+  /**
+   * Close and remove a session. Awaits the provider's own bounded graceful
+   * shutdown before finalizing anything — see `finalizeSession` — so the
+   * true final transcript (the Apple provider's finish/done handshake in
+   * particular) is never orphaned into a fresh, never-finalized file the
+   * way it was before this awaited.
+   */
+  async stop(userId: string, id: string): Promise<void> {
     const key = sessionKey(userId, id);
     const session = this.sessions.get(key);
     if (!session) return;
-    session.caption.close();
     this.sessions.delete(key);
-    if (!session.ephemeral) this.finalizeTranscriptAndCapture(session.userId, session.id);
+    await session.caption.close();
+    await this.finalizeSession(session.userId, session.id, session);
   }
 
   /** Close sessions idle longer than the configured timeout. */
-  reapIdle(): void {
+  async reapIdle(): Promise<void> {
     const cutoff = this.now() - this.idleTimeoutMs;
+    const toReap: Session[] = [];
     for (const [key, session] of this.sessions) {
       if (session.lastActivity < cutoff) {
-        session.caption.close();
+        toReap.push(session);
         this.sessions.delete(key);
-        if (!session.ephemeral) this.finalizeTranscriptAndCapture(session.userId, session.id);
       }
     }
+    // Concurrent, not sequential: each session's wait is independently
+    // bounded by its own provider, and reaping a batch of idle sessions must
+    // not take the sum of their bounds.
+    await Promise.all(
+      toReap.map(async (session) => {
+        await session.caption.close();
+        await this.finalizeSession(session.userId, session.id, session);
+      }),
+    );
   }
 
   /** Close every session (server shutdown). */
-  closeAll(): void {
-    for (const [, session] of this.sessions) {
-      session.caption.close();
-      if (!session.ephemeral) this.finalizeTranscriptAndCapture(session.userId, session.id);
-    }
+  async closeAll(): Promise<void> {
+    const sessions = [...this.sessions.values()];
     this.sessions.clear();
+    await Promise.all(
+      sessions.map(async (session) => {
+        await session.caption.close();
+        await this.finalizeSession(session.userId, session.id, session);
+      }),
+    );
   }
 
   /**
@@ -259,6 +314,6 @@ function captionOnlyProvider(): TranscriptionProvider {
     onReady: () => {},
     onError: () => {},
     sendAudio: () => {},
-    close: () => {},
+    close: async () => {},
   };
 }

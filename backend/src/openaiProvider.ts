@@ -126,7 +126,7 @@ export class OpenAIProvider implements TranscriptionProvider {
     this.socket.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.socket.close();

@@ -103,7 +103,7 @@ export class AssemblyAIProvider implements TranscriptionProvider {
     this.socket.send(chunk);
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     if (this.open) this.socket.send(ASSEMBLYAI_TERMINATE);

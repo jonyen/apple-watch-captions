@@ -133,6 +133,42 @@ describe("AppleTranscriptionProvider", () => {
     expect(socket.closeCalled).toBe(true);
   });
 
+  it("close()'s returned promise resolves only once done arrives, not before", async () => {
+    const { p, socket } = fakeApple();
+    socket.emit("open");
+    let resolved = false;
+    p.close().then(() => (resolved = true));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    socket.emit("message", JSON.stringify({ done: true }));
+    await Promise.resolve();
+    expect(resolved).toBe(true);
+  });
+
+  it("close()'s returned promise resolves after the finish timeout when done never arrives", async () => {
+    const { p, socket } = fakeApple();
+    socket.emit("open");
+    let resolved = false;
+    p.close().then(() => (resolved = true));
+    await vi.advanceTimersByTimeAsync(FINISH_TIMEOUT_MS - 1);
+    expect(resolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(resolved).toBe(true);
+    expect(socket.closeCalled).toBe(true);
+  });
+
+  it("a second close() call returns the same promise instead of resending finish", async () => {
+    const { p, socket } = fakeApple();
+    socket.emit("open");
+    const first = p.close();
+    const second = p.close();
+    expect(second).toBe(first);
+    expect(socket.sentText().filter((f) => f.finish).length).toBe(1);
+    socket.emit("message", JSON.stringify({ done: true }));
+    await first;
+  });
+
   it("forwards transcripts that arrive between finish and done", () => {
     const { p, socket } = fakeApple();
     socket.emit("open");

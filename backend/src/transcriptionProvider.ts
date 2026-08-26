@@ -19,6 +19,13 @@ export interface TranscriptionProvider {
   onError(handler: (message: string) => void): void;
   /** Feed raw PCM audio bytes to the provider. */
   sendAudio(chunk: Buffer): void;
-  /** Close the provider connection. */
-  close(): void;
+  /**
+   * Close the provider connection. Resolves once the provider's own graceful
+   * shutdown (finish/done handshake, where it has one) has either completed
+   * or hit its own bound — never before then, and never unbounded. A caller
+   * that finalizes a transcript only after this resolves is guaranteed to
+   * have seen every transcript the provider was ever going to emit for this
+   * session.
+   */
+  close(): Promise<void>;
 }

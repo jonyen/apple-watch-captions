@@ -29,6 +29,15 @@ export interface TrainingCaptureOptions {
   maxBytes?: number;
   /** Injectable clock (tests). Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Labels an archived session's audio offline: given the path to its
+   * written WAV, returns the final transcript lines a fresh provider produced
+   * for it, run faster than real time. Required for `archiveFinalize` to
+   * produce a `transcript.txt` at all — without it (or if it throws), the
+   * audio is kept and `meta.json` notes labeling never happened, rather than
+   * losing the audio.
+   */
+  transcribeOffline?: (wavPath: string) => Promise<string[]>;
 }
 
 interface CaptureState {
@@ -36,6 +45,13 @@ interface CaptureState {
   path: string;
   bytesWritten: number;
   provider: string;
+  createdAt: string;
+}
+
+interface ArchiveState {
+  fd: number;
+  path: string;
+  bytesWritten: number;
   createdAt: string;
 }
 
@@ -59,12 +75,15 @@ export class TrainingCapture {
   private readonly dir: string;
   private readonly maxBytes: number;
   private readonly now: () => number;
+  private readonly transcribeOffline?: (wavPath: string) => Promise<string[]>;
   private readonly states = new Map<string, CaptureState>();
+  private readonly archiveStates = new Map<string, ArchiveState>();
 
   constructor(opts: TrainingCaptureOptions) {
     this.dir = opts.dir;
     this.maxBytes = opts.maxBytes ?? DEFAULT_TRAINING_CAPTURE_MAX_BYTES;
     this.now = opts.now ?? (() => Date.now());
+    this.transcribeOffline = opts.transcribeOffline;
   }
 
   private key(userId: string, sessionId: string): string {
@@ -176,6 +195,99 @@ export class TrainingCapture {
   }
 
   /**
+   * Append one chunk of raw PCM for an archived (kept-on-device) session —
+   * `POST /v1/audio-archive`'s storage-only path. Lazily opens its own
+   * staging file, entirely separate from `audio`/`states` above (a session
+   * can be caption-only *and* archiving at once — orthogonal capabilities —
+   * and must not collide with each other's staging file).
+   */
+  archiveAudio(userId: string, sessionId: string, chunk: Buffer): void {
+    if (chunk.length === 0) return;
+    try {
+      const key = this.key(userId, sessionId);
+      let state = this.archiveStates.get(key);
+      if (!state) {
+        const stagingDir = join(this.dir, ".staging");
+        mkdirSync(stagingDir, { recursive: true });
+        const safe = key.replace(/[^A-Za-z0-9_-]/g, "_");
+        const path = join(stagingDir, `archive-${safe}.wav`);
+        const fd = openSync(path, "w+");
+        writeSync(fd, Buffer.alloc(WAV_HEADER_BYTES), 0, WAV_HEADER_BYTES, 0);
+        state = { fd, path, bytesWritten: 0, createdAt: new Date(this.now()).toISOString() };
+        this.archiveStates.set(key, state);
+      }
+      writeSync(state.fd, chunk, 0, chunk.length, WAV_HEADER_BYTES + state.bytesWritten);
+      state.bytesWritten += chunk.length;
+    } catch (err) {
+      console.error("training capture: archive audio write failed:", err);
+    }
+  }
+
+  /**
+   * Finalize an archived session: called from `SessionStore` on the same
+   * session's `/v1/stop` or idle reap, regardless of whether that session
+   * also has a live transcript to finalize — archiving is orthogonal to
+   * that path and never touches `TranscriptStore`, so nothing archived here
+   * ever creates a visible transcript-history entry. A no-op if nothing was
+   * ever archived for this session (mirrors `discardIfPending`).
+   *
+   * Promotes the staged PCM to `<dir>/<name>/audio.wav` — deleting it
+   * instead if zero bytes ever arrived — then labels it offline by running
+   * it back through `transcribeOffline` (never real audio in real time: the
+   * whole point is a self-labeled dataset, not a live caption). A labeling
+   * failure (no `transcribeOffline` configured, or it throws/rejects) is
+   * logged and never loses the audio: `meta.json` is written either way,
+   * noting `labelsPending: true` when labeling didn't happen.
+   */
+  async archiveFinalize(userId: string, sessionId: string): Promise<void> {
+    const key = this.key(userId, sessionId);
+    const state = this.archiveStates.get(key);
+    if (!state) return;
+    this.archiveStates.delete(key);
+
+    let destDir: string;
+    try {
+      if (state.bytesWritten === 0) {
+        closeSync(state.fd);
+        rmSync(state.path, { force: true });
+        return;
+      }
+
+      const header = buildWavHeader(state.bytesWritten);
+      writeSync(state.fd, header, 0, WAV_HEADER_BYTES, 0);
+      closeSync(state.fd);
+
+      const name = archiveDirName(state.createdAt, sessionId);
+      destDir = join(this.dir, name);
+      mkdirSync(destDir, { recursive: true });
+      renameSync(state.path, join(destDir, "audio.wav"));
+    } catch (err) {
+      console.error(`training capture: archive finalize failed for ${sessionId}:`, err);
+      return;
+    }
+
+    const durationSeconds = state.bytesWritten / (SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS);
+    const baseMeta = { durationSeconds, createdAt: state.createdAt, provider: "apple-offline" };
+    try {
+      if (!this.transcribeOffline) throw new Error("no offline transcriber configured");
+      const lines = await this.transcribeOffline(join(destDir, "audio.wav"));
+      writeFileSync(
+        join(destDir, "transcript.txt"),
+        lines.length > 0 ? lines.join("\n") + "\n" : "",
+      );
+      writeFileSync(join(destDir, "meta.json"), JSON.stringify(baseMeta, null, 2));
+    } catch (err) {
+      console.error(`training capture: offline labeling failed for ${sessionId}:`, err);
+      writeFileSync(
+        join(destDir, "meta.json"),
+        JSON.stringify({ ...baseMeta, labelsPending: true }, null, 2),
+      );
+    }
+
+    this.enforceCap();
+  }
+
+  /**
    * Delete the oldest session directories until the capture directory's
    * total size is back under `maxBytes`. Session directory names are
    * transcript names, which sort chronologically (see `transcriptName` in
@@ -223,6 +335,18 @@ function dirSize(dir: string): number {
     }
   }
   return total;
+}
+
+/**
+ * `2026-07-06T01-02-03Z_archive-<session>`; filesystem-safe, sorts
+ * chronologically alongside ordinary transcript names, and the `archive-`
+ * tag keeps an archived-session directory visually distinct from one a live
+ * transcript produced, even though both live under the same capture root.
+ */
+function archiveDirName(isoStart: string, sessionId: string): string {
+  const ts = isoStart.replace(/\.\d+Z$/, "Z").replace(/:/g, "-");
+  const safeId = sessionId.replace(/[^A-Za-z0-9-]/g, "").slice(0, 64) || "session";
+  return `${ts}_archive-${safeId}`;
 }
 
 /** A canonical 44-byte PCM WAV header for 16 kHz mono s16le audio. */

@@ -294,7 +294,9 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     EMAIL_CONFIRMS_PER_WINDOW,
     EMAIL_CONFIRM_WINDOW_MS,
   );
-  const reaper = setInterval(() => store.reapIdle(), REAP_INTERVAL_MS);
+  const reaper = setInterval(() => {
+    store.reapIdle().catch((err) => console.error("reapIdle failed:", err));
+  }, REAP_INTERVAL_MS);
 
   const http: Server = createServer((req, res) => {
     handleRequest(
@@ -354,9 +356,10 @@ export function startServer(opts: StartServerOptions): CaptionServer {
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(reaper);
-        store.closeAll();
-        for (const client of wss.clients) client.terminate();
-        wss.close(() => http.close(() => resolve()));
+        store.closeAll().finally(() => {
+          for (const client of wss.clients) client.terminate();
+          wss.close(() => http.close(() => resolve()));
+        });
       }),
   };
 }
@@ -625,6 +628,42 @@ async function handleRequest(
     return;
   }
 
+  // Kept-on-device sessions stream their raw audio here for later
+  // fine-tuning, alongside (never instead of) the captions they already
+  // upload via /v1/captions. Pure storage: no transcription provider is ever
+  // opened against this audio, and it never creates an entry in the user's
+  // visible transcript history — it lands only under `TrainingCapture`, and
+  // only once this session's /v1/stop (or the idle reaper) finalizes it.
+  // Requires TRAINING_CAPTURE_DIR; 404s otherwise (the resource genuinely
+  // doesn't exist on a relay that hasn't opted in — same choice /v1/usage
+  // makes for "not configured").
+  if (req.method === "POST" && url.pathname === "/v1/audio-archive") {
+    if (!opts.trainingCapture) {
+      sendJSON(res, 404, { error: "training capture not enabled" });
+      return;
+    }
+    const principal = principalFor(req, url, opts);
+    if (!principal) {
+      sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const session = url.searchParams.get("session") ?? "";
+    if (!session) {
+      sendJSON(res, 400, { error: "missing session" });
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBody(req, MAX_AUDIO_BYTES);
+    } catch {
+      sendJSON(res, 413, { error: "body too large" });
+      return;
+    }
+    store.feedArchive(principal.userId, session, body);
+    sendJSON(res, 200, { ok: true });
+    return;
+  }
+
   if (
     req.method === "POST" &&
     (url.pathname === "/v1/audio" || url.pathname === "/v1/captions" || url.pathname === "/v1/stop")
@@ -761,8 +800,11 @@ async function handleRequest(
     }
 
     // /v1/stop — drain any remaining events, then tear the session down.
+    // Awaited: `stop` itself waits (bounded by the provider's own cap) for
+    // its graceful finish before finalizing, so the response only goes out
+    // once that has genuinely happened — see SessionStore.stop.
     const { events, seq } = store.drain(principal.userId, session, since);
-    store.stop(principal.userId, session);
+    await store.stop(principal.userId, session);
     sendJSON(res, 200, { events: flatten(events), seq });
     return;
   }

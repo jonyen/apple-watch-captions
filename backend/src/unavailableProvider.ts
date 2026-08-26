@@ -19,5 +19,5 @@ export class UnavailableProvider implements TranscriptionProvider {
     this.errorHandler = handler;
   }
   sendAudio(_chunk: Buffer): void {}
-  close(): void {}
+  async close(): Promise<void> {}
 }

@@ -63,7 +63,10 @@ export class ChannelSplitProvider implements TranscriptionProvider {
     this.inner[1].sendAudio(right);
   }
 
-  close(): void {
-    for (const provider of this.inner) provider.close();
+  async close(): Promise<void> {
+    // Both channels' graceful finishes run concurrently, each still bounded
+    // by its own provider's cap — waiting for both takes as long as the
+    // slower one, not their sum.
+    await Promise.all(this.inner.map((provider) => provider.close()));
   }
 }

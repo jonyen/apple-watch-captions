@@ -53,7 +53,11 @@ export class CaptionSession {
     });
   }
 
-  close(): void {
-    this.provider.close();
+  /**
+   * Closes the underlying provider and resolves once its own graceful
+   * shutdown (bounded) is over — see `TranscriptionProvider.close`.
+   */
+  close(): Promise<void> {
+    return this.provider.close();
   }
 }

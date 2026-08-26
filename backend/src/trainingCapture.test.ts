@@ -185,3 +185,98 @@ describe("TrainingCapture", () => {
     }
   });
 });
+
+describe("TrainingCapture archived (kept-on-device) sessions", () => {
+  it("writes audio.wav, offline-labeled transcript.txt, and meta.json", async () => {
+    const capture = new TrainingCapture({
+      dir: root,
+      now: () => Date.parse("2026-01-01T00:00:00.000Z"),
+      transcribeOffline: async () => ["offline label one", "offline label two"],
+    });
+    capture.archiveAudio("u1", "s1", pcm(16_000));
+    await capture.archiveFinalize("u1", "s1");
+
+    const dirs = readdirSync(root, { withFileTypes: true }).filter(
+      (e) => e.isDirectory() && e.name !== ".staging",
+    );
+    expect(dirs).toHaveLength(1);
+    expect(dirs[0]!.name).toContain("archive-s1");
+    const dir = join(root, dirs[0]!.name);
+
+    const wav = readFileSync(join(dir, "audio.wav"));
+    expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(wav.readUInt32LE(40)).toBe(32_000);
+
+    expect(readFileSync(join(dir, "transcript.txt"), "utf8")).toBe(
+      "offline label one\noffline label two\n",
+    );
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
+    expect(meta.provider).toBe("apple-offline");
+    expect(meta.labelsPending).toBeUndefined();
+    expect(typeof meta.durationSeconds).toBe("number");
+  });
+
+  it("discards a zero-byte archive session rather than writing an empty directory", async () => {
+    const capture = new TrainingCapture({
+      dir: root,
+      transcribeOffline: async () => ["should never be called"],
+    });
+    // archiveAudio is never called for this session at all.
+    await capture.archiveFinalize("u1", "nope");
+    expect(readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory())).toEqual([]);
+  });
+
+  it("keeps the audio and notes labels-pending when offline labeling fails, never losing it", async () => {
+    const capture = new TrainingCapture({
+      dir: root,
+      transcribeOffline: async () => {
+        throw new Error("sidecar unreachable");
+      },
+    });
+    capture.archiveAudio("u1", "s1", pcm(1_000));
+    await capture.archiveFinalize("u1", "s1");
+
+    const dirs = readdirSync(root, { withFileTypes: true }).filter(
+      (e) => e.isDirectory() && e.name !== ".staging",
+    );
+    expect(dirs).toHaveLength(1);
+    const dir = join(root, dirs[0]!.name);
+    expect(existsSync(join(dir, "audio.wav"))).toBe(true);
+    expect(existsSync(join(dir, "transcript.txt"))).toBe(false);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
+    expect(meta.labelsPending).toBe(true);
+    expect(meta.provider).toBe("apple-offline");
+  });
+
+  it("keeps the audio and notes labels-pending when no offline transcriber is configured at all", async () => {
+    const capture = new TrainingCapture({ dir: root }); // no transcribeOffline
+    capture.archiveAudio("u1", "s1", pcm(1_000));
+    await capture.archiveFinalize("u1", "s1");
+
+    const dirs = readdirSync(root, { withFileTypes: true }).filter(
+      (e) => e.isDirectory() && e.name !== ".staging",
+    );
+    const dir = join(root, dirs[0]!.name);
+    expect(existsSync(join(dir, "audio.wav"))).toBe(true);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"));
+    expect(meta.labelsPending).toBe(true);
+  });
+
+  it("archiveFinalize is a no-op when nothing was ever archived for this session", async () => {
+    const capture = new TrainingCapture({ dir: root });
+    await expect(capture.archiveFinalize("u1", "unknown")).resolves.toBeUndefined();
+  });
+
+  it("keeps live-capture and archive staging apart for the same user/session id", () => {
+    const capture = new TrainingCapture({ dir: root });
+    capture.audio("u1", "s1", "apple", pcm(10));
+    capture.archiveAudio("u1", "s1", pcm(20));
+    const staged = readdirSync(join(root, ".staging")).sort();
+    expect(staged).toEqual(["2_u1_s1.wav", "archive-2_u1_s1.wav"]);
+  });
+
+  it("swallows and logs an archive audio write failure, without throwing", () => {
+    const capture = new TrainingCapture({ dir: "\0invalid" });
+    expect(() => capture.archiveAudio("u1", "s1", pcm(10))).not.toThrow();
+  });
+});

@@ -6,6 +6,15 @@ import { TranscriptionProvider, Transcript } from "./transcriptionProvider";
 export class FakeTranscriptionProvider implements TranscriptionProvider {
   receivedAudio: Buffer[] = [];
   closed = false;
+  /**
+   * Test hook: when set, `close()` resolves only once this resolves (or
+   * rejects when it does), instead of immediately — lets a test simulate a
+   * provider whose graceful close takes time (or never finishes on its own),
+   * the same shape `AppleTranscriptionProvider`'s finish/done handshake has,
+   * so callers that are supposed to wait for it can be proven to actually
+   * wait.
+   */
+  closeBarrier?: Promise<void>;
 
   private transcriptHandler: (t: Transcript) => void = () => {};
   private readyHandler: () => void = () => {};
@@ -23,8 +32,9 @@ export class FakeTranscriptionProvider implements TranscriptionProvider {
   sendAudio(chunk: Buffer): void {
     this.receivedAudio.push(chunk);
   }
-  close(): void {
+  close(): Promise<void> {
     this.closed = true;
+    return this.closeBarrier ?? Promise.resolve();
   }
 
   // --- test drivers ---

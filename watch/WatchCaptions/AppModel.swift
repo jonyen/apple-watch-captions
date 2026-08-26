@@ -30,11 +30,63 @@ final class AppModel: ObservableObject {
 
     // MARK: - Home-screen toggles
 
-    /// The home screen's "On device" toggle: compute captions on the watch
-    /// itself instead of streaming audio to the relay. Persisted, like
-    /// `lastSession`, so the choice survives launches.
-    @Published var onDeviceEnabled: Bool {
-        didSet { defaults.set(onDeviceEnabled, forKey: Keys.onDeviceEnabled) }
+    /// The home screen's capture-mode button cycles through these three:
+    /// - `local`: compute captions on the watch alone (Moonshine, on-device).
+    ///   Nothing is sent anywhere except the kept-mode caption/audio uploads.
+    ///   Exactly the old "Watch only" toggle's ON behavior.
+    /// - `cloud`: the relay drives the session directly — no local Moonshine
+    ///   at all. Cheapest on battery, but needs the relay reachable; this is
+    ///   the pre-`HybridEngine` off-device behavior, restored as its own
+    ///   choice instead of the only off-device choice.
+    /// - `hybrid`: instant local partials refined by the relay's finals, with
+    ///   degrade-to-local if the relay dies. The default — exactly the old
+    ///   toggle's OFF behavior, unchanged.
+    enum CaptureMode: String, CaseIterable {
+        case local
+        case cloud
+        case hybrid
+
+        /// The button's cycle order: Local → Cloud → Hybrid → Local.
+        var next: CaptureMode {
+            switch self {
+            case .local: return .cloud
+            case .cloud: return .hybrid
+            case .hybrid: return .local
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case .local: return "Local"
+            case .cloud: return "Cloud"
+            case .hybrid: return "Hybrid"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .local: return "cpu"
+            case .cloud: return "cloud"
+            case .hybrid: return "arrow.triangle.2.circlepath"
+            }
+        }
+
+        var accessibilityHint: String {
+            switch self {
+            case .local:
+                return "Caption entirely on the watch. Nothing is sent to the relay. Tap to switch to Cloud."
+            case .cloud:
+                return "Caption using the relay only; nothing is computed on the watch. Needs the relay reachable. Tap to switch to Hybrid."
+            case .hybrid:
+                return "Caption instantly on the watch, refined by the relay when it's reachable. Tap to switch to Local."
+            }
+        }
+    }
+
+    /// The home screen's capture-mode button. Persisted, like `lastSession`,
+    /// so the choice survives launches.
+    @Published var mode: CaptureMode {
+        didSet { defaults.set(mode.rawValue, forKey: Keys.captureMode) }
     }
     /// The home screen's "Keep transcripts" toggle: whether a session leaves
     /// a transcript. Defaults to on — the app's original promise — until the
@@ -110,7 +162,7 @@ final class AppModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        onDeviceEnabled = defaults.bool(forKey: Keys.onDeviceEnabled)
+        mode = Self.loadCaptureMode(from: defaults)
         // Absent means on: saving is the default the app has always had, and
         // `bool(forKey:)` alone would silently read absence as off.
         keepTranscripts = defaults.object(forKey: Keys.keepTranscripts) == nil
@@ -223,21 +275,36 @@ final class AppModel: ObservableObject {
     /// `launchAction` reasons about) without being explicitly stopped. Stop
     /// is a decision, so a stopped session is never offered.
     var shouldOfferResume: Bool {
-        guard !onDeviceEnabled, keepTranscripts else { return false }
+        guard mode != .local, keepTranscripts else { return false }
         guard !stoppedExplicitly, let last = lastSession else { return false }
         return Date().timeIntervalSince(last.endedAt) < Self.resumeWindow
     }
 
-    /// Start a session the way the two home-screen toggles ask. The four
-    /// combinations map onto the four kinds of session the app already knew,
-    /// plus the one new one: kept and on-device.
+    /// Start a session the way the mode button and the "Keep transcripts"
+    /// toggle ask. Six combinations: Local and Hybrid map onto the sessions
+    /// the app already knew; Cloud reuses the same relay path Hybrid does —
+    /// `hybrid` with its local engine turned off for this session (see
+    /// `HybridEngine.localEnabled`) — rather than a second relay client.
     func start() async {
-        switch (onDeviceEnabled, keepTranscripts) {
-        case (false, true): await startNew()
-        case (false, false): await startLive()
-        case (true, false): await startOnDevice()
-        case (true, true): await startSavedOnDevice()
+        switch (mode, keepTranscripts) {
+        case (.local, false): await startOnDevice()
+        case (.local, true): await startSavedOnDevice()
+        case (.cloud, true), (.hybrid, true):
+            configureHybridLocal()
+            await startNew()
+        case (.cloud, false), (.hybrid, false):
+            configureHybridLocal()
+            await startLive()
         }
+    }
+
+    /// Sets whether the shared `hybrid` engine runs its local Moonshine
+    /// engine for the next relay session, from the current `mode`. Called
+    /// before every relay-mode start (`start()`, `continueLast()`,
+    /// `resume(name:)`, and the relay branch of `retry()`) since those don't
+    /// all route through the same call site.
+    private func configureHybridLocal() {
+        hybrid.localEnabled = mode == .hybrid
     }
 
     /// How long a just-ended session stays offerable, matching the relay's
@@ -294,22 +361,30 @@ final class AppModel: ObservableObject {
 
     func continueLast() async {
         guard let name = lastSession?.transcriptName else { return }
+        configureHybridLocal()
         await startCaptions(mode: .saved(resuming: name))
     }
 
     func resume(name: String) async {
+        configureHybridLocal()
         await startCaptions(mode: .saved(resuming: name))
     }
 
     /// Restart after a connection error, in the mode that failed. Retrying a
-    /// live session must not quietly start recording one.
+    /// live session must not quietly start recording one. `mode` cannot have
+    /// changed since the session started — the home screen (the only place
+    /// it's set) isn't reachable while a session is on screen — so re-reading
+    /// it here restarts exactly what failed.
     func retry() async {
         if onDevice {
             await startOnDeviceSession(keep: onDeviceKeep)
-        } else if live {
-            await startLive()
         } else {
-            await startNew()
+            configureHybridLocal()
+            if live {
+                await startLive()
+            } else {
+                await startNew()
+            }
         }
     }
 
@@ -493,8 +568,26 @@ final class AppModel: ObservableObject {
         static let transcriptName = "lastTranscriptName"
         static let endedAt = "lastSessionEndedAt"
         static let stoppedExplicitly = "stoppedExplicitly"
+        /// The old "On device" toggle, superseded by `captureMode`. Kept only
+        /// as the source key `loadCaptureMode(from:)` migrates from once.
         static let onDeviceEnabled = "onDeviceEnabled"
+        static let captureMode = "captureMode"
         static let keepTranscripts = "keepTranscripts"
+    }
+
+    /// Loads the persisted capture mode, migrating once from the old
+    /// "On device" boolean the first time this runs on a device that still
+    /// has it: `true` (on) → `.local`, `false`/absent (off, the old default)
+    /// → `.hybrid`. The old key is then removed so this migration never runs
+    /// again and the two settings can't drift apart.
+    private static func loadCaptureMode(from defaults: UserDefaults) -> CaptureMode {
+        if let raw = defaults.string(forKey: Keys.captureMode), let mode = CaptureMode(rawValue: raw) {
+            return mode
+        }
+        let migrated: CaptureMode = defaults.bool(forKey: Keys.onDeviceEnabled) ? .local : .hybrid
+        defaults.set(migrated.rawValue, forKey: Keys.captureMode)
+        defaults.removeObject(forKey: Keys.onDeviceEnabled)
+        return migrated
     }
 
     private static func loadLastSession(from defaults: UserDefaults) -> LastSession? {

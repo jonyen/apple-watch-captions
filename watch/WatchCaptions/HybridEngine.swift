@@ -55,6 +55,26 @@ final class HybridEngine: CaptionEngine {
     private let relay: HTTPRelayClient
     private let log = Logger(subsystem: "com.jonyen.watchcaptions", category: "HybridEngine")
 
+    /// Whether the next session runs the local Moonshine engine at all, or
+    /// leaves the relay to drive the session by itself — the app's Cloud
+    /// mode. Set before `start()`; read once per connect, like
+    /// `HTTPRelayClient.mode` and `SavedOnDeviceEngine.keep`. Living here
+    /// rather than behind a second `HTTPRelayClient` (and a second
+    /// controller wired to it) is the smaller change: `relay` already has
+    /// exactly one owner, and giving it a second would need the same
+    /// rebind-per-start dance `local` already requires for its two owners
+    /// (`HybridEngine` and `SavedOnDeviceEngine`). With this off, every
+    /// `guard localAlive else { onEvent?(event) }` branch below — written for
+    /// "local already died mid-session" — passes relay events straight
+    /// through from the start, which is exactly Cloud's contract: no
+    /// speculative text, no degrade path, relay failure ends the session
+    /// (the same as before `HybridEngine` existed).
+    var localEnabled = true
+    /// This session's `localEnabled`, latched at `start()` so a mutation
+    /// mid-session (there's no UI for that today, but `close()` must still
+    /// match what `start()` did) can't split the two.
+    private var sessionUsesLocal = true
+
     /// No relay final for this long while local text keeps accumulating means
     /// the relay is wedged — connected, but never superseding anything (a
     /// stuck-but-alive Apple recognizer is a documented failure mode on this
@@ -110,26 +130,31 @@ final class HybridEngine: CaptionEngine {
     /// session begins captioning even if the relay never connects.
     func start() {
         MainActor.assumeIsolated {
+            sessionUsesLocal = localEnabled
             relayAlive = true
-            localAlive = true
+            localAlive = sessionUsesLocal
             readyDelivered = false
             localFinals = []
             localPartial = ""
             feedLock.lock(); relayFeedable = true; feedLock.unlock()
-            // Take the shared Moonshine engine over for this session (see the
-            // type comment; `SavedOnDeviceEngine.start()` does the same).
-            local.onEvent = { [weak self] event in self?.handleLocal(event) }
-            local.onClose = { [weak self] in self?.handleLocalDeath() }
+            if sessionUsesLocal {
+                // Take the shared Moonshine engine over for this session (see
+                // the type comment; `SavedOnDeviceEngine.start()` does the
+                // same).
+                local.onEvent = { [weak self] event in self?.handleLocal(event) }
+                local.onClose = { [weak self] in self?.handleLocalDeath() }
+            }
             lastRelayFinalAt = Date()
             startWatchdog()
-            local.start()
+            if sessionUsesLocal { local.start() }
             relay.start()
         }
     }
 
-    /// Called on the audio thread: fan the chunk to both engines.
+    /// Called on the audio thread: fan the chunk to both engines, or just the
+    /// relay in Cloud mode.
     func send(_ audio: Data) {
-        local.send(audio)
+        if sessionUsesLocal { local.send(audio) }
         feedLock.lock(); let feed = relayFeedable; feedLock.unlock()
         if feed { relay.send(audio) }
     }
@@ -145,7 +170,7 @@ final class HybridEngine: CaptionEngine {
             watchdog?.cancel()
             watchdog = nil
             feedLock.lock(); relayFeedable = false; feedLock.unlock()
-            local.close()
+            if sessionUsesLocal { local.close() }
             relay.close()
         }
     }

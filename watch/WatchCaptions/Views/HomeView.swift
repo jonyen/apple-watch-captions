@@ -13,8 +13,8 @@ struct HomeView: View {
     let onStart: () -> Void
     /// Pick the previous session back up.
     let onResume: () -> Void
-    /// Compute captions on the watch itself instead of streaming to the relay.
-    @Binding var onDevice: Bool
+    /// The capture-mode button's current value: Local, Cloud, or Hybrid.
+    @Binding var mode: AppModel.CaptureMode
     /// Keep a transcript of each session.
     @Binding var keepTranscripts: Bool
     /// Browse the transcripts past sessions kept.
@@ -42,17 +42,18 @@ struct HomeView: View {
             } label: {
                 Label("Start", systemImage: "record.circle")
             }
-            // Toggles rather than more ways to start: what a session is —
-            // where it is computed, whether it is kept — is a setting that
-            // outlives any one tap, and Start stays the only verb.
-            // Off is the default and means hybrid: instant on-watch captions
-            // refined by the iMac when it is reachable. On means the watch
-            // alone, nothing sent anywhere — the exception, so it gets the
-            // label.
-            Toggle(isOn: $onDevice) {
-                Label("Watch only", systemImage: "cpu")
+            // A button rather than a toggle: there are three modes, not two,
+            // so it cycles Local → Cloud → Hybrid → Local. Like the toggle it
+            // replaces, what a session is — where it is computed, whether the
+            // relay is involved — is a setting that outlives any one tap, and
+            // Start stays the only verb. Hybrid is the default: instant
+            // on-watch captions refined by the iMac when it is reachable.
+            Button {
+                mode = mode.next
+            } label: {
+                Label(mode.displayName, systemImage: mode.systemImage)
             }
-            .accessibilityHint("Caption entirely on the watch. Nothing is sent to the relay.")
+            .accessibilityHint(mode.accessibilityHint)
             Toggle(isOn: $keepTranscripts) {
                 Label("Keep transcripts", systemImage: "doc.text")
             }

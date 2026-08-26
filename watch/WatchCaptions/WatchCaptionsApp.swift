@@ -49,7 +49,7 @@ private struct RootView: View {
                     shouldOfferResume: { model.shouldOfferResume },
                     onStart: { Task { await model.start() } },
                     onResume: { Task { await model.continueLast() } },
-                    onDevice: $model.onDeviceEnabled,
+                    mode: $model.mode,
                     keepTranscripts: $model.keepTranscripts,
                     onBrowse: { Task { await model.showHistory() } },
                     onPair: { model.showPairing() })

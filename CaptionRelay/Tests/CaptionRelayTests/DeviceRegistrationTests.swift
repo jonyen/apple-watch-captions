@@ -18,6 +18,8 @@ private final class FakeStore: SecureTokenStore, @unchecked Sendable {
         written = token
         self.token = token
     }
+
+    func clear() { token = nil }
 }
 
 /// A store that can never persist: `write` silently no-ops and `read` always
@@ -30,6 +32,7 @@ private final class FakeStore: SecureTokenStore, @unchecked Sendable {
 private final class SilentStore: SecureTokenStore, @unchecked Sendable {
     func read() -> String? { nil }
     func write(_ token: String) {}
+    func clear() {}
 }
 
 /// Fake `DeviceRegistrar` that always answers with a fixed token. Counts
@@ -225,5 +228,25 @@ final class DeviceRegistrationTests: XCTestCase {
         XCTAssertEqual(second, "tok-A")
         XCTAssertEqual(third, "tok-A")
         XCTAssertEqual(registrar.calls, 1)               // memoized, not re-registered
+    }
+
+
+    /// A 401 from the relay means the stored token references an identity the
+    /// relay no longer holds. `invalidate()` must drop both the memo and the
+    /// store so the next `token()` registers afresh instead of replaying the
+    /// dead token forever.
+    func testInvalidateForcesReRegistration() async throws {
+        let store = FakeStore("stale-token")
+        let registrar = FakeRegistrar(returning: "fresh-token")
+        let registration = DeviceRegistration(kind: "watch", store: store, registrar: registrar)
+
+        let first = try await registration.token()
+        XCTAssertEqual(first, "stale-token")
+
+        await registration.invalidate()
+
+        let second = try await registration.token()
+        XCTAssertEqual(second, "fresh-token")
+        XCTAssertEqual(store.written, "fresh-token")
     }
 }

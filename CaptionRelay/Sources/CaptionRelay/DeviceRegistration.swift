@@ -6,6 +6,8 @@ import Foundation
 public protocol SecureTokenStore {
     func read() -> String?
     func write(_ token: String)
+    /// Forget the stored token, so the next `token()` registers afresh.
+    func clear()
 }
 
 /// Registers this device with the relay's one unauthenticated write,
@@ -89,5 +91,14 @@ public actor DeviceRegistration {
         store.write(token)
         cached = token
         return token
+    }
+
+    /// Drops the stored token. Called when the relay answers 401 — the token
+    /// was minted against an identity the relay no longer holds (a database
+    /// reset, a relay reinstall), and no amount of retrying with it can ever
+    /// succeed. The next `token()` call registers this device afresh.
+    public func invalidate() {
+        cached = nil
+        store.clear()
     }
 }

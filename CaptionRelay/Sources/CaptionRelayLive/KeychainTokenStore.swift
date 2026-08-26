@@ -74,6 +74,13 @@ public struct KeychainTokenStore: SecureTokenStore {
         }
     }
 
+    public func clear() {
+        let status = SecItemDelete(baseQuery() as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            Self.logger.error("Keychain delete failed: \(status)")
+        }
+    }
+
     private func baseQuery() -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

@@ -52,7 +52,12 @@ final class HybridEngine: CaptionEngine {
     var onRelayDown: (@MainActor () -> Void)?
 
     private let local: OnDeviceEngine
-    private let relay: HTTPRelayClient
+    /// The remote leg — `HTTPRelayClient` (the iMac relay) or `PhoneEngine`
+    /// (Auto mode's preferred transcriber), chosen by whoever constructs this
+    /// engine and injected here. Spoken to only through the `CaptionEngine`
+    /// surface below (`onEvent`/`onClose`/`start()`/`send(_:)`/`close()`) —
+    /// arbitration never depends on which concrete type it is.
+    private let remote: CaptionEngine & AnyObject
     private let log = Logger(subsystem: "com.jonyen.watchcaptions", category: "HybridEngine")
 
     /// Whether the next session runs the local Moonshine engine at all, or
@@ -118,11 +123,11 @@ final class HybridEngine: CaptionEngine {
     private let feedLock = NSLock()
     private var relayFeedable = true
 
-    init(local: OnDeviceEngine, relay: HTTPRelayClient) {
+    init(local: OnDeviceEngine, remote: CaptionEngine & AnyObject) {
         self.local = local
-        self.relay = relay
-        relay.onEvent = { [weak self] event in self?.handleRelay(event) }
-        relay.onClose = { [weak self] in self?.handleRelayClose() }
+        self.remote = remote
+        remote.onEvent = { [weak self] event in self?.handleRelay(event) }
+        remote.onClose = { [weak self] in self?.handleRelayClose() }
     }
 
     /// Starts both engines. The local engine reports `.ready` instantly —
@@ -147,7 +152,7 @@ final class HybridEngine: CaptionEngine {
             lastRelayFinalAt = Date()
             startWatchdog()
             if sessionUsesLocal { local.start() }
-            relay.start()
+            remote.start()
         }
     }
 
@@ -156,7 +161,7 @@ final class HybridEngine: CaptionEngine {
     func send(_ audio: Data) {
         if sessionUsesLocal { local.send(audio) }
         feedLock.lock(); let feed = relayFeedable; feedLock.unlock()
-        if feed { relay.send(audio) }
+        if feed { remote.send(audio) }
     }
 
     /// Local first — dropping its open segment is its documented close
@@ -171,7 +176,7 @@ final class HybridEngine: CaptionEngine {
             watchdog = nil
             feedLock.lock(); relayFeedable = false; feedLock.unlock()
             if sessionUsesLocal { local.close() }
-            relay.close()
+            remote.close()
         }
     }
 
@@ -295,7 +300,7 @@ final class HybridEngine: CaptionEngine {
         feedLock.lock(); relayFeedable = false; feedLock.unlock()
         // Best-effort: tells the relay to finalize whatever it received. A
         // no-op if the client already tore itself down.
-        relay.close()
+        remote.close()
         let flush = cumulativeText()
         localFinals = []
         localPartial = ""

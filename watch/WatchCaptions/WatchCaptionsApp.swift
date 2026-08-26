@@ -8,7 +8,7 @@ struct WatchCaptionsApp: App {
     @StateObject private var model = AppModel()
 
     init() {
-        SpikeWC.runIfRequested()
+        WCActivation.activateIfNeeded()
     }
 
     var body: some Scene {
@@ -88,7 +88,6 @@ private struct RootView: View {
                 indicator: model.onDevice
                     ? (model.onDeviceKept ? .onDeviceSaved : .onDevice)
                     : (model.live ? .liveOnly : .recording),
-                textSize: model.settings.captionTextSize,
                 onStop: { model.stop() })
         case .error(let message):
             ErrorView(message: message, onRetry: { Task { await model.retry() } })

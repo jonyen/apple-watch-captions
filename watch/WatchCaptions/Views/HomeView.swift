@@ -13,7 +13,7 @@ struct HomeView: View {
     let onStart: () -> Void
     /// Pick the previous session back up.
     let onResume: () -> Void
-    /// The capture-mode button's current value: Local, Cloud, or Hybrid.
+    /// The capture-mode button's current value: Auto or Watch only.
     @Binding var mode: AppModel.CaptureMode
     /// Keep a transcript of each session.
     @Binding var keepTranscripts: Bool
@@ -39,12 +39,12 @@ struct HomeView: View {
             } label: {
                 Label("Start", systemImage: "record.circle")
             }
-            // A button rather than a toggle: there are three modes, not two,
-            // so it cycles Local → Cloud → Hybrid → Local. Like the toggle it
-            // replaces, what a session is — where it is computed, whether the
-            // relay is involved — is a setting that outlives any one tap, and
-            // Start stays the only verb. Hybrid is the default: instant
-            // on-watch captions refined by the iMac when it is reachable.
+            // A button rather than a toggle: cycles Auto → Watch only → Auto.
+            // What a session is — where it is computed, which transcriber
+            // refines it — is a setting that outlives any one tap, and Start
+            // stays the only verb. Auto is the default: instant on-watch
+            // captions refined by whichever transcriber Auto can reach —
+            // the iPhone nearby, then the iMac relay.
             Button {
                 mode = mode.next
             } label: {

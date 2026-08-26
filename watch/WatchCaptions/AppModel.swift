@@ -1,5 +1,6 @@
 import Foundation
 import WatchKit
+import WatchConnectivity
 import CaptionCore
 import CaptionRelay
 import CaptionRelayLive
@@ -27,55 +28,49 @@ final class AppModel: ObservableObject {
 
     // MARK: - Home-screen toggles
 
-    /// The home screen's capture-mode button cycles through these three:
-    /// - `local`: compute captions on the watch alone (Moonshine, on-device).
-    ///   Nothing is sent anywhere except the kept-mode caption/audio uploads.
-    ///   Exactly the old "Watch only" toggle's ON behavior.
-    /// - `cloud`: the relay drives the session directly — no local Moonshine
-    ///   at all. Cheapest on battery, but needs the relay reachable; this is
-    ///   the pre-`HybridEngine` off-device behavior, restored as its own
-    ///   choice instead of the only off-device choice.
-    /// - `hybrid`: instant local partials refined by the relay's finals, with
-    ///   degrade-to-local if the relay dies. The default — exactly the old
-    ///   toggle's OFF behavior, unchanged.
+    /// The home screen's capture-mode button cycles through these two:
+    /// - `auto`: instant local partials (Moonshine, on-device) refined by
+    ///   the best remote transcriber `AppModel` can reach at session
+    ///   start — the iPhone over `WatchConnectivity` when it's nearby, else
+    ///   the iMac relay over the network, else local alone. Degrades to
+    ///   local-only mid-session on any remote failure (`HybridEngine`'s
+    ///   standing contract). The default; replaces the old Cloud and Hybrid
+    ///   modes, which the user no longer chooses between by hand.
+    /// - `watchOnly`: compute captions on the watch alone (Moonshine); nothing
+    ///   is sent anywhere except the kept-mode caption/audio uploads. Exactly
+    ///   the old "Watch only" toggle's ON behavior, and the old `local` mode.
     enum CaptureMode: String, CaseIterable {
-        case local
-        case cloud
-        case hybrid
+        case auto
+        case watchOnly
 
-        /// The button's cycle order: Local → Cloud → Hybrid → Local.
+        /// The button's cycle order: Auto → Watch only → Auto.
         var next: CaptureMode {
             switch self {
-            case .local: return .cloud
-            case .cloud: return .hybrid
-            case .hybrid: return .local
+            case .auto: return .watchOnly
+            case .watchOnly: return .auto
             }
         }
 
         var displayName: String {
             switch self {
-            case .local: return "Local"
-            case .cloud: return "Cloud"
-            case .hybrid: return "Hybrid"
+            case .auto: return "Auto"
+            case .watchOnly: return "Watch only"
             }
         }
 
         var systemImage: String {
             switch self {
-            case .local: return "cpu"
-            case .cloud: return "cloud"
-            case .hybrid: return "arrow.triangle.2.circlepath"
+            case .auto: return "wand.and.stars"
+            case .watchOnly: return "applewatch"
             }
         }
 
         var accessibilityHint: String {
             switch self {
-            case .local:
-                return "Caption entirely on the watch. Nothing is sent to the relay. Tap to switch to Cloud."
-            case .cloud:
-                return "Caption using the relay only; nothing is computed on the watch. Needs the relay reachable. Tap to switch to Hybrid."
-            case .hybrid:
-                return "Caption instantly on the watch, refined by the relay when it's reachable. Tap to switch to Local."
+            case .auto:
+                return "Caption instantly on the watch, refined by the best transcriber nearby — the iPhone, then the iMac relay. Tap to switch to Watch only."
+            case .watchOnly:
+                return "Caption entirely on the watch. Nothing is sent anywhere. Tap to switch to Auto."
             }
         }
     }
@@ -109,13 +104,27 @@ final class AppModel: ObservableObject {
         didSet { defaults.set(stoppedExplicitly, forKey: Keys.stoppedExplicitly) }
     }
 
-    private let controller: SessionController
-    private let relay: HTTPRelayClient
-    /// What `controller` actually drives: the relay session plus the local
-    /// Moonshine engine running alongside it, arbitrated so captions are
-    /// instant locally and upgraded by the relay's finals — and so the relay
-    /// dying degrades the session instead of ending it. See `HybridEngine`.
-    private let hybrid: HybridEngine
+    /// Drives the current Auto session. Rebuilt fresh at every Auto
+    /// `startCaptions(mode:)` call (see `makeAutoController(mode:)`), rather
+    /// than held for the app's lifetime like `onDeviceController`: Auto picks
+    /// its remote transcriber per session, and both `SessionController` and
+    /// `HybridEngine` bind to their engine for life at `init`, so a new
+    /// choice of remote needs a new pair. `nil` whenever no Auto session has
+    /// run yet.
+    private var controller: SessionController?
+    /// The relay origin every relay-facing client (`HTTPRelayClient`,
+    /// `RelayHistoryClient`, the on-device uploaders) is built against.
+    private let base: URL
+    /// Resolves this device's bearer token — handed to every client that
+    /// authorizes requests, including `PhoneEngine` and each session's
+    /// `HTTPRelayClient`. See `HTTPRelayClient`'s doc comment for why this is
+    /// a provider rather than a resolved `String`.
+    private let token: @Sendable () async throws -> String
+    /// One loaded Moonshine model, shared by every session's local leg —
+    /// Auto's `HybridEngine` and `SavedOnDeviceEngine` alike — since only one
+    /// session ever runs at a time. Each wrapper rebinds its callbacks in its
+    /// own `start()`, taking ownership for that session.
+    private let moonshine = OnDeviceEngine()
     private let micPermission = MicPermission()
     private let defaults: UserDefaults
     /// Waits for the relay to push a finished transcript to Notion.
@@ -132,10 +141,6 @@ final class AppModel: ObservableObject {
     /// `SessionController` itself so a fetch that outlives its session has
     /// somewhere to be guarded without the controller knowing history exists.
     private let prefiller: TranscriptPrefiller
-    private let settingsClient: RelaySettingsClient
-    /// What the phone last said. Defaults until the relay answers, so the app
-    /// works unchanged when it cannot be reached.
-    @Published private(set) var settings: Settings = .defaults
     /// True while the running mic session is the on-device one, so Stop,
     /// retry and the indicator address the right controller.
     @Published private(set) var onDevice = false
@@ -159,30 +164,18 @@ final class AppModel: ObservableObject {
         // `bool(forKey:)` alone would silently read absence as off.
         keepTranscripts = defaults.object(forKey: Keys.keepTranscripts) == nil
             ? true : defaults.bool(forKey: Keys.keepTranscripts)
-        let base = RelayOrigin.http(from: Secrets.relayURL)
+        base = RelayOrigin.http(from: Secrets.relayURL)
         // A provider, not a resolved `String`: `init` is synchronous and
         // constructs every relay client eagerly, but the token comes from
         // `DeviceIdentity`, whose `token()` is `async throws` (it may need to
         // register this device with the relay on first launch). Each client
         // now holds this closure and resolves it per request instead of a
         // stored secret — see `HTTPRelayClient`'s doc comment.
-        let token: @Sendable () async throws -> String = { try await DeviceIdentity.shared.token() }
+        token = { try await DeviceIdentity.shared.token() }
+        let token = self.token   // local shadow: closures below capture it implicitly, not `self`
         let historyClient = RelayHistoryClient(base: base, token: token)
-        relay = HTTPRelayClient(base: base, token: token)
         history = HistoryStore(client: historyClient)
         exports = ExportWatcher(client: historyClient, defaults: defaults)
-        // One Moonshine engine — one loaded model — serves both the hybrid
-        // relay sessions and the pure on-device ones; only one session runs
-        // at a time, and each wrapper rebinds the engine's callbacks in its
-        // own `start()`.
-        let moonshine = OnDeviceEngine()
-        hybrid = HybridEngine(local: moonshine, relay: relay)
-        controller = SessionController(
-            store: store,
-            relay: hybrid,
-            audio: AudioCapture(),
-            permission: micPermission
-        )
         onDeviceEngine = SavedOnDeviceEngine(
             engine: moonshine,
             makeUploader: { CaptionUploader(token: token) },
@@ -197,21 +190,8 @@ final class AppModel: ObservableObject {
         // Resuming a session restores its transcript; this reads it. Kept off
         // HistoryStore, whose `detail` belongs to the history screen.
         prefiller = TranscriptPrefiller(history: historyClient)
-        settingsClient = RelaySettingsClient(base: base, token: token)
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
-        relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
-        // The relay dying mid-session no longer ends it — captions continue
-        // from the local engine — but a session that asked to be kept is no
-        // longer being written down from that moment. Flip `live` so the
-        // indicator turns hollow ("not saved") rather than keep claiming a
-        // persistence the relay stopped providing. `currentTranscript` stays:
-        // everything up to the drop *was* saved, and resuming that transcript
-        // later is exactly the recovery Start should offer.
-        hybrid.onRelayDown = { [weak self] in
-            guard let self, self.capturing, !self.onDevice else { return }
-            self.live = true
-        }
         onDeviceEngine.onKept = { [weak self] kept in self?.onDeviceKept = kept }
         // A kept on-device session learns its relay transcript's name from
         // the caption uploader's first acknowledged post — the same
@@ -248,9 +228,6 @@ final class AppModel: ObservableObject {
 
         // Respect wherever the user navigated to.
         guard !capturing, path.isEmpty else { return }
-
-        // Settings decide what Start and the captions screen do.
-        settings = await settingsClient.settings()
     }
 
     // MARK: - Sessions
@@ -263,48 +240,38 @@ final class AppModel: ObservableObject {
     /// `launchAction` reasons about) without being explicitly stopped. Stop
     /// is a decision, so a stopped session is never offered.
     var shouldOfferResume: Bool {
-        guard mode != .local, keepTranscripts else { return false }
+        guard mode != .watchOnly, keepTranscripts else { return false }
         guard !stoppedExplicitly, let last = lastSession else { return false }
         return Date().timeIntervalSince(last.endedAt) < Self.resumeWindow
     }
 
     /// Start a session the way the mode button and the "Keep transcripts"
-    /// toggle ask. Six combinations: Local and Hybrid map onto the sessions
-    /// the app already knew; Cloud reuses the same relay path Hybrid does —
-    /// `hybrid` with its local engine turned off for this session (see
-    /// `HybridEngine.localEnabled`) — rather than a second relay client.
+    /// toggle ask. Watch only maps onto the on-device sessions the app
+    /// already knew; Auto reuses the same relay path those always went
+    /// through — `startNew()`/`startLive()` now build a fresh `HybridEngine`
+    /// per session (see `makeAutoController(mode:)`) so Auto can pick its
+    /// remote transcriber each time instead of talking to one fixed relay
+    /// client.
     func start() async {
         switch (mode, keepTranscripts) {
-        case (.local, false): await startOnDevice()
-        case (.local, true): await startSavedOnDevice()
-        case (.cloud, true), (.hybrid, true):
-            configureHybridLocal()
-            await startNew()
-        case (.cloud, false), (.hybrid, false):
-            configureHybridLocal()
-            await startLive()
+        case (.watchOnly, false): await startOnDevice()
+        case (.watchOnly, true): await startSavedOnDevice()
+        case (.auto, true): await startNew()
+        case (.auto, false): await startLive()
         }
-    }
-
-    /// Sets whether the shared `hybrid` engine runs its local Moonshine
-    /// engine for the next relay session, from the current `mode`. Called
-    /// before every relay-mode start (`start()`, `continueLast()`,
-    /// `resume(name:)`, and the relay branch of `retry()`) since those don't
-    /// all route through the same call site.
-    private func configureHybridLocal() {
-        hybrid.localEnabled = mode == .hybrid
     }
 
     /// How long a just-ended session stays offerable, matching the relay's
     /// resume window.
     private static let resumeWindow: TimeInterval = 600
 
-    /// Start a relay session in whichever mode the phone's settings ask for.
-    /// With transcripts off there, Start keeps nothing — the same promise the
-    /// "Keep transcripts" toggle makes, applied from the other end.
+    /// Start an Auto session that keeps a transcript. `keepTranscripts`
+    /// already decided that this call happens at all (see `start()`), so
+    /// unlike the pre-roaming build there is no second, phone-set toggle to
+    /// re-check here.
     func startNew() async {
         currentTranscript = nil
-        await startCaptions(mode: settings.saveTranscripts ? .saved(resuming: nil) : .live)
+        await startCaptions(mode: .saved(resuming: nil))
     }
 
     /// Caption without keeping anything: the relay writes no transcript, so
@@ -349,12 +316,10 @@ final class AppModel: ObservableObject {
 
     func continueLast() async {
         guard let name = lastSession?.transcriptName else { return }
-        configureHybridLocal()
         await startCaptions(mode: .saved(resuming: name))
     }
 
     func resume(name: String) async {
-        configureHybridLocal()
         await startCaptions(mode: .saved(resuming: name))
     }
 
@@ -362,18 +327,66 @@ final class AppModel: ObservableObject {
     /// live session must not quietly start recording one. `mode` cannot have
     /// changed since the session started — the home screen (the only place
     /// it's set) isn't reachable while a session is on screen — so re-reading
-    /// it here restarts exactly what failed.
+    /// it here restarts exactly what failed. An Auto retry re-probes for its
+    /// remote leg (see `makeAutoController(mode:)`) and may land on a
+    /// different transcriber than the one that just failed — that is the
+    /// point: the phone may have come back reachable, or gone out of range in
+    /// the iMac's favor, since the last attempt.
     func retry() async {
         if onDevice {
             await startOnDeviceSession(keep: onDeviceKeep)
+        } else if live {
+            await startLive()
         } else {
-            configureHybridLocal()
-            if live {
-                await startLive()
-            } else {
-                await startNew()
-            }
+            await startNew()
         }
+    }
+
+    /// Builds this Auto session's remote leg — the phone, when it's
+    /// reachable over `WatchConnectivity`, else the iMac relay directly
+    /// (today's pre-roaming behavior; `HybridEngine` handles the case of
+    /// neither being reachable, degrading to local-only once the chosen
+    /// remote fails to connect) — and wraps it with the shared on-device
+    /// engine in a fresh `HybridEngine`/`SessionController` pair. A fresh
+    /// pair every session, rather than swapping the remote inside one
+    /// long-lived engine, is what lets Auto's probe genuinely pick a
+    /// different transcriber each time, including on `retry()`: both
+    /// `HybridEngine.remote` and `SessionController`'s own relay reference
+    /// are bound for the life of the instance.
+    ///
+    /// `remote` is held here as its concrete type just long enough to set
+    /// `.mode` and `.onTranscript` — properties outside the `CaptionEngine`
+    /// protocol that `PhoneEngine` and `HTTPRelayClient` each declare the
+    /// same way `AppModel` already relied on `HTTPRelayClient` declaring
+    /// them. `HybridEngine` itself never sees the concrete type; it is handed
+    /// the same `remote` value only through the `CaptionEngine` surface.
+    private func makeAutoController(mode: SessionMode) -> SessionController {
+        let remote: CaptionEngine & AnyObject
+        if WCSession.default.isReachable {
+            let phone = PhoneEngine(token: token)
+            phone.mode = mode
+            phone.onTranscript = { [weak self] name in self?.currentTranscript = name }
+            remote = phone
+        } else {
+            let http = HTTPRelayClient(base: base, token: token)
+            http.mode = mode
+            http.onTranscript = { [weak self] name in self?.currentTranscript = name }
+            remote = http
+        }
+        let engine = HybridEngine(local: moonshine, remote: remote)
+        // The remote leg dying mid-session no longer ends it — captions
+        // continue from the local engine — but a session that asked to be
+        // kept is no longer being written down from that moment. Flip `live`
+        // so the indicator turns hollow ("not saved") rather than keep
+        // claiming a persistence the remote stopped providing.
+        // `currentTranscript` stays: everything up to the drop *was* saved
+        // (when the remote ever named one), and resuming that transcript
+        // later is exactly the recovery Start should offer.
+        engine.onRelayDown = { [weak self] in
+            guard let self, self.capturing, !self.onDevice else { return }
+            self.live = true
+        }
+        return SessionController(store: store, relay: engine, audio: AudioCapture(), permission: micPermission)
     }
 
     private func startCaptions(mode: SessionMode) async {
@@ -387,7 +400,8 @@ final class AppModel: ObservableObject {
         }
         path = [.captions]   // pushed, so it gets a back chevron like any screen
         capturing = true
-        relay.mode = mode
+        let controller = makeAutoController(mode: mode)
+        self.controller = controller
         // Gated on whether THIS call connected, not `controller.isRunning`:
         // a call superseded while suspended on the permission check can
         // resume after a later start already connected a different session,
@@ -418,7 +432,7 @@ final class AppModel: ObservableObject {
         if onDevice {
             onDeviceController.stop()
         } else {
-            controller.stop()
+            controller?.stop()
             prefiller.cancel()
         }
         rememberCurrentSession()
@@ -435,7 +449,11 @@ final class AppModel: ObservableObject {
     /// substitute for `endCapture()`. Currently uncalled.
     func pause() {
         guard capturing else { return }
-        (onDevice ? onDeviceController : controller).stop()
+        if onDevice {
+            onDeviceController.stop()
+        } else {
+            controller?.stop()
+        }
         prefiller.cancel()
         rememberCurrentSession()
     }
@@ -560,18 +578,34 @@ final class AppModel: ObservableObject {
         static let keepTranscripts = "keepTranscripts"
     }
 
-    /// Loads the persisted capture mode, migrating once from the old
-    /// "On device" boolean the first time this runs on a device that still
-    /// has it: `true` (on) → `.local`, `false`/absent (off, the old default)
-    /// → `.hybrid`. The old key is then removed so this migration never runs
-    /// again and the two settings can't drift apart.
+    /// Loads the persisted capture mode, migrating forward through both of
+    /// the app's old mode representations:
+    /// - No `captureMode` at all (pre-dates that key entirely): the older
+    ///   "On device" boolean — `true` → `.watchOnly`, `false`/absent →
+    ///   `.auto`. That key is then removed so this branch never runs again.
+    /// - A `captureMode` from the three-mode build (roaming transcriber
+    ///   collapsed Local/Cloud/Hybrid to Watch only/Auto): `"local"` →
+    ///   `.watchOnly`; `"cloud"`/`"hybrid"` → `.auto`; anything else
+    ///   unrecognized → `.auto`. Re-persisted under the same key so this
+    ///   migration, too, runs at most once per device.
     private static func loadCaptureMode(from defaults: UserDefaults) -> CaptureMode {
-        if let raw = defaults.string(forKey: Keys.captureMode), let mode = CaptureMode(rawValue: raw) {
-            return mode
+        guard let raw = defaults.string(forKey: Keys.captureMode) else {
+            let migrated: CaptureMode = defaults.bool(forKey: Keys.onDeviceEnabled) ? .watchOnly : .auto
+            defaults.set(migrated.rawValue, forKey: Keys.captureMode)
+            defaults.removeObject(forKey: Keys.onDeviceEnabled)
+            return migrated
         }
-        let migrated: CaptureMode = defaults.bool(forKey: Keys.onDeviceEnabled) ? .local : .hybrid
-        defaults.set(migrated.rawValue, forKey: Keys.captureMode)
-        defaults.removeObject(forKey: Keys.onDeviceEnabled)
+        let migrated: CaptureMode
+        switch raw {
+        case CaptureMode.auto.rawValue: migrated = .auto
+        case CaptureMode.watchOnly.rawValue: migrated = .watchOnly
+        case "local": migrated = .watchOnly
+        case "cloud", "hybrid": migrated = .auto
+        default: migrated = .auto
+        }
+        if migrated.rawValue != raw {
+            defaults.set(migrated.rawValue, forKey: Keys.captureMode)
+        }
         return migrated
     }
 

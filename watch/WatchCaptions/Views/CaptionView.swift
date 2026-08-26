@@ -26,16 +26,19 @@ enum CaptionIndicator {
 struct CaptionView: View {
     @ObservedObject var store: CaptionStore
     let indicator: CaptionIndicator
-    /// Set from the phone. A default here so previews and any future caller
-    /// need not thread it through to say "the usual size".
+    /// The base caption size before the double-tap multiplier below. No
+    /// caller sets this to anything but the default today — the watch no
+    /// longer syncs settings from the phone — but it stays a parameter
+    /// rather than a constant so a future per-session override has somewhere
+    /// to land.
     var textSize: Double = 16
     /// Absent when there is nothing this screen can stop.
     let onStop: (() -> Void)?
 
-    /// Double-tapping the captions cycles small, medium, large. A multiplier
-    /// over the phone-set base size rather than a replacement for it, and
-    /// persisted so the choice holds across sessions. The crown is not an
-    /// option for this — it already scrolls the transcript.
+    /// Double-tapping the captions cycles small, medium, large, entirely
+    /// local to the watch, persisted so the choice holds across sessions.
+    /// The crown is not an option for this — it already scrolls the
+    /// transcript.
     @AppStorage("captionSizeStep") private var sizeStep = 0
     private static let sizeMultipliers: [Double] = [1.0, 1.35, 1.75]
     private var effectiveSize: Double {

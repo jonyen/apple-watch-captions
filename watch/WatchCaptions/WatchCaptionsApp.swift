@@ -51,8 +51,7 @@ private struct RootView: View {
                     onResume: { Task { await model.continueLast() } },
                     mode: $model.mode,
                     keepTranscripts: $model.keepTranscripts,
-                    onBrowse: { Task { await model.showHistory() } },
-                    onPair: { model.showPairing() })
+                    onBrowse: { Task { await model.showHistory() } })
                 .navigationDestination(for: AppModel.Route.self) { route in
                     switch route {
                     case .captions:
@@ -66,11 +65,6 @@ private struct RootView: View {
                     case .detail:
                         TranscriptDetailView(history: history) { name in
                             Task { await model.resume(name: name) }
-                        }
-                    case .pairing:
-                        PairingView(client: model.pairingClient) {
-                            // Pop back to the menu, the same "done" as Stop.
-                            model.path = []
                         }
                     }
                 }

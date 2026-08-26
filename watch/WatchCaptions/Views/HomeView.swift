@@ -19,9 +19,6 @@ struct HomeView: View {
     @Binding var keepTranscripts: Bool
     /// Browse the transcripts past sessions kept.
     let onBrowse: () -> Void
-    /// Type in the code the iPhone is showing, to merge this watch into that
-    /// account.
-    let onPair: () -> Void
     /// Which build this is, so a bug report can name one. Injectable for previews.
     var versionLabel: String = AppBuild.versionLabel
 
@@ -60,10 +57,6 @@ struct HomeView: View {
             .accessibilityHint("Save a transcript of each session. Off means nothing is kept.")
             Button(action: onBrowse) {
                 Label("Transcripts", systemImage: "list.bullet")
-            }
-            // A one-time setup step; it sits last for a reason.
-            Button(action: onPair) {
-                Label("Pair with iPhone", systemImage: "link")
             }
             // Sits under the actions as a caption, not another thing to tap.
             Text(versionLabel)

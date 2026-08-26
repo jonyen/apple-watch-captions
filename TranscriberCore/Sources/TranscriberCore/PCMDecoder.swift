@@ -1,6 +1,6 @@
 import AVFAudio
 
-enum WireFormat: String {
+public enum WireFormat: String {
     case pcm16k, mulaw8k
 }
 
@@ -8,18 +8,18 @@ enum WireFormat: String {
 /// µ-law is decoded to linear Int16 here (the standard G.711 expansion);
 /// sample-rate conversion to the analyzer's preferred format is the
 /// TranscriberSession's job.
-struct PCMDecoder {
-    let format: WireFormat
-    let sourceFormat: AVAudioFormat
+public struct PCMDecoder {
+    public let format: WireFormat
+    public let sourceFormat: AVAudioFormat
 
-    init(format: WireFormat) {
+    public init(format: WireFormat) {
         self.format = format
         let rate: Double = format == .pcm16k ? 16_000 : 8_000
         sourceFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                      sampleRate: rate, channels: 1, interleaved: true)!
     }
 
-    func buffer(from data: Data) -> AVAudioPCMBuffer? {
+    public func buffer(from data: Data) -> AVAudioPCMBuffer? {
         switch format {
         case .pcm16k:
             let frames = data.count / 2

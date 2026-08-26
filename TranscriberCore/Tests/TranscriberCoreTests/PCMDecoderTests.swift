@@ -1,5 +1,5 @@
 import XCTest
-@testable import caption_transcriber
+@testable import TranscriberCore
 
 final class PCMDecoderTests: XCTestCase {
     func testPCM16kWrapsSamplesLosslessly() {

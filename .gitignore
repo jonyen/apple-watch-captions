@@ -18,6 +18,10 @@ CaptionRelay/.swiftpm/
 transcriber-mac/.build/
 transcriber-mac/.swiftpm/
 
+# TranscriberCore package
+TranscriberCore/.build/
+TranscriberCore/.swiftpm/
+
 # iOS app
 ios/*.xcodeproj
 ios/Shared/Secrets.swift

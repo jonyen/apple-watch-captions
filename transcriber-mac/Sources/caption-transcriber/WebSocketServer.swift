@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import TranscriberCore
 
 /// Runs the sidecar's WebSocket server: one `TranscriberSession` per
 /// connection, speaking protocol v2 (see the design doc's "Sidecar protocol"

@@ -4,11 +4,13 @@ import PackageDescription
 let package = Package(
     name: "caption-transcriber",
     platforms: [.macOS("26.0")],
+    dependencies: [
+        .package(path: "../TranscriberCore"),
+    ],
     targets: [
-        .executableTarget(name: "caption-transcriber", path: "Sources/caption-transcriber"),
-        .testTarget(name: "CaptionTranscriberTests",
-                    dependencies: ["caption-transcriber"],
-                    path: "Tests/CaptionTranscriberTests"),
+        .executableTarget(name: "caption-transcriber",
+                           dependencies: [.product(name: "TranscriberCore", package: "TranscriberCore")],
+                           path: "Sources/caption-transcriber"),
     ],
     swiftLanguageModes: [.v5]
 )

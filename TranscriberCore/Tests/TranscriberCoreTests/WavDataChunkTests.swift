@@ -1,5 +1,5 @@
 import XCTest
-@testable import caption_transcriber
+@testable import TranscriberCore
 
 final class WavDataChunkTests: XCTestCase {
     private func chunk(_ id: String, _ body: [UInt8]) -> Data {

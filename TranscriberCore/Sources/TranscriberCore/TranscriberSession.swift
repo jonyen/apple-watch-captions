@@ -14,14 +14,14 @@ import Speech
 /// remaining audio, delivers the final transcript, and completes `events`.
 /// A session dropped without `finish()` is reclaimed by a best-effort deinit
 /// (tasks cancelled, streams finished), but the final transcript is lost.
-actor TranscriberSession {
-    enum Event {
+public actor TranscriberSession {
+    public enum Event {
         case ready
         case transcript(text: String, isFinal: Bool)
         case error(String)
     }
 
-    let events: AsyncStream<Event>
+    public nonisolated let events: AsyncStream<Event>
     private let eventsIn: AsyncStream<Event>.Continuation
     private let feedIn: AsyncStream<Data>.Continuation
     private let analyzer: SpeechAnalyzer
@@ -33,7 +33,7 @@ actor TranscriberSession {
     private static let finishTimeout: UInt64 = 10_000_000_000  // 10 s
 
     /// Downloads the on-device transcription model for `locale` if needed.
-    static func ensureModel(locale: Locale) async throws {
+    public static func ensureModel(locale: Locale) async throws {
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
             throw NSError(domain: "transcriber", code: 3,
                           userInfo: [NSLocalizedDescriptionKey:
@@ -50,7 +50,7 @@ actor TranscriberSession {
         }
     }
 
-    init(locale: Locale, format: WireFormat) async throws {
+    public init(locale: Locale, format: WireFormat) async throws {
         // `.fastResults` is required for progressive (real-time-paced) delivery,
         // not just an optimization: without it, `transcriber.results` withholds
         // every volatile result until `finalizeAndFinishThroughEndOfInput()` is
@@ -156,7 +156,7 @@ actor TranscriberSession {
     }
 
     /// Thread-safe, ordered, non-blocking; safe to call from any context.
-    nonisolated func feed(_ data: Data) {
+    public nonisolated func feed(_ data: Data) {
         feedIn.yield(data)
     }
 
@@ -164,7 +164,7 @@ actor TranscriberSession {
     /// final transcript has been delivered. Bounded: if the analyzer fails to
     /// finalize within 10 s, the streams are force-finished so consumers never
     /// hang (logged to stderr).
-    func finish() async {
+    public func finish() async {
         feedIn.finish()
         // The pump always terminates once the feed stream ends (each iteration
         // is a bounded synchronous conversion), so this await is safe.

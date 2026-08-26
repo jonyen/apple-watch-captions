@@ -185,4 +185,25 @@ describe("POST /v1/audio-archive", () => {
     const res = await postArchive(port, "a6", "not-a-real-token", Buffer.from("pcm"));
     expect(res.status).toBe(401);
   });
+
+  it("answers an unauthenticated request 401 even when training capture is disabled (never leaks the capability via 404)", async () => {
+    transcriptsDir = mkdtempSync(join(tmpdir(), "transcripts-archive-off-auth-"));
+    const identity = new IdentityStore(openDb(":memory:"));
+    const server = startServer({
+      port: 0,
+      identity,
+      createProvider: () => new FakeTranscriptionProvider(),
+      transcripts: new TranscriptStore({ root: transcriptsDir }),
+      transcriptsRoot: transcriptsDir,
+      // trainingCapture intentionally omitted
+    });
+    running = server;
+    const port = (server.address() as AddressInfo).port;
+
+    // An unauthorized probe must not be able to tell a capture-disabled
+    // relay (404) apart from a capture-enabled one (401): auth is checked
+    // first, so both answer 401.
+    const res = await postArchive(port, "a7", "not-a-real-token", Buffer.from("pcm"));
+    expect(res.status).toBe(401);
+  });
 });

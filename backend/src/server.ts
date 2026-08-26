@@ -638,13 +638,17 @@ async function handleRequest(
   // doesn't exist on a relay that hasn't opted in — same choice /v1/usage
   // makes for "not configured").
   if (req.method === "POST" && url.pathname === "/v1/audio-archive") {
-    if (!opts.trainingCapture) {
-      sendJSON(res, 404, { error: "training capture not enabled" });
-      return;
-    }
+    // Auth before the capability check: answering 404 to an unauthenticated
+    // probe would tell anyone on the network whether this relay has training
+    // capture configured. An unauthorized caller learns nothing but "401",
+    // the same as every other route here.
     const principal = principalFor(req, url, opts);
     if (!principal) {
       sendJSON(res, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!opts.trainingCapture) {
+      sendJSON(res, 404, { error: "training capture not enabled" });
       return;
     }
     const session = url.searchParams.get("session") ?? "";
@@ -1270,9 +1274,22 @@ function handleConnection(
   const closeOnce = () => {
     if (closed) return;
     closed = true;
-    session.close();
-    opts.transcripts?.finalize(userId, sessionId);
-    opts.trainingCapture?.discardIfPending(userId, sessionId);
+    // Await the provider's graceful close — bounded by the provider's own cap
+    // (AppleTranscriptionProvider's FINISH_TIMEOUT_MS) — before finalizing,
+    // so a final emitted during shutdown still lands in this session's
+    // transcript instead of silently opening an orphaned second `.jsonl`.
+    // The cooperative client waits for its final before closing, but an
+    // abrupt disconnect (network drop, app killed) lands here with the
+    // provider's finish handshake still in flight — the same race the HTTP
+    // /v1/stop path fixed in SessionStore.stop. `send` keeps appending
+    // finals while we wait; it only skips the (now closed) socket.
+    void session
+      .close()
+      .catch(() => undefined)
+      .then(() => {
+        opts.transcripts?.finalize(userId, sessionId);
+        opts.trainingCapture?.discardIfPending(userId, sessionId);
+      });
   };
 
   ws.on("message", (data: Buffer, isBinary: boolean) => {

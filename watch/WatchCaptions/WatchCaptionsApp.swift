@@ -7,6 +7,9 @@ struct WatchCaptionsApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = AppModel()
 
+    init() {
+        SpikeWC.runIfRequested()
+    }
 
     var body: some Scene {
         WindowGroup {

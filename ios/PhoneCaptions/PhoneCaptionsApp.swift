@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct PhoneCaptionsApp: App {
     init() {
-        SpikeWC.runIfRequested()
+        WCTranscriberService.shared.activate()
     }
 
     var body: some Scene {

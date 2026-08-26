@@ -162,7 +162,7 @@ Encoding: byte 0 is a type tag (1 begin, 2 audio, 3 finish, 4 ready, 5 caption, 
   - `finish`: `await session.finish()` (drains the last final through the same event pump), then fire `.finished`, drop state.
   - Decode failures: ignore the message.
   All state confined to one serial DispatchQueue; the WCSession delegate callbacks hop onto it.
-- [ ] **Step 2: project.yml** — deploymentTarget iOS "26.0"; packages gains `TranscriberCore: {path: ../TranscriberCore}`; app target dependencies gain the product. Delete the spike file + call.
+- [ ] **Step 2: project.yml + app gutting (user-directed scope, 2026-08-25)** — deploymentTarget iOS "26.0"; packages gains `TranscriberCore: {path: ../TranscriberCore}`; app target dependencies gain the product. Delete the spike file + call. ALSO REMOVE: the broadcast screen and its flow (the watch-side reader was deleted long ago), the speech-provider picker, the "open iPhone audio automatically" toggle, the "save transcripts" toggle, the caption-text-size setting, the settings-sync plumbing behind them (SettingsModel/SettingsView shrink or vanish), the PairingView (pairing is not reinstated; identity arrives in Task 8 via WC token share), and the ENTIRE PhoneCaptionsUpload share-sheet extension (target, sources, entitlement wiring). What remains after this task: the app shell + WCTranscriberService and a minimal transcriber-status view (state: waiting/transcribing, sessions served). Delete dead files; grep for orphans.
 - [ ] **Step 3: Build check** (iOS, per Global Constraints) — BUILD SUCCEEDED.
 - [ ] **Step 4: Commit** — `git add ios TranscriberCore 2>/dev/null; git add ios && git commit -m "feat(ios): on-phone SpeechAnalyzer transcription service for the watch"`
 
@@ -238,8 +238,28 @@ public struct ForwardQueue: Codable, Equatable {
 
 ---
 
+### Task 8: Transcripts & summaries on the phone
+
+**Files:**
+- Create: `ios/PhoneCaptions/TranscriptsListView.swift`, `ios/PhoneCaptions/TranscriptDetailView.swift`, `ios/PhoneCaptions/WatchIdentityStore.swift`
+- Modify: `CaptionRelay/Sources/CaptionRelay/PhoneWire.swift` (+ `shareIdentity` message), `CaptionRelay/Tests/CaptionRelayTests/PhoneWireTests.swift`, `watch/WatchCaptions/PhoneEngine.swift` (send shareIdentity on counterpart connect), `ios/PhoneCaptions/WCTranscriberService.swift` (receive + store), `ios/PhoneCaptions/PhoneCaptionsApp.swift` (tab/navigation)
+
+**Interfaces:**
+- Consumes: `RelayHistoryClient` (CaptionRelay package — the same client the watch uses for history/detail), `PhoneWire`, the keychain pattern from `KeychainTokenStore` (CaptionRelayLive).
+- Produces: `PhoneWire.Message.shareIdentity(token: String)` (tag 7; JSON body `{"token":...}`); `WatchIdentityStore` — keychain-backed store of the watch's bearer token on the phone (`read() -> String?`, `write(_:)`, `clear()`), service-named distinctly from the phone's own identity.
+
+- [ ] **Step 1: PhoneWire.shareIdentity** — failing round-trip + malformed-decode tests, implement, `swift test` green in CaptionRelay.
+- [ ] **Step 2: Watch sends it** — in `PhoneEngine`, on activation with a reachable counterpart (and once per app launch at most), fetch the token via the existing provider closure and send `shareIdentity`. Failures are silent (identity share is opportunistic; the next launch retries).
+- [ ] **Step 3: Phone stores it** — `WCTranscriberService` routes `shareIdentity` to `WatchIdentityStore.write`. Keychain via the `KeychainTokenStore` pattern with its own service string.
+- [ ] **Step 4: The screens** — `TranscriptsListView`: sessions newest-first via `RelayHistoryClient` (constructed with `Secrets.relayURL` + a token provider reading `WatchIdentityStore`); empty state explains captions must run once near the phone to link. `TranscriptDetailView`: transcript text + the summary the relay holds for it (whatever the history client's detail exposes — reuse, do not invent endpoints). Pull-to-refresh. Read-only. App navigation: two tabs — Transcriber (status view), Transcripts.
+- [ ] **Step 5: Build checks** (iOS + watch + CaptionRelay tests) all green; sim screenshot of the list with the empty state.
+- [ ] **Step 6: Commit** — `git add CaptionRelay ios watch/WatchCaptions && git commit -m "feat(ios): transcripts and summaries reader, linked over WatchConnectivity"`
+
+---
+
 ## Self-review notes
 
 - Spec coverage: transport + protocol (T1, T3), TranscriberCore (T2), phone service (T4), watch engine/modes/migration (T5), forwarding + auth (T6), verification + docs (T7). Relay untouched throughout — matches "zero changes". The spike gate implements the spec's Verification section.
 - Interfaces named identically across tasks: `PhoneWire` (T3→T4,T5,T6), `TranscriberSession` signatures (T2→T4), `onKeptSessionEvent`/`KeptEvent` (T4→T6), `CaptureMode.auto/.watchOnly` (T5 only).
 - The known WC risk is front-loaded as Task 1 with explicit go/no-go thresholds; Task 2 is transport-independent and survives a STOP.
+- Amendments 2026-08-25 (user-directed): Task 4 scope grew into the full phone-app gutting (broadcast, settings/toggles, pairing UI, share extension); Task 8 added (transcripts & summaries reader + WC identity share). Both recorded in the SDD ledger with rulings.

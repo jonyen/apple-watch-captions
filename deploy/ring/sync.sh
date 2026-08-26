@@ -10,7 +10,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RING_HOST="ring"
+RING_HOST="imac"
 RING_APP_DIR="/Users/jonyen/apps/watch-captions-relay"
 
 echo "==> Building transcriber-mac release binary (local, arm64)"

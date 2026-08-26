@@ -55,6 +55,23 @@ final class HybridEngine: CaptionEngine {
     private let relay: HTTPRelayClient
     private let log = Logger(subsystem: "com.jonyen.watchcaptions", category: "HybridEngine")
 
+    /// No relay final for this long while local text keeps accumulating means
+    /// the relay is wedged — connected, but never superseding anything (a
+    /// stuck-but-alive Apple recognizer is a documented failure mode on this
+    /// stack). Left to run, the accumulation grows without bound: an
+    /// ever-longer partial re-joined and repainted on every local event.
+    /// Treated exactly like relay death: flush, degrade, carry on local-only.
+    /// The watchdog ticks at a quarter of this, so the real trip point is
+    /// 100–125 s.
+    static let relayFinalTimeout: TimeInterval = 100
+
+    /// Belt-and-braces alongside the watchdog: if the joined accumulation
+    /// ever exceeds this many characters before the timeout trips (someone
+    /// talking very fast at a wedged relay), degrade immediately rather than
+    /// keep growing the repaint. Roughly ten minutes of speech — far past
+    /// anything a healthy relay leaves unsuperseded.
+    static let maxSpeculativeCharacters = 4000
+
     // MARK: - Arbitration state (main-actor-confined)
 
     private var relayAlive = true
@@ -64,6 +81,17 @@ final class HybridEngine: CaptionEngine {
     private var localFinals: [String] = []
     /// The local engine's current in-progress segment.
     private var localPartial = ""
+    /// When the relay last made final progress — reset at start, on every
+    /// relay final, and while there is no local accumulation pending (silence
+    /// owes the relay nothing; the clock only runs against text it should be
+    /// superseding).
+    private var lastRelayFinalAt = Date()
+    /// Fires on the main queue; lives from `start()` to `close()`/relay
+    /// death, and never beyond — `relayDied()` and `close()` both cancel it,
+    /// so it cannot fire into a finished session (the `relayAlive` guard
+    /// would catch a straggler regardless, but the timer's lifetime should
+    /// not lean on that).
+    private var watchdog: DispatchSourceTimer?
 
     /// Whether `send(_:)` still fans audio to the relay. Off the main actor —
     /// see the threading note above.
@@ -92,6 +120,8 @@ final class HybridEngine: CaptionEngine {
             // type comment; `SavedOnDeviceEngine.start()` does the same).
             local.onEvent = { [weak self] event in self?.handleLocal(event) }
             local.onClose = { [weak self] in self?.handleLocalDeath() }
+            lastRelayFinalAt = Date()
+            startWatchdog()
             local.start()
             relay.start()
         }
@@ -112,6 +142,8 @@ final class HybridEngine: CaptionEngine {
     /// screen: the last paragraph shown may stay the speculative local text.
     func close() {
         MainActor.assumeIsolated {
+            watchdog?.cancel()
+            watchdog = nil
             feedLock.lock(); relayFeedable = false; feedLock.unlock()
             local.close()
             relay.close()
@@ -143,6 +175,13 @@ final class HybridEngine: CaptionEngine {
                 localPartial = text
             }
             let cumulative = cumulativeText()
+            guard cumulative.count <= Self.maxSpeculativeCharacters else {
+                // The relay has left an implausible amount of text
+                // unsuperseded; don't wait for the watchdog's next tick.
+                log.error("speculative accumulation exceeded \(Self.maxSpeculativeCharacters) characters; degrading to on-device")
+                relayDied()   // flushes this same accumulation as a final
+                return
+            }
             if !cumulative.isEmpty {
                 onEvent?(.caption(text: cumulative, isFinal: false, channel: nil))
             }
@@ -190,6 +229,7 @@ final class HybridEngine: CaptionEngine {
             // Authoritative: emit as the real final and reset the local
             // accumulation. The local partial tail restarts from the next
             // local event (boundary fuzz — see the type comment).
+            lastRelayFinalAt = Date()
             localFinals = []
             localPartial = ""
             onEvent?(.caption(text: text, isFinal: isFinal, channel: channel))
@@ -225,6 +265,8 @@ final class HybridEngine: CaptionEngine {
     private func relayDied() {
         guard relayAlive else { return }
         relayAlive = false
+        watchdog?.cancel()
+        watchdog = nil
         feedLock.lock(); relayFeedable = false; feedLock.unlock()
         // Best-effort: tells the relay to finalize whatever it received. A
         // no-op if the client already tore itself down.
@@ -236,6 +278,37 @@ final class HybridEngine: CaptionEngine {
             onEvent?(.caption(text: flush, isFinal: true, channel: nil))
         }
         onRelayDown?()
+    }
+
+    // MARK: - Relay-finals watchdog
+
+    @MainActor
+    private func startWatchdog() {
+        watchdog?.cancel()
+        let interval = Self.relayFinalTimeout / 4
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + interval, repeating: interval)
+        t.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.checkRelayProgress() }
+        }
+        t.resume()
+        watchdog = t
+    }
+
+    @MainActor
+    private func checkRelayProgress() {
+        guard relayAlive, localAlive else { return }
+        // Nothing pending means the relay owes nothing: silence, degraded
+        // local, or a relay final that just cleared the slate. Keep the
+        // clock parked at "now" so it only ever measures time the relay
+        // spends behind text it should be superseding.
+        guard !cumulativeText().isEmpty else {
+            lastRelayFinalAt = Date()
+            return
+        }
+        guard Date().timeIntervalSince(lastRelayFinalAt) > Self.relayFinalTimeout else { return }
+        log.error("no relay final for \(Int(Self.relayFinalTimeout))s with local text accumulating; treating the relay as wedged and degrading to on-device")
+        relayDied()
     }
 
     // MARK: - Helpers

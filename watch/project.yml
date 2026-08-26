@@ -1,3 +1,7 @@
+# Standalone watch project, kept for watch-only simulator work. Device
+# installs now normally ride ios/project.yml, which embeds this same target
+# inside PhoneCaptions.app so WatchConnectivity links the pair — keep the
+# WatchCaptions target there in sync with this one.
 name: WatchCaptions
 options:
   bundleIdPrefix: com.jonyen.watchcaptions

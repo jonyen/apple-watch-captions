@@ -3,9 +3,16 @@ options:
   bundleIdPrefix: com.jonyen.phonecaptions
   deploymentTarget:
     iOS: "17.0"
+    watchOS: "11.0"
 packages:
+  CaptionCore:
+    url: https://github.com/jonyen/caption-core
+    from: 0.1.0
   CaptionRelay:
     path: ../CaptionRelay
+  MoonshineKit:
+    url: https://github.com/jonyen/moonshine-coreml
+    from: 0.3.0
 targets:
   PhoneCaptions:
     type: application
@@ -24,6 +31,11 @@ targets:
           - DeviceIdentity.swift
     dependencies:
       - target: PhoneCaptionsUpload
+      # Embeds the watch app into PhoneCaptions.app/Watch so one install
+      # delivers both and WatchConnectivity links the pair — installed as two
+      # separate apps they refuse to be companions (isCompanionAppInstalled
+      # stays false, "Companion app is not installed").
+      - target: WatchCaptions
       - package: CaptionRelay
       - package: CaptionRelay
         product: CaptionRelayLive
@@ -100,3 +112,64 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         DEVELOPMENT_TEAM: "7PZN69YDL4"
         CODE_SIGN_STYLE: Automatic
+
+  # The watch app, embedded here so a single install of PhoneCaptions carries
+  # it (PhoneCaptions.app/Watch/WatchCaptions.app). Sources and settings
+  # mirror watch/project.yml's target exactly — that standalone project
+  # remains for watch-only simulator work; device installs ride this one.
+  WatchCaptions:
+    type: application
+    platform: watchOS
+    sources:
+      - path: ../watch/WatchCaptions
+        excludes:
+          - Secrets.example.swift
+          - Icon
+      - path: ../watch/Models/Moonshine
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: CaptionCore
+      - package: CaptionRelay
+      - package: CaptionRelay
+        product: CaptionRelayLive
+      - package: MoonshineKit
+    postCompileScripts:
+      # Stamps GitCommit into the built Info.plist for the home screen's build
+      # line. After the plist is processed, before signing, and every build —
+      # it has no outputs to date-check against.
+      - name: Stamp git commit
+        script: '"$PROJECT_DIR/../watch/Scripts/stamp-git-commit.sh"'
+        basedOnDependencyAnalysis: false
+    info:
+      path: ../watch/WatchCaptions/Info.plist
+      properties:
+        WKApplication: true
+        # Companion of PhoneCaptions, not standalone: the two keys below are
+        # mutually exclusive with WKWatchOnly. Independence is preserved by
+        # WKRunsIndependentlyOfCompanionApp, not by omitting the companion
+        # relationship — the standalone-cellular use case still needs the
+        # watch app fully functional with the phone app absent.
+        WKRunsIndependentlyOfCompanionApp: true
+        WKCompanionAppBundleIdentifier: com.jonyen.phonecaptions
+        CFBundleDisplayName: Captions
+        NSMicrophoneUsageDescription: "Used to caption what people near you are saying."
+        # Keeps the app running with the mic live when the wrist drops and the
+        # screen turns off, so a conversation is not cut in half by a glance away.
+        UIBackgroundModes:
+          - audio
+    settings:
+      base:
+        # WatchKit requires a companion app's watch bundle id to be the
+        # companion's id plus a suffix; anything else fails to install
+        # (MIInstallerErrorDomain 101, WatchKitAppBundleIDNotPrefixed).
+        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions.watchkitapp
+        GENERATE_INFOPLIST_FILE: NO
+        # The commit stamp reaches outside the sandbox: it runs git in the
+        # checkout and edits the built plist.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: "7PZN69YDL4"
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

@@ -52,7 +52,6 @@ private struct RootView: View {
                     shouldOfferResume: { model.shouldOfferResume },
                     onStart: { Task { await model.start() } },
                     onResume: { Task { await model.continueLast() } },
-                    mode: $model.mode,
                     keepTranscripts: $model.keepTranscripts,
                     onBrowse: { Task { await model.showHistory() } })
                 .navigationDestination(for: AppModel.Route.self) { route in

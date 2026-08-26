@@ -1,20 +1,23 @@
 import SwiftUI
 
-/// Where a launch lands: Start, the two toggles that shape what Start does,
-/// the transcript list, and the one-time pairing step.
+/// Where a launch lands: Start, the "Keep transcripts" toggle that shapes
+/// what Start does, the transcript list, and the one-time pairing step.
+///
+/// There is no mode to choose: the watch always tries to caption instantly
+/// on-device and refine with the best remote transcriber it can reach — the
+/// iPhone over `WatchConnectivity`, else the iMac relay — and falls back to
+/// on-device alone only when neither is reachable (see `AppModel.start()`).
 struct HomeView: View {
     /// Asked at tap time, so the answer reflects when Start is tapped rather
     /// than when the menu appeared: is the previous session fresh enough to
     /// offer resuming?
     let shouldOfferResume: () -> Bool
-    /// Start a session in whatever shape the toggles ask. Also the dialog's
-    /// "Start new": the dialog only appears in the kept-relay shape, where
-    /// starting fresh is exactly what this does.
+    /// Start a session in whatever shape the toggle and reachability ask.
+    /// Also the dialog's "Start new": the dialog only appears in the
+    /// kept-relay shape, where starting fresh is exactly what this does.
     let onStart: () -> Void
     /// Pick the previous session back up.
     let onResume: () -> Void
-    /// The capture-mode button's current value: Auto or Watch only.
-    @Binding var mode: AppModel.CaptureMode
     /// Keep a transcript of each session.
     @Binding var keepTranscripts: Bool
     /// Browse the transcripts past sessions kept.
@@ -39,18 +42,6 @@ struct HomeView: View {
             } label: {
                 Label("Start", systemImage: "record.circle")
             }
-            // A button rather than a toggle: cycles Auto → Watch only → Auto.
-            // What a session is — where it is computed, which transcriber
-            // refines it — is a setting that outlives any one tap, and Start
-            // stays the only verb. Auto is the default: instant on-watch
-            // captions refined by whichever transcriber Auto can reach —
-            // the iPhone nearby, then the iMac relay.
-            Button {
-                mode = mode.next
-            } label: {
-                Label(mode.displayName, systemImage: mode.systemImage)
-            }
-            .accessibilityHint(mode.accessibilityHint)
             Toggle(isOn: $keepTranscripts) {
                 Label("Keep transcripts", systemImage: "doc.text")
             }

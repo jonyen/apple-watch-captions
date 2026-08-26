@@ -28,58 +28,6 @@ final class AppModel: ObservableObject {
 
     // MARK: - Home-screen toggles
 
-    /// The home screen's capture-mode button cycles through these two:
-    /// - `auto`: instant local partials (Moonshine, on-device) refined by
-    ///   the best remote transcriber `AppModel` can reach at session
-    ///   start — the iPhone over `WatchConnectivity` when it's nearby, else
-    ///   the iMac relay over the network, else local alone. Degrades to
-    ///   local-only mid-session on any remote failure (`HybridEngine`'s
-    ///   standing contract). The default; replaces the old Cloud and Hybrid
-    ///   modes, which the user no longer chooses between by hand.
-    /// - `watchOnly`: compute captions on the watch alone (Moonshine); nothing
-    ///   is sent anywhere except the kept-mode caption/audio uploads. Exactly
-    ///   the old "Watch only" toggle's ON behavior, and the old `local` mode.
-    enum CaptureMode: String, CaseIterable {
-        case auto
-        case watchOnly
-
-        /// The button's cycle order: Auto → Watch only → Auto.
-        var next: CaptureMode {
-            switch self {
-            case .auto: return .watchOnly
-            case .watchOnly: return .auto
-            }
-        }
-
-        var displayName: String {
-            switch self {
-            case .auto: return "Auto"
-            case .watchOnly: return "Watch only"
-            }
-        }
-
-        var systemImage: String {
-            switch self {
-            case .auto: return "wand.and.stars"
-            case .watchOnly: return "applewatch"
-            }
-        }
-
-        var accessibilityHint: String {
-            switch self {
-            case .auto:
-                return "Caption instantly on the watch, refined by the best transcriber nearby — the iPhone, then the iMac relay. Tap to switch to Watch only."
-            case .watchOnly:
-                return "Caption entirely on the watch. Nothing is sent anywhere. Tap to switch to Auto."
-            }
-        }
-    }
-
-    /// The home screen's capture-mode button. Persisted, like `lastSession`,
-    /// so the choice survives launches.
-    @Published var mode: CaptureMode {
-        didSet { defaults.set(mode.rawValue, forKey: Keys.captureMode) }
-    }
     /// The home screen's "Keep transcripts" toggle: whether a session leaves
     /// a transcript. Defaults to on — the app's original promise — until the
     /// user says otherwise; persisted the same way.
@@ -126,6 +74,12 @@ final class AppModel: ObservableObject {
     /// own `start()`, taking ownership for that session.
     private let moonshine = OnDeviceEngine()
     private let micPermission = MicPermission()
+    /// Whether the watch currently has a network path at all — Wi‑Fi or
+    /// cellular. One of the two legs `start()`/`retry()` probe (the other is
+    /// `WCSession.default.isReachable`) to decide Auto vs. the on-device
+    /// fallback. Started once here, at `AppModel` construction, so it has
+    /// already observed a path update by the time the user reaches Start.
+    private let reachability = NetworkReachability()
     private let defaults: UserDefaults
     /// Waits for the relay to push a finished transcript to Notion.
     private let exports: ExportWatcher
@@ -151,15 +105,12 @@ final class AppModel: ObservableObject {
     /// not have; the cost is a beat of "not saved" at the start of a kept
     /// session while the socket connects.
     @Published private(set) var onDeviceKept = false
-    /// Whether the running on-device session asked to be kept, so `retry()`
-    /// restarts the same kind of session that failed.
-    private var onDeviceKeep = false
     /// The foreground poll. Cancelled and replaced whenever a new wait starts.
     private var exportPoll: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        mode = Self.loadCaptureMode(from: defaults)
+        reachability.start()
         // Absent means on: saving is the default the app has always had, and
         // `bool(forKey:)` alone would silently read absence as off.
         keepTranscripts = defaults.object(forKey: Keys.keepTranscripts) == nil
@@ -233,31 +184,45 @@ final class AppModel: ObservableObject {
     // MARK: - Sessions
 
     /// True when tapping Start should ask about the previous session first:
-    /// the toggles are set to the kept-relay mode — the only one that can
-    /// continue a saved transcript; an on-device or unkept Start just starts
-    /// — and the previous session ended less than ten minutes ago (the window
+    /// a remote path would be chosen — the only case that can continue a
+    /// saved *relay* transcript; an on-device or unkept Start just starts —
+    /// and the previous session ended less than ten minutes ago (the window
     /// the relay holds a transcript open, the same 600 s caption-core's
     /// `launchAction` reasons about) without being explicitly stopped. Stop
     /// is a decision, so a stopped session is never offered.
     var shouldOfferResume: Bool {
-        guard mode != .watchOnly, keepTranscripts else { return false }
+        guard preferRemote, keepTranscripts else { return false }
         guard !stoppedExplicitly, let last = lastSession else { return false }
         return Date().timeIntervalSince(last.endedAt) < Self.resumeWindow
     }
 
-    /// Start a session the way the mode button and the "Keep transcripts"
-    /// toggle ask. Watch only maps onto the on-device sessions the app
-    /// already knew; Auto reuses the same relay path those always went
-    /// through — `startNew()`/`startLive()` now build a fresh `HybridEngine`
-    /// per session (see `makeAutoController(mode:)`) so Auto can pick its
-    /// remote transcriber each time instead of talking to one fixed relay
-    /// client.
+    /// Whether a session started right now could reach a remote transcriber
+    /// at all: the phone over `WatchConnectivity`, or a network path to the
+    /// iMac relay. `start()`/`retry()` share this probe — with neither, the
+    /// watch has no way to reach anyone and falls back to the on-device
+    /// path, which with Keep on still writes the transcript on-device and
+    /// uploads it once connectivity returns (see `startOnDeviceSession(keep:)`).
+    private var preferRemote: Bool {
+        WCSession.default.isReachable || reachability.hasNetworkPath
+    }
+
+    /// Start a session. The watch picks the shape itself: with a remote
+    /// reachable (the phone over `WatchConnectivity`, or any network path to
+    /// the iMac relay), it takes today's Auto path — instant local partials
+    /// refined by the best remote transcriber available, degrading to
+    /// local-only mid-session on any remote failure (`HybridEngine`'s
+    /// standing contract). With neither reachable, it falls back to the
+    /// on-device path — Moonshine alone, kept and uploaded later if
+    /// connectivity returns. `startNew()`/`startLive()` build a fresh
+    /// `HybridEngine` per session (see `makeAutoController(mode:)`) so Auto
+    /// can pick its remote transcriber each time instead of talking to one
+    /// fixed relay client.
     func start() async {
-        switch (mode, keepTranscripts) {
-        case (.watchOnly, false): await startOnDevice()
-        case (.watchOnly, true): await startSavedOnDevice()
-        case (.auto, true): await startNew()
-        case (.auto, false): await startLive()
+        switch (preferRemote, keepTranscripts) {
+        case (false, false): await startOnDevice()
+        case (false, true): await startSavedOnDevice()
+        case (true, true): await startNew()
+        case (true, false): await startLive()
         }
     }
 
@@ -306,7 +271,6 @@ final class AppModel: ObservableObject {
         // ended rather than offering some older relay session afterwards.
         live = true
         onDevice = true
-        onDeviceKeep = keep
         onDeviceKept = false
         onDeviceEngine.keep = keep
         path = [.captions]
@@ -323,23 +287,24 @@ final class AppModel: ObservableObject {
         await startCaptions(mode: .saved(resuming: name))
     }
 
-    /// Restart after a connection error, in the mode that failed. Retrying a
-    /// live session must not quietly start recording one. `mode` cannot have
-    /// changed since the session started — the home screen (the only place
-    /// it's set) isn't reachable while a session is on screen — so re-reading
-    /// it here restarts exactly what failed. An Auto retry re-probes for its
-    /// remote leg (see `makeAutoController(mode:)`) and may land on a
-    /// different transcriber than the one that just failed — that is the
-    /// point: the phone may have come back reachable, or gone out of range in
-    /// the iMac's favor, since the last attempt.
+    /// Restart after a connection error, re-probing the same way `start()`
+    /// does — so a retry can move between Auto and the on-device fallback as
+    /// conditions change; that is the point of retrying here, not just
+    /// re-dialing whatever failed. `keepTranscripts` cannot have changed
+    /// since the session started — the home screen (the only place it's
+    /// set) isn't reachable while a session is on screen — so it is exactly
+    /// what the failed session asked for, which is what keeps a live
+    /// session from quietly starting to record: the `(preferRemote,
+    /// keepTranscripts)` switch below can only move a failed session
+    /// between the unkept shapes (`startLive`/`startOnDevice`) or between
+    /// the kept ones (`startNew`/`startSavedOnDevice`), never across that
+    /// line. A retry that lands back on Auto also re-probes its remote leg
+    /// (see `makeAutoController(mode:)`) and may pick a different
+    /// transcriber than the one that just failed — the phone may have come
+    /// back reachable, or gone out of range in the iMac's favor, since the
+    /// last attempt.
     func retry() async {
-        if onDevice {
-            await startOnDeviceSession(keep: onDeviceKeep)
-        } else if live {
-            await startLive()
-        } else {
-            await startNew()
-        }
+        await start()
     }
 
     /// Builds this Auto session's remote leg — the phone, when it's
@@ -571,42 +536,13 @@ final class AppModel: ObservableObject {
         static let transcriptName = "lastTranscriptName"
         static let endedAt = "lastSessionEndedAt"
         static let stoppedExplicitly = "stoppedExplicitly"
-        /// The old "On device" toggle, superseded by `captureMode`. Kept only
-        /// as the source key `loadCaptureMode(from:)` migrates from once.
-        static let onDeviceEnabled = "onDeviceEnabled"
-        static let captureMode = "captureMode"
         static let keepTranscripts = "keepTranscripts"
-    }
-
-    /// Loads the persisted capture mode, migrating forward through both of
-    /// the app's old mode representations:
-    /// - No `captureMode` at all (pre-dates that key entirely): the older
-    ///   "On device" boolean — `true` → `.watchOnly`, `false`/absent →
-    ///   `.auto`. That key is then removed so this branch never runs again.
-    /// - A `captureMode` from the three-mode build (roaming transcriber
-    ///   collapsed Local/Cloud/Hybrid to Watch only/Auto): `"local"` →
-    ///   `.watchOnly`; `"cloud"`/`"hybrid"` → `.auto`; anything else
-    ///   unrecognized → `.auto`. Re-persisted under the same key so this
-    ///   migration, too, runs at most once per device.
-    private static func loadCaptureMode(from defaults: UserDefaults) -> CaptureMode {
-        guard let raw = defaults.string(forKey: Keys.captureMode) else {
-            let migrated: CaptureMode = defaults.bool(forKey: Keys.onDeviceEnabled) ? .watchOnly : .auto
-            defaults.set(migrated.rawValue, forKey: Keys.captureMode)
-            defaults.removeObject(forKey: Keys.onDeviceEnabled)
-            return migrated
-        }
-        let migrated: CaptureMode
-        switch raw {
-        case CaptureMode.auto.rawValue: migrated = .auto
-        case CaptureMode.watchOnly.rawValue: migrated = .watchOnly
-        case "local": migrated = .watchOnly
-        case "cloud", "hybrid": migrated = .auto
-        default: migrated = .auto
-        }
-        if migrated.rawValue != raw {
-            defaults.set(migrated.rawValue, forKey: Keys.captureMode)
-        }
-        return migrated
+        // "captureMode" and "onDeviceEnabled" named the old mode button's
+        // choice (and, before that, the older "On device" toggle). Neither
+        // is read anymore — the watch now picks automatically every
+        // session (see `preferRemote`) — so a value persisted by an older
+        // build simply sits unread rather than resurrecting either dead
+        // enum: there is no code path left that would look it up.
     }
 
     private static func loadLastSession(from defaults: UserDefaults) -> LastSession? {

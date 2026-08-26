@@ -55,14 +55,17 @@ public struct ForwardQueue: Codable, Equatable {
     /// Remove the lines a successful replay just delivered. `lineCount` is
     /// exactly how many leading lines were sent — never assumed to be "all of
     /// them" — so a line appended after the replay started (and thus not
-    /// part of what was sent) survives. `finished` is the entry's finished
-    /// flag as of the replay (delivering `entry.finished` back unchanged);
-    /// once the entry is both finished and empty, it is dropped entirely —
-    /// its token included, so nothing about a delivered session lingers.
+    /// part of what was sent) survives. `finished` is sticky — the stored
+    /// flag becomes `entries[index].finished || finished` rather than being
+    /// overwritten — so a caller replaying a pre-POST snapshot that predates
+    /// a concurrent `markFinished` can never un-finish an entry by passing
+    /// `false`; once true, only dropping the entry can clear it. Once the
+    /// entry is both finished and empty, it is dropped entirely — its token
+    /// included, so nothing about a delivered session lingers.
     public mutating func delivered(sessionId: String, lineCount: Int, finished: Bool) {
         guard let index = entries.firstIndex(where: { $0.sessionId == sessionId }) else { return }
         entries[index].lines.removeFirst(min(lineCount, entries[index].lines.count))
-        entries[index].finished = finished
+        entries[index].finished = entries[index].finished || finished
         if entries[index].finished, entries[index].lines.isEmpty {
             entries.remove(at: index)
         }

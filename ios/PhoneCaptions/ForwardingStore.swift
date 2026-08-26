@@ -32,6 +32,18 @@ final class ForwardingStore: @unchecked Sendable {
     /// the in-flight replay's completion kicks off exactly one more pass
     /// rather than the caller starting a second concurrent one.
     private var replayPending = false
+    /// Sessions whose lines are fully delivered and finished, but whose
+    /// `/v1/stop` hasn't been confirmed yet. Deliberately not part of
+    /// `ForwardQueue`: `delivered(...)` drops a finished+empty entry the
+    /// moment it becomes empty (that is its documented contract, and
+    /// changing it would break the token-hygiene guarantee it exists for),
+    /// so once an entry is delivered there is nothing left in the queue to
+    /// retry a stop against — this in-memory, session-scoped dictionary is
+    /// where that retry state lives instead. Not persisted: like every other
+    /// client's `/v1/stop` in this codebase, it's best-effort — the relay's
+    /// idle timeout finalizes the session anyway if the app is killed before
+    /// this ever lands.
+    private var pendingStops: [String: String] = [:]  // sessionId -> token
     /// Set after a failed delivery; cleared once the backoff timer fires.
     /// While set, `scheduleDelivery` does nothing — the timer itself is what
     /// re-attempts.
@@ -123,11 +135,19 @@ final class ForwardingStore: @unchecked Sendable {
     }
 
     /// The single entry point every retrigger (append, finished, foreground,
-    /// poll timer, backoff timer) funnels through. Runs on `queue`.
+    /// poll timer, backoff timer) funnels through. Runs on `queue`. A pending
+    /// stop always takes priority over a fresh caption POST — it represents
+    /// a session that is otherwise fully delivered, so there is nothing else
+    /// useful to do for it besides retiring the stop.
     private func scheduleDelivery() {
         guard !backingOff else { return }
         guard !inFlight else {
             replayPending = true
+            return
+        }
+        if let (sessionId, token) = pendingStops.first {
+            inFlight = true
+            retryStop(sessionId: sessionId, token: token)
             return
         }
         guard let entry = forwardQueue.nextDeliverable(batchThreshold: batchThreshold) else { return }
@@ -155,36 +175,58 @@ final class ForwardingStore: @unchecked Sendable {
         }.resume()
     }
 
-    /// Runs on `queue`, after a successful `/v1/captions` POST.
+    /// Runs on `queue`, after a successful `/v1/captions` POST for `entry`
+    /// (a pre-POST snapshot — never trusted for the finished decision below,
+    /// since `markFinished` may have landed on the live queue while the POST
+    /// was in flight).
     private func captionsDelivered(_ entry: ForwardQueue.Entry) {
         let deliveredCount = entry.lines.count
-        if entry.finished {
-            postStop(entry) { [weak self] stopSucceeded in
-                self?.queue.async {
-                    guard let self else { return }
-                    guard stopSucceeded else {
-                        self.deliveryFailed()
-                        return
-                    }
-                    self.forwardQueue.delivered(sessionId: entry.sessionId, lineCount: deliveredCount, finished: true)
-                    self.persist()
-                    self.deliverySucceeded()
-                }
-            }
-        } else {
-            forwardQueue.delivered(sessionId: entry.sessionId, lineCount: deliveredCount, finished: false)
-            persist()
+
+        // The live finished flag, read *before* `delivered(...)` — which may
+        // drop the entry outright once it is both finished and empty — is
+        // the only way to still know a stop is owed once that happens.
+        let liveFinished = forwardQueue.entries.first(where: { $0.sessionId == entry.sessionId })?.finished ?? false
+
+        // Commit exactly the lines this POST actually sent, unconditionally
+        // and before anything else: a `/v1/stop` failure below must never
+        // cause these already-accepted lines to be replayed and duplicated
+        // on the relay. `finished: false` only reports what this stale
+        // snapshot believed; `ForwardQueue.delivered` merges it sticky, so
+        // `liveFinished`, computed above, survives regardless.
+        forwardQueue.delivered(sessionId: entry.sessionId, lineCount: deliveredCount, finished: false)
+        persist()
+
+        guard liveFinished else {
             deliverySucceeded()
+            return
         }
+
+        // Fully delivered and finished: the only thing left is the stop.
+        // `forwardQueue` may already have dropped this entry above (if it
+        // was also empty) — `pendingStops` is what keeps the stop retryable
+        // regardless.
+        pendingStops[entry.sessionId] = entry.token
+        retryStop(sessionId: entry.sessionId, token: entry.token)
     }
 
-    private func postStop(_ entry: ForwardQueue.Entry, completion: @escaping (Bool) -> Void) {
-        var req = URLRequest(url: stopURL(sessionId: entry.sessionId))
+    /// Runs on `queue`. Posts `/v1/stop` for a session already recorded in
+    /// `pendingStops`; on success, retires it there (the only place it was
+    /// ever tracked) and resumes normal delivery, on failure leaves it for
+    /// the next pass.
+    private func retryStop(sessionId: String, token: String) {
+        var req = URLRequest(url: stopURL(sessionId: sessionId))
         req.httpMethod = "POST"
-        req.setValue("Bearer \(entry.token)", forHTTPHeaderField: "Authorization")
-        session.dataTask(with: req) { _, response, error in
-            let ok = error == nil && (response as? HTTPURLResponse)?.statusCode == 200
-            completion(ok)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        session.dataTask(with: req) { [weak self] _, response, error in
+            guard let self else { return }
+            self.queue.async {
+                guard error == nil, let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                    self.deliveryFailed()
+                    return
+                }
+                self.pendingStops.removeValue(forKey: sessionId)
+                self.deliverySucceeded()
+            }
         }.resume()
     }
 

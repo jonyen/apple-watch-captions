@@ -159,6 +159,33 @@ final class ForwardQueueTests: XCTestCase {
         XCTAssertTrue(queue.entries[0].lines.isEmpty)
     }
 
+    func testDeliveredWithFinishedFalseNeverClearsAPreviouslySetFinishedFlag() {
+        // Models the store's real race: a pre-POST snapshot said "not
+        // finished yet", but `markFinished` landed on the live queue while
+        // that POST was in flight. `delivered(finished: false)` — reporting
+        // what the stale snapshot believed — must not un-finish the entry.
+        var queue = ForwardQueue()
+        queue.append(sessionId: "s1", token: "tok1", caption: .init(text: "a", isFinal: true))
+        queue.append(sessionId: "s1", token: "tok1", caption: .init(text: "b", isFinal: true))
+        queue.markFinished(sessionId: "s1", token: "tok1")
+
+        queue.delivered(sessionId: "s1", lineCount: 1, finished: false)
+
+        XCTAssertEqual(queue.entries.count, 1)
+        XCTAssertTrue(queue.entries[0].finished, "delivered(finished: false) must never clear a concurrently-set finished flag")
+        XCTAssertEqual(queue.entries[0].lines.map(\.text), ["b"])
+    }
+
+    func testDeliveredWithFinishedFalseStillDropsAnAlreadyFinishedNowEmptyEntry() {
+        var queue = ForwardQueue()
+        queue.append(sessionId: "s1", token: "tok1", caption: .init(text: "a", isFinal: true))
+        queue.markFinished(sessionId: "s1", token: "tok1")
+
+        queue.delivered(sessionId: "s1", lineCount: 1, finished: false)
+
+        XCTAssertTrue(queue.entries.isEmpty, "sticky finished + now-empty must still drop the entry, token included")
+    }
+
     func testDeliveredOnUnknownSessionIsNoop() {
         var queue = ForwardQueue()
         queue.append(sessionId: "s1", token: "tok1", caption: .init(text: "a", isFinal: true))

@@ -24,6 +24,7 @@ targets:
       - path: WatchCaptions
         excludes:
           - Secrets.example.swift
+          - Secrets.swift.prod-backup
           - Icon
       - path: Models/Moonshine
         type: folder

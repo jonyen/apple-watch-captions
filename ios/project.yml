@@ -124,6 +124,7 @@ targets:
       - path: ../watch/WatchCaptions
         excludes:
           - Secrets.example.swift
+          - Secrets.swift.prod-backup
           - Icon
       - path: ../watch/Models/Moonshine
         type: folder

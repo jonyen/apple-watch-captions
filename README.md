@@ -13,6 +13,15 @@ back.
 Runs whenever the app is open (no buttons); works over the paired iPhone, Wi‑Fi,
 or the Watch's own **cellular** when the phone is away.
 
+**Roaming transcriber:** the watch's Auto mode always captions instantly
+on-device, then refines with whichever transcriber it can reach — the
+[`ios/`](ios/README.md) Captions app over `WatchConnectivity` when it's
+nearby (Apple `SpeechAnalyzer`, no network needed), else this iMac relay,
+else on-device alone. A *kept* phone-transcribed session is store-and-forwarded
+from the phone to the iMac relay in the background, so the relay stays the
+home for transcript history, summaries, and Notion export regardless of which
+transcriber actually ran the session.
+
 <img src="docs/images/watch-captions.png" alt="Live captions on the Apple Watch: finalized caption lines in white, the in-progress line in gray, and a green live indicator" width="300">
 
 *Live on the watch: finalized lines in white, the in-progress caption in gray.*
@@ -35,13 +44,24 @@ or the Watch's own **cellular** when the phone is away.
 ## How it works
 
 ```
- Apple Watch                         Fly.io relay                Deepgram
-┌───────────────┐   HTTPS (PCM)    ┌──────────────┐   stream    ┌──────────┐
-│ mic → 16 kHz  │ ───────────────► │ POST /v1/audio│ ─────────► │  STT     │
-│ Int16 PCM     │                  │  per-session  │            │          │
-│ caption view  │ ◄─────────────── │  caption buf  │ ◄───────── │ captions │
-└───────────────┘   JSON events    └──────────────┘            └──────────┘
+ Apple Watch          WatchConnectivity           iPhone (Captions app)
+┌───────────────┐   raw PCM, Auto mode only    ┌────────────────────────┐
+│ mic → 16 kHz  │ ────────────────────────────►│ WCTranscriberService   │
+│ Moonshine     │ ◄────────────────────────────│ → SpeechAnalyzer       │
+│ (always runs) │        caption text          └───────────┬────────────┘
+└───────┬───────┘                                          │ kept sessions
+        │  HTTPS (PCM)                                      ▼ (store-and-forward)
+        ▼                                        ┌────────────────────────┐
+┌───────────────────────────────────────────────►│  iMac relay (Tailscale) │
+│ POST /v1/audio, /v1/captions, /v1/stop          │  SpeechAnalyzer sidecar │
+│ used directly when no phone is reachable        │  history + summaries   │
+└──────────────────────────────────────────────► │  + Notion export        │
+                                                   └────────────────────────┘
 ```
+
+Whichever leg actually transcribed a kept session, the transcript, summary,
+and history end up on the iMac relay — the phone forwards what it produces
+rather than keeping its own store.
 
 ### Why HTTP and not WebSockets
 
@@ -63,7 +83,7 @@ for the full design.
 | Path | What |
 |------|------|
 | [`watch/`](watch/README.md) | The watchOS app (SwiftUI), depending on the `CaptionCore` Swift package (pure logic, unit-tested) from [`jonyen/caption-core`](https://github.com/jonyen/caption-core). Built with XcodeGen. |
-| [`ios/`](ios/README.md) | The iPhone app (SwiftUI) and its ReplayKit broadcast extension: captions whatever the phone plays, read on the Watch. Also where the Watch app's settings are edited. |
+| [`ios/`](ios/README.md) | The iPhone app (SwiftUI): a `SpeechAnalyzer`-backed transcriber service for the watch's Auto mode, a store-and-forward relay client for kept sessions, and a read-only Transcripts tab. Embeds the watch app as its WatchKit companion. |
 | [`CaptionRelay/`](CaptionRelay) | Swift package with the relay-specific transport code shared between the watch and iOS apps. |
 | [`backend/`](backend/README.md) | The STT relay (Node/TypeScript), deployed on Fly.io. |
 | [`docs/`](docs/) | Design specs. |

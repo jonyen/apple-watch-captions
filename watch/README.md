@@ -1,9 +1,39 @@
 # WatchCaptions — watchOS live-caption app
 
-Standalone watchOS app that streams the Watch mic to the caption relay and shows live captions.
+Standalone watchOS app (`WKWatchOnly`, no iPhone companion in the App Store
+sense) that captions nearby speech on the wrist. Captions always start
+instantly on-watch (Moonshine, on-device); the home screen's capture-mode
+button then decides who — if anyone — refines them.
 Lowering your wrist does not stop a session. The app declares the `audio`
 background mode, so the mic stays live and captions keep accumulating with the
 screen off — only **Stop** ends a session.
+
+## Modes
+
+The home screen's mode button (`AppModel.CaptureMode`) cycles between two:
+
+- **Auto** (default, wand icon) — instant local partials refined by the best
+  remote transcriber reachable when the session starts: the iPhone over
+  `WatchConnectivity` if the "Captions" iPhone app is nearby and its
+  transcriber service picks up, else the iMac relay over the network, else
+  local-only. A remote failure mid-session degrades to local-only rather than
+  dropping captions. This replaces the old separate Cloud/Hybrid modes — Auto
+  picks the best available transport itself.
+- **Watch only** (applewatch icon) — captions computed entirely on the watch
+  (Moonshine); nothing is sent anywhere except the kept-session
+  caption/audio uploads described below.
+
+**Keep transcripts** (on by default) is orthogonal to the mode: it decides
+whether a session leaves a transcript at all, not where captions are
+computed. With Keep on and Auto routing through the phone, the phone is the
+one holding the transcript mid-session — it store-and-forwards each kept
+session's lines to the iMac relay in the background (`ForwardingStore`,
+batched, retried on a 60 s backoff), so the transcript, summary, and history
+land on the relay even if the phone only reconnects to the network minutes
+after the watch finished talking to it. With Keep on and Auto falling back to
+the iMac relay directly (no phone nearby), the relay keeps the transcript the
+way it always has. With Keep on in **Watch only**, the watch uploads
+captions/audio to the relay itself, same as before.
 
 Opening the app picks up where you left off: if the last session ended less than
 ten minutes ago it resumes that transcript silently, so glancing away mid-conversation

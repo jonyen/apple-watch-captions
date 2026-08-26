@@ -206,13 +206,20 @@ final class PhoneEngine: NSObject, CaptionEngine, WCSessionDelegate {
             consecutiveSendFailures = 0
             deliverReadyIfNeeded()
         case .caption(let caption):
-            // A successful receive is proof the channel is alive — reset the
-            // failure count and, as a defensive fallback, treat any caption
-            // as also implying readiness (the wire protocol never actually
-            // sends one before `ready`, but there's no reason to depend on
-            // strict ordering here).
+            // A successful receive is proof the channel is alive, so this
+            // still resets the failure count even when the caption itself is
+            // dropped below.
             consecutiveSendFailures = 0
-            deliverReadyIfNeeded()
+            // Never synthesize readiness from a caption, and never emit one
+            // before the phone's own `ready` has actually arrived — dropped,
+            // not queued. Wire captions carry no sessionId, so without this
+            // gate a late frame from a session that has already closed (see
+            // `close()`'s linger) could otherwise be mistaken for this one's
+            // first caption before this one's `ready` lands. The remaining
+            // cross-session window — a straggler arriving *after* this
+            // session's own `ready` — needs a sessionId on the wire message
+            // to close fully; deferred to Task 8, which reopens `PhoneWire`.
+            guard readyDelivered else { return }
             emit(.caption(text: caption.text, isFinal: caption.isFinal, channel: nil))
         case .error(let message):
             consecutiveSendFailures = 0

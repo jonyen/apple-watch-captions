@@ -32,19 +32,35 @@ struct CaptionView: View {
     /// Absent when there is nothing this screen can stop.
     let onStop: (() -> Void)?
 
+    /// Double-tapping the captions cycles small, medium, large. A multiplier
+    /// over the phone-set base size rather than a replacement for it, and
+    /// persisted so the choice holds across sessions. The crown is not an
+    /// option for this — it already scrolls the transcript.
+    @AppStorage("captionSizeStep") private var sizeStep = 0
+    private static let sizeMultipliers: [Double] = [1.0, 1.35, 1.75]
+    private var effectiveSize: Double {
+        textSize * Self.sizeMultipliers[min(max(sizeStep, 0), Self.sizeMultipliers.count - 1)]
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(store.paragraphs.enumerated()), id: \.element.id) { index, paragraph in
                     text(for: paragraph, isLast: index == store.paragraphs.count - 1)
-                        .font(.system(size: textSize))
+                        .font(.system(size: effectiveSize))
                 }
                 // Nothing final yet: the partial is all there is to show.
                 if store.paragraphs.isEmpty, !store.partial.isEmpty {
-                    Text(store.partial).font(.system(size: textSize)).foregroundStyle(.secondary)
+                    Text(store.partial).font(.system(size: effectiveSize)).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // On the whole content column, not the ScrollView: a gesture on
+            // the scroll container would swallow the drags that scroll.
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                sizeStep = (sizeStep + 1) % Self.sizeMultipliers.count
+            }
         }
         // Stay with the newest caption as text arrives, but let a scroll up
         // stick. Driving this by scrolling to a sentinel on every change fought

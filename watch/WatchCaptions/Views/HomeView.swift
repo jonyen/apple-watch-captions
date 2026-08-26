@@ -45,10 +45,14 @@ struct HomeView: View {
             // Toggles rather than more ways to start: what a session is —
             // where it is computed, whether it is kept — is a setting that
             // outlives any one tap, and Start stays the only verb.
+            // Off is the default and means hybrid: instant on-watch captions
+            // refined by the iMac when it is reachable. On means the watch
+            // alone, nothing sent anywhere — the exception, so it gets the
+            // label.
             Toggle(isOn: $onDevice) {
-                Label("On device", systemImage: "cpu")
+                Label("Watch only", systemImage: "cpu")
             }
-            .accessibilityHint("Compute captions on the watch itself instead of the relay.")
+            .accessibilityHint("Caption entirely on the watch. Nothing is sent to the relay.")
             Toggle(isOn: $keepTranscripts) {
                 Label("Keep transcripts", systemImage: "doc.text")
             }

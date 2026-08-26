@@ -38,8 +38,31 @@ final class WCTranscriberService: NSObject, WCSessionDelegate, ObservableObject 
     @Published private(set) var status: Status = .waiting
     @Published private(set) var sessionsServed: Int = 0
 
+    /// Committed finals for the current (or just-ended) session, oldest
+    /// first, bounded so a long session can't grow this without limit — see
+    /// `trimIfNeeded`. Only covers captions this phone itself transcribed
+    /// (`WCTranscriberService`'s own sessions); a caption transcribed
+    /// watch-locally or by the relay never reaches this service, so it never
+    /// appears here. That's the one live-caption source this phone can show
+    /// without a new wire message, and the common case — the phone is only
+    /// ever the transcriber when it's reachable.
+    @Published private(set) var finalizedLines: [String] = []
+    /// The in-progress (non-final) line for the current session, if any —
+    /// replaced wholesale on every partial per the cumulative-partial
+    /// convention (never appended to), and cleared the moment it commits.
+    @Published private(set) var currentPartial: String = ""
+
+    private static let maxFinalLines = 200
+    private static let maxCharacters = 8000
+
     private let queue = DispatchQueue(label: "wctranscriber.service")
     private let locale = Locale(identifier: "en-US")
+
+    /// The session id the published `finalizedLines`/`currentPartial` belong
+    /// to. Compared against on every `begin` so a new session's captions
+    /// never render mixed in with the previous one's — see `handleBegin`.
+    /// Confined to `queue`, same as every other piece of session state here.
+    private var textSessionId: String?
 
     /// Set once `TranscriberSession.ensureModel` has succeeded, so it only
     /// runs once per process rather than once per session.
@@ -121,6 +144,17 @@ final class WCTranscriberService: NSObject, WCSessionDelegate, ObservableObject 
     }
 
     private func handleBegin(_ begin: PhoneWire.Begin) {
+        // A different session than whatever the published transcript
+        // currently belongs to (including the very first begin, or one
+        // arriving after the previous session already finished): reset the
+        // rolling text now, before anything else, so the tab never shows a
+        // stale conversation mixed with the new one. A duplicate begin for
+        // the same session (handled below) leaves this untouched.
+        if textSessionId != begin.sessionId {
+            textSessionId = begin.sessionId
+            clearLiveText()
+        }
+
         if let current = active {
             guard current.sessionId != begin.sessionId else { return }  // duplicate begin, ignore
             teardown(current)
@@ -221,6 +255,16 @@ final class WCTranscriberService: NSObject, WCSessionDelegate, ObservableObject 
                 onKeptSessionEvent?(.line(sessionId: sessionId, token: token,
                                           caption: PhoneWire.Caption(text: text, isFinal: isFinal, sessionId: sessionId)))
             }
+            // Same cumulative-partial convention the watch's CaptionStore
+            // follows: a final commits (and starts a fresh in-progress
+            // line), a non-final replaces the in-progress line wholesale —
+            // never appended to.
+            if isFinal {
+                if !text.isEmpty { recordFinal(text) }
+                setPartial("")
+            } else {
+                setPartial(text)
+            }
         case .error(let message):
             send(.error(message))
         }
@@ -287,5 +331,37 @@ final class WCTranscriberService: NSObject, WCSessionDelegate, ObservableObject 
 
     private func incrementSessionsServed() {
         DispatchQueue.main.async { [weak self] in self?.sessionsServed += 1 }
+    }
+
+    private func recordFinal(_ text: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.finalizedLines.append(text)
+            self.trimIfNeeded()
+        }
+    }
+
+    private func setPartial(_ text: String) {
+        DispatchQueue.main.async { [weak self] in self?.currentPartial = text }
+    }
+
+    private func clearLiveText() {
+        DispatchQueue.main.async { [weak self] in
+            self?.finalizedLines = []
+            self?.currentPartial = ""
+        }
+    }
+
+    /// Runs on the main thread, called only from inside the `.main.async`
+    /// block in `recordFinal`. Keeps `finalizedLines` within both a
+    /// line-count and a total-character bound, oldest lines dropped first,
+    /// so an unbounded session can't grow this without limit.
+    private func trimIfNeeded() {
+        while finalizedLines.count > Self.maxFinalLines {
+            finalizedLines.removeFirst()
+        }
+        while finalizedLines.joined().count > Self.maxCharacters, finalizedLines.count > 1 {
+            finalizedLines.removeFirst()
+        }
     }
 }

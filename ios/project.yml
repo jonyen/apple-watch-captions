@@ -2,7 +2,7 @@ name: PhoneCaptions
 options:
   bundleIdPrefix: com.jonyen.phonecaptions
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
     watchOS: "11.0"
 packages:
   CaptionCore:
@@ -13,6 +13,8 @@ packages:
   MoonshineKit:
     url: https://github.com/jonyen/moonshine-coreml
     from: 0.3.0
+  TranscriberCore:
+    path: ../TranscriberCore
 targets:
   PhoneCaptions:
     type: application
@@ -21,97 +23,39 @@ targets:
       - path: PhoneCaptions
         excludes:
           - Icon      # editable vector source; the built icon is the asset catalog
-      # The app writes settings to the relay, so it needs the credentials; the
-      # uploading itself still happens only in the extension. DeviceIdentity
-      # is shared with the extension too (see the Keychain Sharing
-      # entitlement below) so the two register as one phone, not two.
+      # Secrets.swift holds the relay origin the transcriber's forwarding
+      # store (Task 6) posts kept sessions to.
       - path: Shared
         includes:
           - Secrets.swift
-          - DeviceIdentity.swift
     dependencies:
-      - target: PhoneCaptionsUpload
       # Embeds the watch app into PhoneCaptions.app/Watch so one install
       # delivers both and WatchConnectivity links the pair — installed as two
       # separate apps they refuse to be companions (isCompanionAppInstalled
       # stays false, "Companion app is not installed").
       - target: WatchCaptions
       - package: CaptionRelay
-      - package: CaptionRelay
-        product: CaptionRelayLive
+      - package: TranscriberCore
     info:
       path: PhoneCaptions/Info.plist
       properties:
-        CFBundleDisplayName: Watch Captions Relay
+        CFBundleDisplayName: Captions
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-    # Keychain Sharing, not App Groups: the extension needs to read the same
-    # relay device token the app registers (or vice versa), and unlike App
-    # Groups this doesn't need a paid-membership App Group id — see
-    # DeviceIdentity.swift for why they'd otherwise register as two unpaired
-    # devices instead of one phone.
-    entitlements:
-      path: PhoneCaptions/PhoneCaptions.entitlements
-      properties:
-        keychain-access-groups:
-          - $(AppIdentifierPrefix)com.jonyen.phonecaptions.shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions
         GENERATE_INFOPLIST_FILE: NO
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
-        # Signed by the free personal team, which is why there are no other
-        # entitlements: App Groups, push, and the rest are paid-membership
-        # capabilities, and free provisioning refuses a build that asks for
-        # one. That constraint is why the phone and the Watch agree on a
-        # fixed session id rather than negotiating one. Keychain Sharing
-        # (above) is not on that list — it needs no App Group id from the
-        # developer portal — but it is the first entitlement this project has
-        # ever asked for, so it is worth confirming on a real device rather
-        # than assuming.
+        # Signed by the free personal team: App Groups, push, and the rest
+        # are paid-membership capabilities, and free provisioning refuses a
+        # build that asks for one. That constraint is why the phone and the
+        # Watch agree on a fixed session id rather than negotiating one.
         DEVELOPMENT_TEAM: "7PZN69YDL4"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-
-  PhoneCaptionsUpload:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: PhoneCaptionsUpload
-      - path: Shared
-        excludes:
-          - Secrets.example.swift
-    dependencies:
-      - package: CaptionRelay
-      - package: CaptionRelay
-        product: CaptionRelayLive
-    info:
-      path: PhoneCaptionsUpload/Info.plist
-      properties:
-        CFBundleDisplayName: Watch Captions Relay
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
-          # Must be one of Apple's two literal modes. Anything else and the
-          # extension is silently filtered out of the broadcast picker — it
-          # installs, it registers, and it never appears.
-          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
-    # Same group as PhoneCaptions — see the comment there.
-    entitlements:
-      path: PhoneCaptionsUpload/PhoneCaptionsUpload.entitlements
-      properties:
-        keychain-access-groups:
-          - $(AppIdentifierPrefix)com.jonyen.phonecaptions.shared
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.jonyen.phonecaptions.upload
-        GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
-        DEVELOPMENT_TEAM: "7PZN69YDL4"
-        CODE_SIGN_STYLE: Automatic
 
   # The watch app, embedded here so a single install of PhoneCaptions carries
   # it (PhoneCaptions.app/Watch/WatchCaptions.app). Sources and settings

@@ -42,10 +42,20 @@ public enum PhoneWire {
     public struct Caption: Codable, Equatable {
         public let text: String
         public let isFinal: Bool
+        /// Which session sent this — additive and optional so older peers
+        /// (and this codebase's own pre-Task-8 wire frames) keep decoding: a
+        /// missing key decodes as `nil` via Swift's synthesized
+        /// `decodeIfPresent`, and encoding a `nil` value omits the key
+        /// entirely via the matching `encodeIfPresent`, so the JSON shape is
+        /// byte-identical to before whenever a caller doesn't pass one.
+        /// `PhoneEngine` uses it to drop a straggler caption from a session
+        /// it has already moved past (see its `handle(_:)`).
+        public let sessionId: String?
 
-        public init(text: String, isFinal: Bool) {
+        public init(text: String, isFinal: Bool, sessionId: String? = nil) {
             self.text = text
             self.isFinal = isFinal
+            self.sessionId = sessionId
         }
     }
 

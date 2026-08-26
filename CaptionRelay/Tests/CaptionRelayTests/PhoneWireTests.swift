@@ -81,6 +81,40 @@ final class PhoneWireTests: XCTestCase {
         XCTAssertEqual(PhoneWire.decode(data), msg)
     }
 
+    // MARK: - caption sessionId (wire amendment: additive, backward-compatible)
+
+    func testRoundTripCaptionWithSessionId() {
+        let msg = PhoneWire.Message.caption(.init(text: "hello", isFinal: true, sessionId: "sess-1"))
+        let data = PhoneWire.encode(msg)
+        XCTAssertEqual(data.first, 5)
+        XCTAssertEqual(PhoneWire.decode(data), msg)
+    }
+
+    func testRoundTripCaptionWithoutSessionIdStillDecodesNil() {
+        let msg = PhoneWire.Message.caption(.init(text: "hello", isFinal: false))
+        let data = PhoneWire.encode(msg)
+        guard case .caption(let caption)? = PhoneWire.decode(data) else {
+            XCTFail("expected caption message")
+            return
+        }
+        XCTAssertNil(caption.sessionId)
+        XCTAssertEqual(PhoneWire.decode(data), msg)
+    }
+
+    func testDecodeOldFormatCaptionJSONWithoutSessionIdFieldDecodesNil() {
+        // Simulates a caption frame from a peer that predates the sessionId
+        // field entirely — the JSON body has no "sessionId" key at all.
+        var data = Data([5])
+        data.append(contentsOf: #"{"text":"hi","isFinal":false}"#.utf8)
+        guard case .caption(let caption)? = PhoneWire.decode(data) else {
+            XCTFail("expected caption message")
+            return
+        }
+        XCTAssertEqual(caption.text, "hi")
+        XCTAssertEqual(caption.isFinal, false)
+        XCTAssertNil(caption.sessionId)
+    }
+
     // MARK: - error
 
     func testRoundTripError() {

@@ -31,8 +31,9 @@ running.
   watch's raw PCM over `WatchConnectivity`, runs it through `TranscriberCore`
   (Apple's on-device `SpeechAnalyzer`), and sends caption text straight back —
   one `TranscriberSession` per watch capture, at most one active at a time.
-  Only used when the watch's capture mode is **Auto** and the phone is
-  reachable; **Watch only** captions never touch the phone at all.
+  Used whenever the phone is reachable from the watch — the watch prefers it
+  over the iMac relay. With neither reachable the watch captions alone and
+  nothing touches the phone at all.
 - **ForwardingStore**: for a *kept* session, the phone durably queues every
   final caption line (and the finish event) to an on-disk `ForwardQueue`, and
   replays it against the iMac relay's `POST /v1/captions` /
@@ -99,9 +100,9 @@ Management.
 1. Open Captions on the iPhone once and leave it running (it needs no
    interaction after that — there is no "Listening" toggle anymore; the watch
    drives everything).
-2. On the Watch, leave the capture mode on **Auto** and tap **Start**. If the
-   phone is reachable over `WatchConnectivity`, it transcribes; if not, the
-   watch falls back to the iMac relay, then to on-device Moonshine.
+2. On the Watch, tap **Start**. If the phone is reachable over
+   `WatchConnectivity`, it transcribes; if not, the watch falls back to the
+   iMac relay, then to on-device Moonshine.
 
 The Transcriber tab shows waiting vs. transcribing and a running count of
 sessions served this launch.

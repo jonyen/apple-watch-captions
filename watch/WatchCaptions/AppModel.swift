@@ -62,6 +62,11 @@ final class AppModel: ObservableObject {
 
     private let controller: SessionController
     private let relay: HTTPRelayClient
+    /// What `controller` actually drives: the relay session plus the local
+    /// Moonshine engine running alongside it, arbitrated so captions are
+    /// instant locally and upgraded by the relay's finals — and so the relay
+    /// dying degrades the session instead of ending it. See `HybridEngine`.
+    private let hybrid: HybridEngine
     private let micPermission = MicPermission()
     private let defaults: UserDefaults
     /// Waits for the relay to push a finished transcript to Notion.
@@ -122,14 +127,20 @@ final class AppModel: ObservableObject {
         relay = HTTPRelayClient(base: base, token: token)
         history = HistoryStore(client: historyClient)
         exports = ExportWatcher(client: historyClient, defaults: defaults)
+        // One Moonshine engine — one loaded model — serves both the hybrid
+        // relay sessions and the pure on-device ones; only one session runs
+        // at a time, and each wrapper rebinds the engine's callbacks in its
+        // own `start()`.
+        let moonshine = OnDeviceEngine()
+        hybrid = HybridEngine(local: moonshine, relay: relay)
         controller = SessionController(
             store: store,
-            relay: relay,
+            relay: hybrid,
             audio: AudioCapture(),
             permission: micPermission
         )
         onDeviceEngine = SavedOnDeviceEngine(
-            engine: OnDeviceEngine(),
+            engine: moonshine,
             makeUploader: { CaptionUploader(token: token) },
             makeAudioArchiveUploader: { sessionID in
                 AudioArchiveUploader(sessionID: sessionID, token: token)
@@ -150,6 +161,17 @@ final class AppModel: ObservableObject {
         lastSession = Self.loadLastSession(from: defaults)
         stoppedExplicitly = defaults.bool(forKey: Keys.stoppedExplicitly)
         relay.onTranscript = { [weak self] name in self?.currentTranscript = name }
+        // The relay dying mid-session no longer ends it — captions continue
+        // from the local engine — but a session that asked to be kept is no
+        // longer being written down from that moment. Flip `live` so the
+        // indicator turns hollow ("not saved") rather than keep claiming a
+        // persistence the relay stopped providing. `currentTranscript` stays:
+        // everything up to the drop *was* saved, and resuming that transcript
+        // later is exactly the recovery Start should offer.
+        hybrid.onRelayDown = { [weak self] in
+            guard let self, self.capturing, !self.onDevice else { return }
+            self.live = true
+        }
         onDeviceEngine.onKept = { [weak self] kept in self?.onDeviceKept = kept }
         // A kept on-device session learns its relay transcript's name from
         // the caption uploader's first acknowledged post — the same

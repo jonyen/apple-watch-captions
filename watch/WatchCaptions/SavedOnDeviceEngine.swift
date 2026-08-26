@@ -66,6 +66,13 @@ final class SavedOnDeviceEngine: CaptionEngine {
         self.engine = engine
         self.makeUploader = makeUploader
         self.makeAudioArchiveUploader = makeAudioArchiveUploader
+    }
+
+    func start() {
+        // (Re)bind the engine's callbacks per session rather than once in
+        // `init`: the Moonshine engine is shared with `HybridEngine` — one
+        // loaded model serves both, since only one session runs at a time —
+        // so whichever wrapper starts a session takes the callbacks over.
         engine.onClose = { [weak self] in self?.onClose?() }
         engine.onEvent = { [weak self] event in
             guard let self else { return }
@@ -74,9 +81,6 @@ final class SavedOnDeviceEngine: CaptionEngine {
             }
             self.onEvent?(event)
         }
-    }
-
-    func start() {
         if keep {
             let uploader = makeUploader()
             uploader.onKept = { [weak self] kept in self?.onKept?(kept) }

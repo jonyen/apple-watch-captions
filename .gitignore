@@ -28,3 +28,7 @@ ios/Shared/Secrets.swift
 *.profraw
 watch/WatchCaptions/Secrets.swift.prod-backup
 ios/Shared/Secrets.swift.prod-backup
+
+# Local CaptionCore checkout: build artifacts and per-user Xcode state
+watch/CaptionCore/.build/
+watch/CaptionCore/.swiftpm/

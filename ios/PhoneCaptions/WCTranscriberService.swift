@@ -107,11 +107,13 @@ final class WCTranscriberService: NSObject, WCSessionDelegate, ObservableObject 
             active?.transcriber.feed(audio.pcm)
         case .finish:
             handleFinish()
-        case .shareIdentity:
-            // Task 8: WatchIdentityStore lands then; for now the phone has
-            // nowhere to put the watch's token, so this is decoded (not a
-            // decode failure) and deliberately ignored.
-            break
+        case .shareIdentity(let token):
+            // The watch's own bearer token, shared opportunistically once per
+            // watch app launch (see PhoneEngine) so this phone can read the
+            // watch's transcripts from the relay. Kept only in the Keychain,
+            // under a service string distinct from any identity this app has
+            // of its own.
+            WatchIdentityStore.shared.write(token)
         case .ready, .caption, .error:
             // These are things this service sends, never receives.
             break
@@ -207,10 +209,17 @@ final class WCTranscriberService: NSObject, WCSessionDelegate, ObservableObject 
         case .ready:
             send(.ready)
         case .transcript(let text, let isFinal):
-            send(.caption(PhoneWire.Caption(text: text, isFinal: isFinal)))
+            // Stamped with this session's id so the watch can drop a
+            // straggler that arrives after it has already moved on to a new
+            // session (see PhoneEngine.handle) — the authoritative fix for
+            // the cross-session bleed noted in task-5-report.md. A drained
+            // final from a torn-down session can still reach here (see
+            // `handleFinish`'s drain), so this alone doesn't stop the phone
+            // from sending it; the watch-side filter is what makes that safe.
+            send(.caption(PhoneWire.Caption(text: text, isFinal: isFinal, sessionId: sessionId)))
             if isFinal, keep, let token {
                 onKeptSessionEvent?(.line(sessionId: sessionId, token: token,
-                                          caption: PhoneWire.Caption(text: text, isFinal: isFinal)))
+                                          caption: PhoneWire.Caption(text: text, isFinal: isFinal, sessionId: sessionId)))
             }
         case .error(let message):
             send(.error(message))

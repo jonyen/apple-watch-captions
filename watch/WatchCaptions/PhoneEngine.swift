@@ -64,6 +64,14 @@ final class PhoneEngine: NSObject, CaptionEngine, WCSessionDelegate {
 
     private var sessionId = UUID().uuidString
     private var seq: Int64 = 0
+    /// Set the moment this process has attempted (not necessarily
+    /// succeeded) to share the watch's identity with the phone — a process-
+    /// lifetime flag, not per-instance, since a fresh `PhoneEngine` is built
+    /// for every Auto session (see AppModel.makeAutoController). Guards
+    /// `shareIdentityIfNeeded()` so at most one `shareIdentity` send is
+    /// attempted per app launch; a failed attempt is silent and simply
+    /// leaves the phone unlinked until the next launch retries.
+    private static var identityShareAttempted = false
     private var readyDelivered = false
     /// Guards against duplicate `onClose` firing and against sending after
     /// either a deliberate `close()` or a hard failure — set exactly once per
@@ -113,8 +121,34 @@ final class PhoneEngine: NSObject, CaptionEngine, WCSessionDelegate {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         session.delegate = self
+        shareIdentityIfNeeded(session: session)
         guard session.activationState != .activated else { return }
         session.activate()
+    }
+
+    /// Opportunistic, at most once per app launch: the watch's own bearer
+    /// token, so the phone can browse this watch's transcripts. Fired here
+    /// (every `start()`, i.e. every session) and from the reachability/
+    /// activation delegate callbacks below, since whichever of those first
+    /// observes a reachable counterpart should be the one that sends it —
+    /// there is no dedicated "on activation" hook that fires before any
+    /// session ever starts on the watch side (see `WCActivation`, which
+    /// activates with no delegate at all). Marks the attempt made *before*
+    /// the token fetch even starts, so a failure never retries within the
+    /// same launch — "silent failure, next launch retries" per the design.
+    private func shareIdentityIfNeeded(session: WCSession) {
+        guard session.isReachable else { return }
+        queue.async { [weak self] in
+            guard let self, !Self.identityShareAttempted else { return }
+            Self.identityShareAttempted = true
+            let token = self.token
+            Task { [weak self] in
+                guard let bearer = try? await token() else { return }
+                self?.queue.async {
+                    self?.sendMessage(.shareIdentity(token: bearer))
+                }
+            }
+        }
     }
 
     /// Mirrors `HTTPRelayClient.flush()`'s async token dance: `start()` is
@@ -180,7 +214,10 @@ final class PhoneEngine: NSObject, CaptionEngine, WCSessionDelegate {
 
     // MARK: - WCSessionDelegate
 
-    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {}
+    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        guard activationState == .activated else { return }
+        shareIdentityIfNeeded(session: session)
+    }
 
     func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
         guard let message = PhoneWire.decode(messageData) else { return }
@@ -191,8 +228,11 @@ final class PhoneEngine: NSObject, CaptionEngine, WCSessionDelegate {
     /// frame or repeated send failures — the hybrid's `relayDied()` path
     /// handles all three identically.
     func sessionReachabilityDidChange(_ session: WCSession) {
-        guard !session.isReachable else { return }
-        queue.async { [weak self] in self?.fail() }
+        guard session.isReachable else {
+            queue.async { [weak self] in self?.fail() }
+            return
+        }
+        shareIdentityIfNeeded(session: session)
     }
 
     // MARK: - Internals (all on `queue`)
@@ -212,14 +252,22 @@ final class PhoneEngine: NSObject, CaptionEngine, WCSessionDelegate {
             consecutiveSendFailures = 0
             // Never synthesize readiness from a caption, and never emit one
             // before the phone's own `ready` has actually arrived — dropped,
-            // not queued. Wire captions carry no sessionId, so without this
-            // gate a late frame from a session that has already closed (see
-            // `close()`'s linger) could otherwise be mistaken for this one's
-            // first caption before this one's `ready` lands. The remaining
-            // cross-session window — a straggler arriving *after* this
-            // session's own `ready` — needs a sessionId on the wire message
-            // to close fully; deferred to Task 8, which reopens `PhoneWire`.
+            // not queued. This closes the pre-ready half of the cross-session
+            // bleed window: a late frame from a session that has already
+            // closed (see `close()`'s linger) can no longer be mistaken for
+            // this one's first caption before this one's `ready` lands.
             guard readyDelivered else { return }
+            // The remaining, post-ready half of that window: a straggler
+            // draining out of the OLD session (see WCTranscriberService's
+            // `handleFinish`) can still arrive after this session is already
+            // receiving. `sessionId` is now stamped on every caption the
+            // phone sends (Task 8 wire amendment) — a caption whose
+            // sessionId names a different session than this instance's own
+            // is unambiguously stale and dropped here, which is the
+            // authoritative guard: an older, un-labeled caption (sessionId
+            // == nil) still passes through, but nothing after this task ever
+            // sends one of those.
+            if let captionSessionId = caption.sessionId, captionSessionId != sessionId { return }
             emit(.caption(text: caption.text, isFinal: caption.isFinal, channel: nil))
         case .error(let message):
             consecutiveSendFailures = 0

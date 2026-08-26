@@ -34,7 +34,10 @@ targets:
       # separate apps they refuse to be companions (isCompanionAppInstalled
       # stays false, "Companion app is not installed").
       - target: WatchCaptions
+      - package: CaptionCore
       - package: CaptionRelay
+      - package: CaptionRelay
+        product: CaptionRelayLive
       - package: TranscriberCore
     info:
       path: PhoneCaptions/Info.plist

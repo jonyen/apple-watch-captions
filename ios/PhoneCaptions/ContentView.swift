@@ -1,12 +1,24 @@
 import SwiftUI
 
-/// The phone app's only screen for now: what the on-phone transcriber is
-/// doing for the watch. There is nothing to configure here — pairing and
-/// settings are gone; the watch just talks to whichever phone it is next to.
-///
-/// A single view rather than a `TabView`, on purpose: Task 8 adds a
-/// transcripts tab later, and that is a small diff onto this, not a rewrite.
+/// The app's two tabs: what the on-phone transcriber is doing for the watch,
+/// and the watch's own past transcripts once it has linked with this phone.
+/// There is nothing to configure here — pairing and settings are gone; the
+/// watch just talks to whichever phone it is next to.
 struct ContentView: View {
+    var body: some View {
+        TabView {
+            TranscriberStatusView()
+                .tabItem { Label("Transcriber", systemImage: "waveform") }
+            TranscriptsListView()
+                .tabItem { Label("Transcripts", systemImage: "list.bullet") }
+        }
+    }
+}
+
+/// Status view Task 4 built: transcribing/waiting, session count. Unchanged
+/// except for the rename off `ContentView`, which now names the tab
+/// container instead.
+private struct TranscriberStatusView: View {
     @ObservedObject private var service = WCTranscriberService.shared
 
     var body: some View {

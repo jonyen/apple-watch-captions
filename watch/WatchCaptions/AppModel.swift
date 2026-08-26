@@ -130,7 +130,10 @@ final class AppModel: ObservableObject {
         )
         onDeviceEngine = SavedOnDeviceEngine(
             engine: OnDeviceEngine(),
-            makeUploader: { CaptionUploader(token: token) })
+            makeUploader: { CaptionUploader(token: token) },
+            makeAudioArchiveUploader: { sessionID in
+                AudioArchiveUploader(sessionID: sessionID, token: token)
+            })
         onDeviceController = SessionController(
             store: store,
             relay: onDeviceEngine,

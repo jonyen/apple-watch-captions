@@ -54,8 +54,11 @@ final class CaptionUploader: @unchecked Sendable {
     private let queue = DispatchQueue(label: "caption.uploader")
 
     /// This session's relay name — minted per uploader, one uploader per
-    /// session, the same way `HTTPRelayClient` mints one per connect.
-    private let sessionID = UUID().uuidString
+    /// session, the same way `HTTPRelayClient` mints one per connect. Not
+    /// private: `SavedOnDeviceEngine` reads it to hand the exact same id to
+    /// this session's `AudioArchiveUploader`, so archived audio and uploaded
+    /// captions land under one relay session.
+    let sessionID = UUID().uuidString
     /// Lines awaiting the next post; whatever accumulates while a post is in
     /// flight goes up together as one batch.
     private var pending: [Line] = []

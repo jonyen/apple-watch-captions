@@ -9,14 +9,36 @@ import CaptionRelay
 /// unactivated session (it reads `false`), and `PhoneEngine.start()` only
 /// activates once a session is already under way, which would be too late
 /// for the probe that decides whether to *use* `PhoneEngine` in the first
-/// place. No delegate is assigned here — that stays `PhoneEngine`'s job, the
-/// only watch-side `WCSessionDelegate` now that `SpikeWC` is gone — so this
-/// is safe to call before any `PhoneEngine` exists and a no-op afterwards.
+/// place.
+///
+/// `WCSession.activate()` silently never completes without a delegate set
+/// beforehand — `activationState` sticks at `.notActivated`, `isReachable`
+/// reads `false` forever, and the Auto probe would never pick `PhoneEngine`.
+/// So this assigns a minimal placeholder delegate first, but only when no
+/// delegate is set yet: it must never clobber a live `PhoneEngine`, which
+/// remains the only *real* watch-side `WCSessionDelegate` (the only one that
+/// actually receives audio/caption traffic) now that `SpikeWC` is gone.
+/// `PhoneEngine.start()`'s own `delegate = self` swap-after-activation is
+/// unaffected — it simply replaces this placeholder the first time a session
+/// actually runs.
 enum WCActivation {
+    /// Satisfies `WCSessionDelegate` with a no-op so `activate()` can
+    /// complete before any `PhoneEngine` exists to be the real delegate.
+    /// Retained for the process lifetime (`WCSession.default.delegate` does
+    /// not retain its delegate) via the static `placeholder` below.
+    private final class Placeholder: NSObject, WCSessionDelegate {
+        func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {}
+    }
+
+    private static let placeholder = Placeholder()
+
     static func activateIfNeeded() {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState != .activated else { return }
+        if session.delegate == nil {
+            session.delegate = placeholder
+        }
         session.activate()
     }
 }

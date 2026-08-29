@@ -162,3 +162,14 @@ table.policy td {
   vertical-align: top;
 }
 table.policy th { font-weight: 600; }
+
+/* Real screenshots, shown at their own aspect ratio rather than the dashed
+   placeholder box. Rounded to suggest the device without faking a bezel. */
+.shot-img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: block;
+}

@@ -96,11 +96,21 @@ h3 {
   display: grid;
   gap: 1rem;
 }
+/* Two columns once there is room; a single stack on phones. */
+@media (min-width: 36rem) {
+  .points { grid-template-columns: 1fr 1fr; }
+}
 .points li {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1rem 1.125rem;
+}
+.points .icon {
+  display: block;
+  font-size: 1.75rem;
+  line-height: 1;
+  margin-bottom: 0.5rem;
 }
 .points strong { display: block; }
 .points span { color: var(--muted); }
